@@ -1,0 +1,1473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Ledger — Personal Budget 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0F1719;
+  --bg-panel:#16201F;
+  --bg-card:#1C2726;
+  --bg-card-hi:#233130;
+  --line:#33433F;
+  --line-soft:#26332F;
+  --gold:#C9A961;
+  --gold-soft:#E4CE94;
+  --rust:#C06A46;
+  --rust-soft:#D98C64;
+  --teal:#6FA491;
+  --teal-soft:#8FC0AC;
+  --text:#EEE7D8;
+  --text-dim:#A2AEA9;
+  --text-faint:#66746E;
+  --danger:#C6584C;
+  --good:#7FAE79;
+  --font-display:'Fraunces', serif;
+  --font-body:'IBM Plex Sans', sans-serif;
+  --font-mono:'IBM Plex Mono', monospace;
+  --radius:10px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(201,169,97,0.06), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(111,164,145,0.05), transparent 55%),
+    var(--bg);
+  color:var(--text);
+  font-family:var(--font-body);
+  min-height:100vh;
+  line-height:1.4;
+}
+::selection{background:var(--gold); color:#141c1c;}
+a{color:var(--gold-soft);}
+::-webkit-scrollbar{height:8px;width:8px;}
+::-webkit-scrollbar-thumb{background:var(--line); border-radius:8px;}
+::-webkit-scrollbar-track{background:transparent;}
+
+/* ---------- Layout shell ---------- */
+.wrap{max-width:1240px; margin:0 auto; padding:28px 24px 80px;}
+
+/* ---------- Header ---------- */
+.masthead{
+  display:flex; justify-content:space-between; align-items:flex-end; gap:24px;
+  border-bottom:1px solid var(--line); padding-bottom:20px; margin-bottom:22px;
+  flex-wrap:wrap;
+}
+.brand-eyebrow{
+  font-family:var(--font-mono); letter-spacing:.18em; text-transform:uppercase;
+  font-size:11px; color:var(--gold); margin-bottom:6px;
+}
+.brand-title{
+  font-family:var(--font-display); font-weight:600; font-size:clamp(28px,4vw,42px);
+  margin:0; color:var(--text); letter-spacing:.01em;
+}
+.brand-title em{font-style:italic; color:var(--gold-soft); font-weight:500;}
+.today-line{font-family:var(--font-mono); font-size:12.5px; color:var(--text-dim); margin-top:8px;}
+.today-line b{color:var(--teal-soft); font-weight:600;}
+
+.controls{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+.selectbox{position:relative;}
+.selectbox select{
+  appearance:none; -webkit-appearance:none;
+  background:var(--bg-card); color:var(--text); border:1px solid var(--line);
+  padding:9px 32px 9px 14px; border-radius:8px; font-family:var(--font-mono); font-size:13px;
+  cursor:pointer; min-width:110px;
+}
+.selectbox::after{
+  content:"▾"; position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  color:var(--gold); pointer-events:none; font-size:11px;
+}
+.selectbox select:focus{outline:2px solid var(--gold); outline-offset:1px;}
+
+/* ---------- Tabs ---------- */
+.tabs{
+  display:flex; gap:4px; margin-bottom:26px; border-bottom:1px solid var(--line);
+  overflow-x:auto; scrollbar-width:none;
+}
+.tabs::-webkit-scrollbar{display:none;}
+.tab-btn{
+  font-family:var(--font-display); font-size:15px; font-weight:500; color:var(--text-dim);
+  background:transparent; border:none; padding:11px 18px 13px; cursor:pointer;
+  border-bottom:2px solid transparent; white-space:nowrap; position:relative; top:1px;
+  transition:color .15s ease;
+}
+.tab-btn:hover{color:var(--text);}
+.tab-btn.active{color:var(--gold-soft); border-bottom-color:var(--gold);}
+.tab-btn .tab-index{font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-right:6px;}
+
+.panel{display:none; animation:fadein .25s ease;}
+.panel.active{display:block;}
+@keyframes fadein{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
+
+/* ---------- Section headers ---------- */
+.section-title{
+  font-family:var(--font-display); font-size:20px; font-weight:600; margin:0 0 4px;
+  color:var(--text); display:flex; align-items:center; gap:10px;
+}
+.section-sub{font-size:12.5px; color:var(--text-dim); margin:0 0 18px;}
+
+/* ---------- KPI cards ---------- */
+.kpi-grid{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:24px;}
+@media(max-width:980px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}
+.kpi-card{
+  background:var(--bg-card); border:1px solid var(--line-soft); border-radius:var(--radius);
+  padding:16px 16px 14px; position:relative; overflow:hidden;
+}
+.kpi-card::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px;}
+.kpi-card.c-gold::before{background:var(--gold);}
+.kpi-card.c-rust::before{background:var(--rust);}
+.kpi-card.c-teal::before{background:var(--teal);}
+.kpi-card.c-danger::before{background:var(--danger);}
+.kpi-label{font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim);}
+.kpi-value{font-family:var(--font-mono); font-size:23px; font-weight:600; color:var(--text); margin-top:6px;}
+.kpi-delta{font-family:var(--font-mono); font-size:11.5px; margin-top:6px; display:flex; align-items:center; gap:4px;}
+.kpi-delta.up{color:var(--good);} .kpi-delta.down{color:var(--danger);} .kpi-delta.flat{color:var(--text-faint);}
+
+/* ---------- Cards / panels ---------- */
+.card{
+  background:var(--bg-card); border:1px solid var(--line-soft); border-radius:var(--radius);
+  padding:20px; margin-bottom:20px;
+}
+.card-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;}
+.card-head h3{font-family:var(--font-display); font-size:16.5px; margin:0; font-weight:600; color:var(--text);}
+.grid-2{display:grid; grid-template-columns:1.3fr 1fr; gap:20px;}
+@media(max-width:900px){.grid-2{grid-template-columns:1fr;}}
+.chart-box{position:relative; height:280px;}
+.chart-box.tall{height:340px;}
+.chart-box.short{height:220px;}
+
+/* ---------- Buttons ---------- */
+.btn{
+  font-family:var(--font-mono); font-size:12px; color:var(--text); background:var(--bg-card-hi);
+  border:1px solid var(--line); border-radius:7px; padding:7px 12px; cursor:pointer;
+  transition:border-color .15s ease, color .15s ease;
+}
+.btn:hover{border-color:var(--gold); color:var(--gold-soft);}
+.btn.primary{background:var(--gold); color:#151d1c; border-color:var(--gold); font-weight:600;}
+.btn.primary:hover{background:var(--gold-soft); color:#151d1c;}
+.btn.ghost{background:transparent;}
+.btn.small{padding:4px 9px; font-size:11px;}
+.btn.danger-outline{border-color:var(--danger); color:var(--danger-soft,#e0a9a2);}
+
+/* ---------- Tables (the ledger look) ---------- */
+.table-scroll{overflow-x:auto;}
+table.ledger{width:100%; border-collapse:collapse; font-family:var(--font-mono); font-size:12.5px; min-width:760px;}
+table.ledger th{
+  text-align:right; font-weight:600; color:var(--text-dim); text-transform:uppercase;
+  font-size:10px; letter-spacing:.06em; padding:8px 8px; border-bottom:1px solid var(--line);
+  white-space:nowrap;
+}
+table.ledger th:first-child{text-align:left;}
+table.ledger td{padding:7px 8px; text-align:right; border-bottom:1px solid var(--line-soft); white-space:nowrap; color:var(--text);}
+table.ledger td:first-child{text-align:left; font-family:var(--font-body); color:var(--text); white-space:normal; min-width:180px;}
+table.ledger tr.total-row td{font-weight:700; color:var(--gold-soft); border-top:1px solid var(--line); border-bottom:2px solid var(--line);}
+table.ledger tr:hover td{background:rgba(201,169,97,0.04);}
+table.ledger td.editable{cursor:text; border-radius:4px;}
+table.ledger td.editable:hover{outline:1px dashed var(--text-faint); outline-offset:-2px;}
+table.ledger td.editable:focus{outline:1px solid var(--gold); background:rgba(201,169,97,0.08);}
+table.ledger td.zero{color:var(--text-faint);}
+.row-del{cursor:pointer; color:var(--text-faint); font-size:13px; padding:0 6px;}
+.row-del:hover{color:var(--danger);}
+
+/* group blocks in expenses */
+.group-block{margin-bottom:22px; border:1px solid var(--line-soft); border-radius:var(--radius); overflow:hidden;}
+.group-head{
+  display:flex; justify-content:space-between; align-items:center; padding:13px 16px;
+  background:var(--bg-card-hi); cursor:pointer;
+}
+.group-head h4{margin:0; font-family:var(--font-display); font-size:15px; font-weight:600; color:var(--gold-soft); display:flex; gap:10px; align-items:baseline;}
+.group-head .g-total{font-family:var(--font-mono); font-size:13px; color:var(--text-dim);}
+.group-head .g-caret{transition:transform .18s ease; color:var(--text-faint); font-size:11px;}
+.group-block.collapsed .g-caret{transform:rotate(-90deg);}
+.group-body{padding:14px 16px 16px;}
+.group-block.collapsed .group-body{display:none;}
+.addcat-row{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;}
+.addcat-row input{
+  background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:7px;
+  padding:7px 10px; font-family:var(--font-body); font-size:12.5px; flex:1; min-width:160px;
+}
+.addcat-row input:focus{outline:1px solid var(--gold);}
+
+/* ---------- Progress / debt runway ---------- */
+.debt-card{border:1px solid var(--line-soft); border-radius:var(--radius); padding:16px; margin-bottom:14px; background:var(--bg-card);}
+.debt-card-head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; flex-wrap:wrap; gap:6px;}
+.debt-name{font-family:var(--font-display); font-size:15.5px; font-weight:600; color:var(--text);}
+.debt-tag{font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); background:var(--bg-card-hi); border:1px solid var(--line); border-radius:12px; padding:2px 9px; margin-left:8px;}
+.debt-figs{display:flex; gap:18px; font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); flex-wrap:wrap;}
+.debt-figs b{color:var(--text); font-weight:600;}
+.runway{height:10px; border-radius:6px; background:var(--line-soft); margin:10px 0 6px; overflow:hidden; position:relative;}
+.runway-fill{height:100%; background:linear-gradient(90deg, var(--teal), var(--teal-soft)); border-radius:6px;}
+.runway.zero .runway-fill{background:var(--text-faint);}
+.debt-foot{display:flex; justify-content:space-between; font-size:11px; color:var(--text-faint); font-family:var(--font-mono);}
+.paid-badge{color:var(--good); font-family:var(--font-mono); font-size:11.5px;}
+
+.sim-controls{display:flex; gap:20px; flex-wrap:wrap; align-items:center; margin-bottom:16px;}
+.sim-field{display:flex; flex-direction:column; gap:5px;}
+.sim-field label{font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim);}
+.sim-field input[type=range]{width:220px; accent-color:var(--gold);}
+.sim-field input[type=number]{
+  background:var(--bg); border:1px solid var(--line); color:var(--text-dim); font-weight: 600 ;color:var(--gold-soft);
+  border-radius:7px; padding:6px 10px; font-family:var(--font-mono); width:110px;
+}
+.sim-readout{font-family:var(--font-mono); font-size:13px; color:var(--gold-soft);}
+.freedom-banner{
+  border:1px solid var(--gold); background:linear-gradient(90deg, rgba(201,169,97,.08), rgba(201,169,97,.02));
+  border-radius:var(--radius); padding:16px 18px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;
+}
+.freedom-banner .big{font-family:var(--font-display); font-size:22px; font-weight:600; color:var(--gold-soft);}
+.freedom-banner .small{font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim);}
+
+/* ---------- Import / data tab ---------- */
+.dropzone{
+  border:1.5px dashed var(--line); border-radius:var(--radius); padding:34px 20px; text-align:center;
+  color:var(--text-dim); cursor:pointer; transition:border-color .15s;
+}
+.dropzone:hover, .dropzone.drag{border-color:var(--gold); color:var(--gold-soft);}
+.dropzone input{display:none;}
+.legend-dot{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px;}
+
+.notice{font-size:12px; color:var(--text-dim); background:var(--bg-card-hi); border:1px solid var(--line-soft); border-radius:8px; padding:10px 14px; margin-bottom:14px;}
+.notice b{color:var(--gold-soft);}
+
+.footer-note{text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:11px; margin-top:40px;}
+
+.toast{
+  position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(20px); opacity:0;
+  background:var(--bg-card-hi); border:1px solid var(--gold); color:var(--gold-soft); font-family:var(--font-mono);
+  font-size:12.5px; padding:10px 18px; border-radius:8px; transition:all .25s ease; pointer-events:none; z-index:50;
+}
+.toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+.pill-row{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;}
+.pill{font-family:var(--font-mono); font-size:11px; padding:5px 11px; border-radius:14px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
+.pill.active{border-color:var(--gold); color:var(--gold-soft); background:rgba(201,169,97,.08);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="masthead">
+    <div>
+      <div class="brand-eyebrow">Personal Finance · Ledger</div>
+      <h1 class="brand-title">The Ledger <em>2026</em></h1>
+      <div class="today-line">Today is <b id="todayStr">—</b> · showing <b id="scopeStr">—</b></div>
+    </div>
+    <div class="controls">
+      <div class="selectbox">
+        <select id="yearSelect"></select>
+      </div>
+      <div class="selectbox">
+        <select id="monthSelect"></select>
+      </div>
+      <button class="btn" id="exportBtn" title="Download your current data as JSON">Export data</button>
+    </div>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+
+  <div id="panels"></div>
+
+  <div class="footer-note">Every figure here lives in your browser's private storage for this ledger — edit a cell, add a category, or drop in a new spreadsheet any time.</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =========================================================================
+   LIBRARY LOADER — load Chart.js and SheetJS ourselves and wait for them,
+   rather than relying on <script src> parse-order (unreliable in sandboxed
+   preview iframes).
+   ========================================================================= */
+function loadScript(src){
+  return new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = ()=>resolve(src);
+    s.onerror = ()=>reject(new Error('Failed to load '+src));
+    document.head.appendChild(s);
+  });
+}
+const CHART_SOURCES = [
+  'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
+  'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js'
+];
+const XLSX_SOURCES = [
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js'
+];
+async function loadFirstWorking(sources, checkFn){
+  for(const src of sources){
+    try{ await loadScript(src); if(checkFn()) return true; }catch(e){ /* try next */ }
+  }
+  return checkFn();
+}
+
+/* =========================================================================
+   DATA MODEL
+   ========================================================================= */
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTH_ALIASES = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+
+function n12(){ return new Array(12).fill(null); }
+function uid(){ return 'id'+Math.random().toString(36).slice(2,10); }
+
+// ---- category color palette (used across groups/investment types) ----
+const PALETTE = ['#C9A961','#6FA491','#C06A46','#8FC0AC','#D98C64','#7FAE79','#9BB6C9','#B98BC9','#E4CE94','#5F8C7A'];
+
+function buildDefaultData(){
+  return {
+    2026: {
+      income: [
+        {id:uid(), name:'Wages Week 1', m:[null,2729.16,40,3016.99,3016.99,3016.99,3050.55,null,null,null,null,null]},
+        {id:uid(), name:'Wages Week 2', m:[null,3007,3007,3016.99,3016.99,3016.99,3050.55,null,null,null,null,null]},
+        {id:uid(), name:'Wages Week (Kooli Pani, phone bill reimbursement)', m:[1600,null,null,null,null,240,null,null,null,null,null,null]},
+        {id:uid(), name:'Wages Week (taxes, HSA money)', m:[null,5215,30,169.39,110.01,null,null,null,null,null,null,null]}
+      ],
+      expenseGroups: [
+        {id:uid(), name:'Home', categories:[
+          {id:uid(), name:'Mortgage', m:[850,800,800,800,800,400,null,null,null,null,null,null]},
+          {id:uid(), name:'Insurance', m:n12()},
+          {id:uid(), name:'Deposit', m:[null,null,800,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Utilities', m:[109,null,94.38,59.1,59.86,59.67,37.43,null,null,null,null,null]},
+          {id:uid(), name:'College expenses (car, gas, coffee, flights)', m:[null,null,501.65,null,688.1,293.3,null,null,null,null,null,null]}
+        ]},
+        {id:uid(), name:'Daily Living', categories:[
+          {id:uid(), name:'Split Wise', m:[90,270,null,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Groceries (Indian)', m:[308,244,27.64,58.3,20,39.58,null,null,null,null,null,null]},
+          {id:uid(), name:'Shifting to new places', m:[null,85,null,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Walmart', m:[null,null,99.05,196.92,144.18,119.07,60.73,null,null,null,null,null]},
+          {id:uid(), name:'Dining out', m:[null,1.87,34.04,72.48,23.69,40.28,9.24,null,null,null,null,null]},
+          {id:uid(), name:'Other home (Amazon, Dollar Tree, Costco)', m:[96.25,64,13.23,58.96,null,63.71,null,null,null,null,null,null]},
+          {id:uid(), name:'Fun activities (games, outdoors)', m:[null,null,null,null,7.28,37.14,null,null,null,null,null,null]}
+        ]},
+        {id:uid(), name:'Transportation', categories:[
+          {id:uid(), name:'Public transportation', m:[4,50.84,22.5,10.21,11.32,2.32,24.04,null,null,null,null,null]},
+          {id:uid(), name:'Friends transportation', m:[null,8.5,2.25,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Cabs', m:[null,5.34,null,null,null,null,null,null,null,null,null,null]}
+        ]},
+        {id:uid(), name:'Credit Card Spend', categories:[
+          {id:uid(), name:'Chase', m:[48,252,300,100,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Amex (fee)', m:[8.95,null,null,null,null,325,null,null,null,null,null,null]},
+          {id:uid(), name:'Capital One', m:n12()},
+          {id:uid(), name:'Discover', m:[null,176.62,200,100,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Citi', m:n12()},
+          {id:uid(), name:'BOFA', m:n12()}
+        ]},
+        {id:uid(), name:'Vacations', categories:[
+          {id:uid(), name:'Trips', m:[null,519,null,41,null,416.71,307.58,null,null,null,null,null]},
+          {id:uid(), name:'Accommodations', m:[null,67,null,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Movies', m:[null,null,23.37,null,null,10,null,null,null,null,null,null]},
+          {id:uid(), name:'Airlines', m:[421,null,null,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Rental car', m:n12()}
+        ]},
+        {id:uid(), name:'Dues / Subscriptions', categories:[
+          {id:uid(), name:'Internet connection', m:[51.54,51.52,51.51,51.5,56.54,56.54,null,null,null,null,null,null]},
+          {id:uid(), name:'Wifi', m:[10,null,null,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Youtube', m:[null,null,3.67,3.83,null,4.5,null,null,null,null,null,null]},
+          {id:uid(), name:'Apple & Google One', m:[2.99,2.99,2.99,2.99,2.99,2.99,null,null,null,null,null,null]}
+        ]},
+        {id:uid(), name:'Personal', categories:[
+          {id:uid(), name:'Self learning (Open API)', m:[null,null,null,null,26.55,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Clothing', m:[null,5,null,null,39.8,95.6,45,null,null,null,null,null]},
+          {id:uid(), name:'Gifts', m:[null,null,null,null,null,99.81,21.1,null,null,null,null,null]},
+          {id:uid(), name:'Salon / barber', m:[11.99,null,null,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Self care (sunscreen, moisturizer)', m:[null,null,null,108.3,107.1,14.25,null,null,null,null,null,null]},
+          {id:uid(), name:'Health care (checkups)', m:[null,null,70,null,null,null,null,null,null,null,null,null]}
+        ]},
+        {id:uid(), name:'Financial Obligations', categories:[
+          {id:uid(), name:'Family loan sendings', m:[1000,4490.99,4700,1800,1400,1650,221,null,null,null,null,null]},
+          {id:uid(), name:'Family expenses', m:[null,null,3400,1800,769,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Income tax (additional)', m:[null,150,null,null,null,null,null,null,null,null,null,null]},
+          {id:uid(), name:'Second masters', m:[43,789.52,766.52,789.52,1669,1700,470.99,null,null,null,null,null]},
+          {id:uid(), name:'Other obligations (family, India)', m:[null,null,null,null,null,101.53,null,null,null,null,null,null]}
+        ]},
+        {id:uid(), name:'Misc Payments', categories:[
+          {id:uid(), name:'Other (gambling, ups)', m:[null,80,null,84.55,null,null,null,null,null,null,null,null]}
+        ]}
+      ],
+      investments: [
+        {id:uid(), name:'Loans Given', category:'Other', m:[null,null,3000,4000,null,null,null,null,null,null,null,null], currentValue:7000, invested:7000},
+        {id:uid(), name:'Robinhood', category:'US Stocks', m:[null,null,null,49.44,30,45,30,null,null,null,null,null], currentValue:2900, invested:2857.44},
+        {id:uid(), name:'Coin by Zerodha MF', category:'Indian Stocks', m:[null,271.94,1011.41,427.47,null,null,null,null,null,null,null,null], currentValue:1802.31, invested:1865.82},
+        {id:uid(), name:'Groww', category:'Indian Stocks', m:[null,null,null,159.15,158.86,null,null,null,null,null,null,null], currentValue:1559.89, invested:1397.01},
+        {id:uid(), name:'Fidelity', category:'US Stocks', m:n12(), currentValue:2082, invested:1381},
+        {id:uid(), name:'Zerodha', category:'Indian Stocks', m:[null,null,433.08,null,null,null,null,null,null,null,null,null], currentValue:1391.26, invested:1374.02},
+        {id:uid(), name:'Angel Investing', category:'Angel Investing', m:[null,null,null,1180,null,null,529.81,null,null,null,null,null], currentValue:1180, invested:1709.81},
+        {id:uid(), name:'Angel One', category:'Indian Stocks', m:n12(), currentValue:754.75, invested:1130.37},
+        {id:uid(), name:'Coinbase', category:'Crypto', m:n12(), currentValue:30, invested:42},
+        {id:uid(), name:'Coin DCX', category:'Crypto', m:n12(), currentValue:0, invested:0}
+      ],
+      debts: [
+        {id:uid(), name:'Home Loan', pending:19932.95, total:22100.72, cleared:2167.77, interest:9.6, emi:23000, m:n12(), note:'EMI figure may be recorded in home currency, not USD.'},
+        {id:uid(), name:'Education Loan', pending:9920.79, total:9920.79, cleared:0, interest:9.65, emi:12675, m:n12(), note:'EMI figure may be recorded in home currency, not USD.'},
+        {id:uid(), name:'Gold Loan', pending:31599.82, total:31599.82, cleared:0, interest:9.0, emi:null, m:[null,null,null,null,null,1000,null,null,null,null,null,null]},
+        {id:uid(), name:'Personal Loan', pending:1791.44, total:15215.16, cleared:13423.72, interest:12.1, emi:0, m:n12()},
+        {id:uid(), name:'US Credit Cards', pending:2014, total:8200, cleared:6186, interest:0, emi:null, m:[null,null,null,null,null,null,3153.58,null,null,null,null,null]},
+        {id:uid(), name:'Car Loan', pending:0, total:5687.02, cleared:5687.02, interest:8, emi:null, m:[null,5000,null,null,null,null,null,null,null,null,null,null]},
+        {id:uid(), name:'Bike Loan', pending:0, total:1844.07, cleared:1844.07, interest:8, emi:null, m:n12()},
+        {id:uid(), name:'My HDFC Personal Loan', pending:0, total:400, cleared:400, interest:0, emi:null, m:[75,75,75,75,75,75,null,null,null,null,null,null]}
+      ]
+    },
+    2025: {
+      income: [
+        {id:uid(), name:'Wages Week 1', m:[null,null,null,null,null,null,null,2209.39,2790.32,2793.8,2793.8,null]},
+        {id:uid(), name:'Wages Week 2', m:[null,null,null,null,null,null,null,180.25,2793,2793.8,1500,null]},
+        {id:uid(), name:'Wages Week 3', m:[null,null,null,null,null,null,null,2530.16,null,null,null,null]},
+        {id:uid(), name:'Wages Week 4', m:[null,null,null,null,null,null,null,3192.17,null,null,null,null]}
+      ],
+      expenseGroups: [
+        {id:uid(), name:'Home', categories:[
+          {id:uid(), name:'Mortgage', m:[null,null,null,null,null,null,null,450,585,550,550,null]},
+          {id:uid(), name:'Insurance', m:[null,null,null,null,null,null,null,2.29,null,null,null,null]},
+          {id:uid(), name:'Deposit', m:[null,null,null,null,null,null,null,null,550,null,null,null]},
+          {id:uid(), name:'Utilities', m:[null,null,null,null,null,null,null,42.66,null,29,56.67,null]}
+        ]},
+        {id:uid(), name:'Daily Living', categories:[
+          {id:uid(), name:'Split Wise', m:[null,null,null,null,null,null,null,null,null,8.24,null,null]},
+          {id:uid(), name:'Groceries', m:[null,null,null,null,null,null,null,26,73.34,78.74,24.25,null]},
+          {id:uid(), name:'Dining out', m:[null,null,null,null,null,null,null,37.08,53,46.28,6.95,null]},
+          {id:uid(), name:'Other home expenses', m:[null,null,null,null,null,null,null,130.61,2.26,null,null,null]}
+        ]},
+        {id:uid(), name:'Transportation', categories:[
+          {id:uid(), name:'Public transportation', m:[null,null,null,null,null,null,null,101.25,265.8,null,null,null]},
+          {id:uid(), name:'Friends transportation', m:[null,null,null,null,null,null,15,15,null,null,null,null]},
+          {id:uid(), name:'Cabs', m:[null,null,null,null,null,null,null,null,16.15,null,32,null]}
+        ]},
+        {id:uid(), name:'Credit Card Spend', categories:[
+          {id:uid(), name:'Chase', m:[null,null,null,null,null,null,null,null,40,41,44,null]},
+          {id:uid(), name:'Amex', m:[null,null,null,null,null,null,null,95.25,400,1700,900,null]},
+          {id:uid(), name:'Capital One', m:n12()},
+          {id:uid(), name:'Discover', m:[null,null,null,null,null,null,null,0,124,null,null,null]},
+          {id:uid(), name:'Citi', m:n12()},
+          {id:uid(), name:'BOFA', m:n12()}
+        ]},
+        {id:uid(), name:'Vacations', categories:[
+          {id:uid(), name:'Trips', m:[null,null,null,null,null,null,null,null,null,null,226.92,null]},
+          {id:uid(), name:'Movies', m:[null,null,null,null,null,null,null,26.49,37.52,26.49,null,null]},
+          {id:uid(), name:'Airlines', m:[null,null,null,null,null,null,null,80,null,586,null,null]}
+        ]},
+        {id:uid(), name:'Dues / Subscriptions', categories:[
+          {id:uid(), name:'Internet connection', m:[null,null,null,null,null,null,null,18.75,41.81,51.93,null,null]},
+          {id:uid(), name:'Wifi', m:[null,null,null,null,null,null,null,4.57,8,8,10,10]},
+          {id:uid(), name:'Apple & Google One', m:[null,null,null,null,null,null,null,null,2.35,2.99,2.99,null]}
+        ]},
+        {id:uid(), name:'Personal', categories:[
+          {id:uid(), name:'Clothing', m:[null,null,null,null,null,null,null,null,null,11.01,null,null]},
+          {id:uid(), name:'Salon / barber', m:[null,null,null,null,null,null,null,12.99,null,null,null,null]},
+          {id:uid(), name:'Self care', m:[null,null,null,null,null,null,null,null,null,60.63,13.94,null]}
+        ]},
+        {id:uid(), name:'Financial Obligations', categories:[
+          {id:uid(), name:'Family loan sendings', m:[null,null,null,null,null,null,null,3838.61,4950,2900,1400,null]},
+          {id:uid(), name:'Other obligations (family, India)', m:[null,null,null,null,null,null,null,null,null,64.72,93.47,null]}
+        ]},
+        {id:uid(), name:'Misc Payments', categories:[
+          {id:uid(), name:'Other', m:n12()}
+        ]}
+      ],
+      investments: [
+        {id:uid(), name:'Robinhood', category:'US Stocks', m:[null,null,null,null,null,null,null,872.95,null,344,155,null], currentValue:1049.46, invested:2484.8},
+        {id:uid(), name:'Fidelity', category:'US Stocks', m:[null,null,null,null,null,null,null,30,null,30,null,null], currentValue:1504.91, invested:1445.32},
+        {id:uid(), name:'Angel One', category:'Indian Stocks', m:[null,null,null,null,null,null,null,79.93,null,null,null,null], currentValue:2773.36, invested:3228.83},
+        {id:uid(), name:'Groww', category:'Indian Stocks', m:[null,null,null,null,null,null,null,285.46,null,null,null,null], currentValue:900.99, invested:1000.79},
+        {id:uid(), name:'Coinbase', category:'Crypto', m:[null,null,null,null,null,null,null,0,null,null,null,null], currentValue:37.94, invested:42},
+        {id:uid(), name:'Coin DCX', category:'Crypto', m:n12(), currentValue:0, invested:0},
+        {id:uid(), name:'Wazirx', category:'Crypto', m:n12(), currentValue:0, invested:0}
+      ],
+      debts: [
+        {id:uid(), name:'Home Loan', pending:21237.06, total:21237.06, cleared:0, interest:9.6, emi:null, m:n12()},
+        {id:uid(), name:'Education Loan', pending:9220.79, total:9220.79, cleared:0, interest:9.65, emi:null, m:n12()},
+        {id:uid(), name:'Gold Loan', pending:16184.06, total:16184.06, cleared:0, interest:9.0, emi:null, m:n12()},
+        {id:uid(), name:'Personal Loan', pending:5065.96, total:9943.62, cleared:4877.66, interest:12.1, emi:null, m:n12()},
+        {id:uid(), name:'US Credit Cards', pending:8435.16, total:8435.16, cleared:0, interest:0, emi:null, m:n12()}
+      ]
+    }
+  };
+}
+
+/* =========================================================================
+   STATE + PERSISTENCE
+   ========================================================================= */
+let DATA = null;
+let state = { year: 2026, month: 'ALL' };
+let charts = {};
+const STORAGE_KEY = 'ledger:data:v1';
+
+async function loadData(){
+  try{
+    const res = await window.storage.get(STORAGE_KEY, false);
+    if(res && res.value){ DATA = JSON.parse(res.value); return; }
+  }catch(e){ /* not found or storage unavailable */ }
+  DATA = buildDefaultData();
+  await saveData(true);
+}
+let saveTimer=null;
+async function saveData(silent){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async ()=>{
+    try{
+      await window.storage.set(STORAGE_KEY, JSON.stringify(DATA), false);
+      if(!silent) showToast('Saved');
+    }catch(e){ if(!silent) showToast('Could not save (storage unavailable)'); }
+  }, 250);
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove('show'), 1800);
+}
+
+/* =========================================================================
+   HELPERS: numbers, sums, formatting
+   ========================================================================= */
+function num(v){ return (typeof v === 'number' && !isNaN(v)) ? v : 0; }
+function sumArr(arr){ return arr.reduce((a,b)=>a+num(b),0); }
+function fmt$(v, decimals){
+  decimals = decimals===undefined? 0 : decimals;
+  const neg = v<0;
+  const s = Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:decimals, maximumFractionDigits:decimals});
+  return (neg? '-$':'$')+s;
+}
+function pct(v){ return (v*100).toFixed(1)+'%'; }
+function monthRange(){
+  return state.month==='ALL' ? [0,1,2,3,4,5,6,7,8,9,10,11] : [Number(state.month)];
+}
+function yearData(y){ return DATA[y] || DATA[state.year]; }
+
+function groupTotals(group){ // sum across categories per month -> array[12]
+  const out = n12().map(()=>0);
+  group.categories.forEach(c=>{ c.m.forEach((v,i)=> out[i]+=num(v)); });
+  return out;
+}
+function incomeTotals(y){
+  const out = n12().map(()=>0);
+  yearData(y).income.forEach(c=> c.m.forEach((v,i)=> out[i]+=num(v)));
+  return out;
+}
+function expenseTotalsAllGroups(y){
+  const out = n12().map(()=>0);
+  yearData(y).expenseGroups.forEach(g=>{
+    const gt = groupTotals(g);
+    gt.forEach((v,i)=> out[i]+=v);
+  });
+  return out;
+}
+function investContribTotals(y){
+  const out = n12().map(()=>0);
+  yearData(y).investments.forEach(inv=> inv.m.forEach((v,i)=> out[i]+=num(v)));
+  return out;
+}
+function sumRange(arr, months){ return months.reduce((a,i)=>a+num(arr[i]),0); }
+
+function findLatestMonthWithData(y){
+  const inc = incomeTotals(y), exp = expenseTotalsAllGroups(y);
+  let last = 0;
+  for(let i=0;i<12;i++){ if(inc[i]>0 || exp[i]>0) last=i; }
+  return last;
+}
+
+/* =========================================================================
+   INIT / SHELL
+   ========================================================================= */
+const TABS = [
+  {id:'overview', label:'Overview'},
+  {id:'income', label:'Income'},
+  {id:'expenses', label:'Expenses'},
+  {id:'investments', label:'Investments'},
+  {id:'debt', label:'Debt Payoff'},
+  {id:'data', label:'Data & Import'}
+];
+
+function initShell(){
+  const today = new Date();
+  document.getElementById('todayStr').textContent = today.toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric', year:'numeric'});
+
+  const yearSel = document.getElementById('yearSelect');
+  Object.keys(DATA).sort((a,b)=>b-a).forEach(y=>{
+    const o = document.createElement('option'); o.value=y; o.textContent=y; yearSel.appendChild(o);
+  });
+  state.year = Object.keys(DATA).includes('2026') ? 2026 : Number(Object.keys(DATA)[0]);
+  yearSel.value = state.year;
+  yearSel.addEventListener('change', ()=>{ state.year = Number(yearSel.value); state.month='ALL'; refreshMonthOptions(); renderActive(); });
+
+  refreshMonthOptions();
+  document.getElementById('monthSelect').addEventListener('change', (e)=>{ state.month = e.target.value; renderActive(); });
+
+  const tabsEl = document.getElementById('tabs');
+  const panelsEl = document.getElementById('panels');
+  TABS.forEach((t,i)=>{
+    const b = document.createElement('button');
+    b.className='tab-btn'+(i===0?' active':'');
+    b.dataset.tab=t.id;
+    b.innerHTML = `<span class="tab-index">0${i+1}</span>${t.label}`;
+    b.addEventListener('click', ()=>{
+      document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      document.getElementById('panel-'+t.id).classList.add('active');
+      renderActive();
+    });
+    tabsEl.appendChild(b);
+    const p = document.createElement('div');
+    p.className='panel'+(i===0?' active':'');
+    p.id='panel-'+t.id;
+    panelsEl.appendChild(p);
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', ()=>{
+    const blob = new Blob([JSON.stringify(DATA,null,2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='budget-ledger-data.json'; a.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+function refreshMonthOptions(){
+  const sel = document.getElementById('monthSelect');
+  sel.innerHTML='';
+  const optAll = document.createElement('option'); optAll.value='ALL'; optAll.textContent='Full Year';
+  sel.appendChild(optAll);
+  MONTHS.forEach((m,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=m+' '+state.year; sel.appendChild(o); });
+  const latest = findLatestMonthWithData(state.year);
+  const today = new Date();
+  const defaultMonth = (state.year===today.getFullYear()) ? Math.min(today.getMonth(), latest>=0?Math.max(latest,today.getMonth()):today.getMonth()) : latest;
+  state.month = String(latest>=0? latest : (today.getMonth()));
+  sel.value = state.month;
+  document.getElementById('scopeStr').textContent = state.year + ' · ' + MONTHS[Number(state.month)];
+  sel.onchange = null;
+  sel.addEventListener('change', (e)=>{ state.month=e.target.value; updateScopeStr(); renderActive(); });
+}
+function updateScopeStr(){
+  document.getElementById('scopeStr').textContent = state.year + ' · ' + (state.month==='ALL' ? 'Full Year' : MONTHS[Number(state.month)]);
+}
+
+function renderActive(){
+  updateScopeStr();
+  const active = document.querySelector('.tab-btn.active').dataset.tab;
+  if(active==='overview') renderOverview();
+  if(active==='income') renderIncome();
+  if(active==='expenses') renderExpenses();
+  if(active==='investments') renderInvestments();
+  if(active==='debt') renderDebt();
+  if(active==='data') renderDataTab();
+}
+
+function destroyChart(key){ if(charts[key]){ charts[key].destroy(); delete charts[key]; } }
+function safeChart(canvasEl, config){
+  if(typeof Chart==='undefined' || !canvasEl){
+    if(canvasEl && canvasEl.parentElement){
+      canvasEl.parentElement.innerHTML = '<div class="section-sub" style="padding:20px 0;">Chart unavailable — charting library failed to load.</div>';
+    }
+    return null;
+  }
+  return new Chart(canvasEl, config);
+}
+
+const chartFont = { family:"'IBM Plex Mono', monospace", size:11 };
+/* Chart.defaults are applied inside boot(), once Chart.js is confirmed loaded */
+
+/* =========================================================================
+   OVERVIEW TAB
+   ========================================================================= */
+function renderOverview(){
+  const y = state.year;
+  const months = monthRange();
+  const isFullYear = state.month==='ALL';
+  const incT = incomeTotals(y), expT = expenseTotalsAllGroups(y);
+  const incNow = sumRange(incT, months), expNow = sumRange(expT, months);
+  const net = incNow - expNow;
+
+  const debts = yearData(y).debts;
+  const debtPending = sumArr(debts.map(d=>d.pending));
+  const invCurrent = sumArr(yearData(y).investments.map(i=>i.currentValue));
+
+  let prevLabel='', incPrev=0, expPrev=0;
+  if(!isFullYear){
+    const mi = Number(state.month);
+    if(mi>0){ incPrev=incT[mi-1]; expPrev=expT[mi-1]; prevLabel=MONTHS[mi-1]; }
+  }
+
+  const deltaHtml = (curr,prev,label,inverse)=>{
+    if(!prevLabel) return `<div class="kpi-delta flat">— vs previous month unavailable</div>`;
+    if(prev===0 && curr===0) return `<div class="kpi-delta flat">flat vs ${prevLabel}</div>`;
+    const d = prev===0 ? 100 : ((curr-prev)/Math.abs(prev))*100;
+    const goodDir = inverse ? d<=0 : d>=0;
+    const arrow = d>=0 ? '▲' : '▼';
+    return `<div class="kpi-delta ${goodDir?'up':'down'}">${arrow} ${Math.abs(d).toFixed(1)}% vs ${prevLabel}</div>`;
+  };
+
+  const html = `
+  <div class="section-title">Overview</div>
+  <p class="section-sub">${isFullYear? 'Full-year snapshot for '+y : MONTHS[Number(state.month)]+' '+y+', compared against the prior month.'}</p>
+
+  <div class="kpi-grid">
+    <div class="kpi-card c-gold">
+      <div class="kpi-label">Income</div>
+      <div class="kpi-value">${fmt$(incNow)}</div>
+      ${deltaHtml(incNow, incPrev, 'income')}
+    </div>
+    <div class="kpi-card c-rust">
+      <div class="kpi-label">Expenses</div>
+      <div class="kpi-value">${fmt$(expNow)}</div>
+      ${deltaHtml(expNow, expPrev, 'expenses', true)}
+    </div>
+    <div class="kpi-card ${net>=0?'c-teal':'c-danger'}">
+      <div class="kpi-label">Net Savings</div>
+      <div class="kpi-value">${fmt$(net)}</div>
+      ${deltaHtml(net, incPrev-expPrev, 'net')}
+    </div>
+    <div class="kpi-card c-teal">
+      <div class="kpi-label">Invested (current value)</div>
+      <div class="kpi-value">${fmt$(invCurrent)}</div>
+      <div class="kpi-delta flat">across ${yearData(y).investments.length} holdings</div>
+    </div>
+    <div class="kpi-card c-danger">
+      <div class="kpi-label">Debt Remaining</div>
+      <div class="kpi-value">${fmt$(debtPending)}</div>
+      <div class="kpi-delta flat">across ${debts.filter(d=>d.pending>0).length} open loans</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-head"><h3>Income vs. expenses, month by month</h3></div>
+      <div class="chart-box tall"><canvas id="chartTrend"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Where ${isFullYear?'the year':MONTHS[Number(state.month)]} went</h3></div>
+      <div class="chart-box tall"><canvas id="chartBreakdown"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>d.total)))} originally owed</span></div>
+    <div class="chart-box short"><canvas id="chartDebtMini"></canvas></div>
+  </div>
+  `;
+  document.getElementById('panel-overview').innerHTML = html;
+
+  destroyChart('trend'); destroyChart('breakdown'); destroyChart('debtmini');
+
+  charts.trend = safeChart(document.getElementById('chartTrend'), {
+    type:'bar',
+    data:{ labels:MONTHS, datasets:[
+      {label:'Income', data:incT, backgroundColor:'#C9A961', borderRadius:4, barPercentage:0.6},
+      {label:'Expenses', data:expT, backgroundColor:'#C06A46', borderRadius:4, barPercentage:0.6},
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:10, boxHeight:10}}},
+      scales:{ y:{ grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
+  });
+
+  // breakdown: expense groups for selected scope (or income vs group split for full year)
+  const groups = yearData(y).expenseGroups;
+  const labels = groups.map(g=>g.name);
+  const vals = groups.map(g=> sumRange(groupTotals(g), months) );
+  charts.breakdown = safeChart(document.getElementById('chartBreakdown'), {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data:vals, backgroundColor:labels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
+      plugins:{legend:{position:'right', labels:{boxWidth:9, boxHeight:9, padding:10, font:{size:10.5}}}} }
+  });
+
+  charts.debtmini = safeChart(document.getElementById('chartDebtMini'), {
+    type:'bar',
+    data:{ labels: debts.map(d=>d.name), datasets:[
+      {label:'Cleared', data:debts.map(d=>d.cleared), backgroundColor:'#6FA491', stack:'s'},
+      {label:'Pending', data:debts.map(d=>d.pending), backgroundColor:'#C06A46', stack:'s'}
+    ]},
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
+      scales:{ x:{ stacked:true, grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v} }, y:{stacked:true, grid:{display:false}} } }
+  });
+}
+
+/* =========================================================================
+   EDITABLE TABLE BUILDER (shared by income / expenses / investments)
+   ========================================================================= */
+function makeEditableRow(item, onDeleteCb, extraCols){
+  extraCols = extraCols || '';
+  const cells = item.m.map((v,i)=>{
+    const val = v===null||v===undefined ? '' : v;
+    return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-field="m" data-idx="${i}" data-id="${item.id}">${val===''?'–':val}</td>`;
+  }).join('');
+  const total = sumArr(item.m);
+  return `<tr data-row-id="${item.id}">
+    <td>${item.name} <span class="row-del" data-del="${item.id}" title="remove">✕</span></td>
+    ${cells}
+    <td style="font-weight:600;">${fmt$(total,2)}</td>
+    ${extraCols}
+  </tr>`;
+}
+
+function attachEditableHandlers(container, items, onChange){
+  container.querySelectorAll('td.editable').forEach(td=>{
+    td.addEventListener('focus', ()=>{ if(td.textContent==='–') td.textContent=''; });
+    td.addEventListener('blur', ()=>{
+      const id = td.dataset.id, idx = Number(td.dataset.idx);
+      const raw = td.textContent.trim().replace(/[$,]/g,'');
+      const item = items.find(x=>x.id===id);
+      let v = raw==='' ? null : parseFloat(raw);
+      if(isNaN(v)) v = null;
+      item.m[idx] = v;
+      td.textContent = v===null ? '–' : v;
+      td.classList.toggle('zero', !v);
+      saveData();
+      onChange && onChange();
+    });
+    td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
+  });
+  container.querySelectorAll('[data-del]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.dataset.del;
+      const idx = items.findIndex(x=>x.id===id);
+      if(idx>-1 && confirm('Remove "'+items[idx].name+'"?')){
+        items.splice(idx,1); saveData(); onChange && onChange();
+      }
+    });
+  });
+}
+
+function monthHeaderCells(){
+  return MONTHS.map(m=>`<th>${m}</th>`).join('');
+}
+
+/* =========================================================================
+   INCOME TAB
+   ========================================================================= */
+function renderIncome(){
+  const y = state.year;
+  const items = yearData(y).income;
+  const totals = incomeTotals(y);
+  const html = `
+    <div class="section-title">Income · ${y}</div>
+    <p class="section-sub">Every wage entry, editable in place. Click a cell to change it, or add a new income line below.</p>
+    <div class="card">
+      <div class="card-head"><h3>Income sources</h3><span class="section-sub" style="margin:0;">Year total: <b style="color:var(--gold-soft)">${fmt$(sumArr(totals),2)}</b></span></div>
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr><th>Source</th>${monthHeaderCells()}<th>Year</th></tr></thead>
+          <tbody id="incomeBody">
+            ${items.map(it=>makeEditableRow(it)).join('')}
+            <tr class="total-row"><td>Total</td>${totals.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totals))}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="addcat-row">
+        <input type="text" id="newIncomeName" placeholder="New income source name…">
+        <button class="btn primary small" id="addIncomeBtn">+ Add income source</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Income trend</h3></div>
+      <div class="chart-box"><canvas id="chartIncomeTrend"></canvas></div>
+    </div>
+  `;
+  document.getElementById('panel-income').innerHTML = html;
+  attachEditableHandlers(document.getElementById('incomeBody'), items, renderIncome);
+
+  document.getElementById('addIncomeBtn').addEventListener('click', ()=>{
+    const inp = document.getElementById('newIncomeName');
+    const name = inp.value.trim();
+    if(!name){ inp.focus(); return; }
+    items.push({id:uid(), name, m:n12()});
+    saveData(); renderIncome();
+  });
+
+  destroyChart('incomeTrend');
+  charts.incomeTrend = safeChart(document.getElementById('chartIncomeTrend'), {
+    type:'line',
+    data:{ labels:MONTHS, datasets: items.map((it,i)=>({
+      label: it.name, data: it.m, borderColor: PALETTE[i%PALETTE.length], backgroundColor:'transparent', tension:.3, spanGaps:true
+    })).concat([{label:'Total', data:totals, borderColor:'#EEE7D8', borderDash:[4,3], tension:.3}]) },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:10,boxHeight:10, font:{size:10}}}},
+      scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
+  });
+}
+
+/* =========================================================================
+   EXPENSES TAB
+   ========================================================================= */
+let collapsedGroups = {};
+function renderExpenses(){
+  const y = state.year;
+  const groups = yearData(y).expenseGroups;
+  const grandTotals = expenseTotalsAllGroups(y);
+
+  let groupsHtml = groups.map((g, gi)=>{
+    const totals = groupTotals(g);
+    const collapsed = collapsedGroups[g.id];
+    return `
+    <div class="group-block ${collapsed?'collapsed':''}" data-group-id="${g.id}">
+      <div class="group-head" data-toggle="${g.id}">
+        <h4><span class="g-caret">▾</span> ${g.name}</h4>
+        <div class="g-total">${fmt$(sumArr(totals),2)} <span class="row-del" data-delgroup="${g.id}" title="remove group" style="margin-left:10px;">✕</span></div>
+      </div>
+      <div class="group-body">
+        <div class="table-scroll">
+          <table class="ledger">
+            <thead><tr><th>Category</th>${monthHeaderCells()}<th>Year</th></tr></thead>
+            <tbody id="grpbody-${g.id}">
+              ${g.categories.map(c=>makeEditableRow(c)).join('')}
+              <tr class="total-row"><td>Total</td>${totals.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totals))}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="addcat-row">
+          <input type="text" placeholder="New category in ${g.name}…" data-newcat="${g.id}">
+          <button class="btn small" data-addcat="${g.id}">+ Add category</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const html = `
+    <div class="section-title">Expenses · ${y}</div>
+    <p class="section-sub">Grouped by category. Click any figure to edit it, add new line items inside a group, or start an entirely new group below.</p>
+
+    <div class="card">
+      <div class="card-head"><h3>All groups over the year</h3></div>
+      <div class="chart-box tall"><canvas id="chartExpAll"></canvas></div>
+    </div>
+
+    ${groupsHtml}
+
+    <div class="card">
+      <div class="card-head"><h3>Add a new expense group</h3></div>
+      <div class="addcat-row">
+        <input type="text" id="newGroupName" placeholder="e.g. Pets, Childcare, Side Hustle…">
+        <button class="btn primary small" id="addGroupBtn">+ Add group</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('panel-expenses').innerHTML = html;
+
+  groups.forEach(g=>{
+    attachEditableHandlers(document.getElementById('grpbody-'+g.id), g.categories, renderExpenses);
+  });
+  document.querySelectorAll('[data-toggle]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      if(e.target.closest('[data-delgroup]')) return;
+      const id = el.dataset.toggle;
+      collapsedGroups[id] = !collapsedGroups[id];
+      renderExpenses();
+    });
+  });
+  document.querySelectorAll('[data-delgroup]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const id = el.dataset.delgroup;
+      const idx = groups.findIndex(g=>g.id===id);
+      if(idx>-1 && confirm('Remove the entire "'+groups[idx].name+'" group?')){
+        groups.splice(idx,1); saveData(); renderExpenses();
+      }
+    });
+  });
+  document.querySelectorAll('[data-addcat]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const gid = btn.dataset.addcat;
+      const inp = document.querySelector(`[data-newcat="${gid}"]`);
+      const name = inp.value.trim();
+      if(!name){ inp.focus(); return; }
+      const g = groups.find(x=>x.id===gid);
+      g.categories.push({id:uid(), name, m:n12()});
+      saveData(); renderExpenses();
+    });
+  });
+  document.getElementById('addGroupBtn').addEventListener('click', ()=>{
+    const inp = document.getElementById('newGroupName');
+    const name = inp.value.trim();
+    if(!name){ inp.focus(); return; }
+    groups.push({id:uid(), name, categories:[{id:uid(), name:'General', m:n12()}]});
+    saveData(); renderExpenses();
+  });
+
+  destroyChart('expAll');
+  charts.expAll = safeChart(document.getElementById('chartExpAll'), {
+    type:'bar',
+    data:{ labels: MONTHS, datasets: groups.map((g,i)=>({
+      label:g.name, data: groupTotals(g), backgroundColor: PALETTE[i%PALETTE.length], stack:'s'
+    })) },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:10,boxHeight:10, font:{size:10}}}},
+      scales:{ x:{stacked:true, grid:{display:false}}, y:{stacked:true, grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}} } }
+  });
+}
+
+/* =========================================================================
+   INVESTMENTS TAB
+   ========================================================================= */
+const INVEST_CATS = ['Indian Stocks','US Stocks','Crypto','Angel Investing','Other'];
+function renderInvestments(){
+  const y = state.year;
+  const items = yearData(y).investments;
+  const totals = investContribTotals(y);
+  const currentTotal = sumArr(items.map(i=>i.currentValue));
+  const investedTotal = sumArr(items.map(i=>i.invested));
+  const gain = currentTotal - investedTotal;
+
+  const rows = items.map(it=>{
+    const cells = it.m.map((v,i)=>{
+      const val = v===null||v===undefined? '' : v;
+      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-field="m" data-idx="${i}" data-id="${it.id}">${val===''?'–':val}</td>`;
+    }).join('');
+    return `<tr data-row-id="${it.id}">
+      <td>${it.name} <span class="row-del" data-del="${it.id}">✕</span></td>
+      <td>
+        <select data-catsel="${it.id}" style="background:var(--bg-card-hi); color:var(--gold-soft); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11.5px; padding:3px 4px;">
+          ${INVEST_CATS.map(c=>`<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      ${cells}
+      <td style="font-weight:600;">${fmt$(sumArr(it.m),2)}</td>
+      <td class="editable" contenteditable="true" data-field="currentValue" data-id="${it.id}">${it.currentValue||0}</td>
+      <td class="editable" contenteditable="true" data-field="invested" data-id="${it.id}">${it.invested||0}</td>
+    </tr>`;
+  }).join('');
+
+  const alloc = {};
+  items.forEach(it=>{ alloc[it.category] = (alloc[it.category]||0) + num(it.currentValue); });
+  const allocLabels = Object.keys(alloc);
+  const allocVals = Object.values(alloc);
+
+  const html = `
+    <div class="section-title">Investments · ${y}</div>
+    <p class="section-sub">Every holding's monthly contribution, plus current value vs. what you've put in.</p>
+
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
+      <div class="kpi-card c-teal"><div class="kpi-label">Current Portfolio Value</div><div class="kpi-value">${fmt$(currentTotal)}</div></div>
+      <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value">${fmt$(investedTotal)}</div></div>
+      <div class="kpi-card ${gain>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized Gain / Loss</div><div class="kpi-value">${gain>=0?'+':''}${fmt$(gain)}</div></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><h3>Monthly contributions</h3></div>
+        <div class="chart-box"><canvas id="chartInvestTrend"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Portfolio allocation</h3></div>
+        <div class="chart-box"><canvas id="chartAlloc"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Holdings</h3><span class="section-sub" style="margin:0;">Year contributed: <b style="color:var(--gold-soft)">${fmt$(sumArr(totals),2)}</b></span></div>
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr><th>Holding</th><th>Category</th>${monthHeaderCells()}<th>Year</th><th>Current Value</th><th>Invested</th></tr></thead>
+          <tbody id="investBody">${rows}
+            <tr class="total-row"><td>Total</td><td></td>${totals.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totals))}</td><td>${fmt$(currentTotal)}</td><td>${fmt$(investedTotal)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="addcat-row">
+        <input type="text" id="newInvestName" placeholder="New holding name…">
+        <button class="btn primary small" id="addInvestBtn">+ Add holding</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('panel-investments').innerHTML = html;
+
+  document.getElementById('investBody').querySelectorAll('td.editable').forEach(td=>{
+    td.addEventListener('focus', ()=>{ if(td.textContent==='–') td.textContent=''; });
+    td.addEventListener('blur', ()=>{
+      const id = td.dataset.id, field = td.dataset.field;
+      const item = items.find(x=>x.id===id);
+      const raw = td.textContent.trim().replace(/[$,]/g,'');
+      let v = raw===''? null : parseFloat(raw);
+      if(isNaN(v)) v=null;
+      if(field==='m'){ item.m[Number(td.dataset.idx)] = v; td.textContent = v===null?'–':v; td.classList.toggle('zero', !v); }
+      else { item[field] = v||0; td.textContent = v||0; }
+      saveData(); renderInvestments();
+    });
+    td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
+  });
+  document.getElementById('investBody').querySelectorAll('[data-del]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const idx = items.findIndex(x=>x.id===el.dataset.del);
+      if(idx>-1 && confirm('Remove "'+items[idx].name+'"?')){ items.splice(idx,1); saveData(); renderInvestments(); }
+    });
+  });
+  document.getElementById('investBody').querySelectorAll('[data-catsel]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const item = items.find(x=>x.id===sel.dataset.catsel);
+      item.category = sel.value; saveData(); renderInvestments();
+    });
+  });
+  document.getElementById('addInvestBtn').addEventListener('click', ()=>{
+    const inp = document.getElementById('newInvestName');
+    const name = inp.value.trim();
+    if(!name){ inp.focus(); return; }
+    items.push({id:uid(), name, category:'Other', m:n12(), currentValue:0, invested:0});
+    saveData(); renderInvestments();
+  });
+
+  destroyChart('investTrend'); destroyChart('alloc');
+  charts.investTrend = safeChart(document.getElementById('chartInvestTrend'), {
+    type:'bar',
+    data:{ labels:MONTHS, datasets:[{label:'Contributions', data:totals, backgroundColor:'#6FA491', borderRadius:4}] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
+  });
+  charts.alloc = safeChart(document.getElementById('chartAlloc'), {
+    type:'doughnut',
+    data:{ labels:allocLabels, datasets:[{data:allocVals, backgroundColor:allocLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2}] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
+      plugins:{legend:{position:'right', labels:{boxWidth:9,boxHeight:9, font:{size:10.5}}}} }
+  });
+}
+
+/* =========================================================================
+   DEBT PAYOFF TAB
+   ========================================================================= */
+let debtSim = { extra: 200, strategy:'avalanche' };
+
+function simulatePayoff(debts, extraMonthly, strategy){
+  // clone workable balances
+  const items = debts.filter(d=>d.pending>0).map(d=>({
+    name:d.name, balance:d.pending, rate:(num(d.interest)/100)/12,
+    minPay: d.emi && d.emi>0 ? Math.min(d.emi, d.pending*1.5) : Math.max(d.pending*0.03, 25)
+  }));
+  if(items.length===0) return {months:0, perDebt:{}, series:[{month:0,total:0}], payoffDate:new Date()};
+  const order = ()=> items.filter(x=>x.balance>0.01).sort((a,b)=> strategy==='avalanche' ? b.rate-a.rate : a.balance-b.balance);
+  const perDebt = {};
+  const series = [{month:0, total: items.reduce((a,b)=>a+b.balance,0)}];
+  let month=0;
+  const maxMonths = 600;
+  while(items.some(x=>x.balance>0.01) && month<maxMonths){
+    month++;
+    // accrue interest
+    items.forEach(x=>{ if(x.balance>0.01) x.balance += x.balance*x.rate; });
+    // pay minimums
+    let pool = extraMonthly;
+    items.forEach(x=>{
+      if(x.balance<=0.01) return;
+      const pay = Math.min(x.minPay, x.balance);
+      x.balance -= pay;
+    });
+    // apply extra to priority order
+    for(const x of order()){
+      if(pool<=0) break;
+      if(x.balance<=0.01) continue;
+      const pay = Math.min(pool, x.balance);
+      x.balance -= pay; pool -= pay;
+    }
+    items.forEach(x=>{
+      if(x.balance<=0.01 && !(x.name in perDebt)) perDebt[x.name]=month;
+    });
+    series.push({month, total: items.reduce((a,b)=>a+Math.max(b.balance,0),0)});
+  }
+  const payoffDate = new Date();
+  payoffDate.setMonth(payoffDate.getMonth()+month);
+  return {months:month, perDebt, series, payoffDate};
+}
+
+function renderDebt(){
+  const y = state.year;
+  const debts = yearData(y).debts;
+  const totalPending = sumArr(debts.map(d=>d.pending));
+  const totalOriginal = sumArr(debts.map(d=>d.total));
+  const totalCleared = sumArr(debts.map(d=>d.cleared));
+
+  const cards = debts.map(d=>{
+    const pct2 = d.total>0 ? Math.min(100, (d.cleared/d.total)*100) : 100;
+    const isPaid = d.pending<=0;
+    return `
+    <div class="debt-card" data-debt-id="${d.id}">
+      <div class="debt-card-head">
+        <div><span class="debt-name">${d.name}</span>${isPaid?'<span class="debt-tag" style="color:var(--good); border-color:var(--good);">paid off</span>':''}</div>
+        <div class="debt-figs">
+          <span>Interest <b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}">${d.interest}</b>%/yr</span>
+          <span>EMI/min <b class="editable-inline" contenteditable="true" data-debtfield="emi" data-id="${d.id}">${d.emi||0}</b></span>
+        </div>
+      </div>
+      <div class="runway ${isPaid?'':''}"><div class="runway-fill" style="width:${pct2}%"></div></div>
+      <div class="debt-foot">
+        <span>Cleared: <b style="color:var(--teal-soft)">${fmt$(d.cleared,2)}</b></span>
+        <span>Pending: <b style="color:var(--rust-soft)">${fmt$(d.pending,2)}</b></span>
+        <span>Original: ${fmt$(d.total,2)}</span>
+      </div>
+      ${d.note?`<div class="section-sub" style="margin-top:8px;">⚑ ${d.note}</div>`:''}
+    </div>`;
+  }).join('');
+
+  const sim = simulatePayoff(debts, debtSim.extra, debtSim.strategy);
+  const freedomText = sim.months===0 ? 'You are debt-free right now.' :
+    `${sim.months} month${sim.months===1?'':'s'} from today — around <span style="color:var(--gold-soft)">${sim.payoffDate.toLocaleDateString('en-US',{month:'long', year:'numeric'})}</span>`;
+
+  const html = `
+    <div class="section-title">Debt Payoff Planner · ${y}</div>
+    <p class="section-sub">What's left, what it costs monthly, and when it disappears if you keep paying at this pace — or faster.</p>
+
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
+      <div class="kpi-card c-danger"><div class="kpi-label">Total Pending</div><div class="kpi-value">${fmt$(totalPending)}</div></div>
+      <div class="kpi-card c-teal"><div class="kpi-label">Already Cleared</div><div class="kpi-value">${fmt$(totalCleared)}</div></div>
+      <div class="kpi-card c-gold"><div class="kpi-label">Original Debt Total</div><div class="kpi-value">${fmt$(totalOriginal)}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Loans</h3></div>
+      ${cards}
+      <div class="addcat-row">
+        <input type="text" id="newDebtName" placeholder="New loan / debt name…">
+        <button class="btn primary small" id="addDebtBtn">+ Add debt</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Freedom calculator</h3><span class="section-sub" style="margin:0;">Minimums are paid on every loan first; extra goes to the highest-interest balance (avalanche method).</span></div>
+      <div class="sim-controls">
+        <div class="sim-field">
+          <label>Extra monthly payment</label>
+          <input type="range" id="extraSlider" min="0" max="3000" step="25" value="${debtSim.extra}">
+        </div>
+        <div class="sim-field">
+          <label>Exact amount</label>
+          <input type="number" id="extraNumber" min="0" step="25" value="${debtSim.extra}">
+        </div>
+        <div class="sim-field">
+          <label>Strategy</label>
+          <div class="pill-row">
+            <div class="pill ${debtSim.strategy==='avalanche'?'active':''}" data-strat="avalanche">Avalanche (highest rate)</div>
+            <div class="pill ${debtSim.strategy==='snowball'?'active':''}" data-strat="snowball">Snowball (smallest balance)</div>
+          </div>
+        </div>
+      </div>
+      <div class="freedom-banner">
+        <div><div class="small">DEBT-FREE PROJECTION</div><div class="big">${freedomText}</div></div>
+        <div class="small">based on ${fmt$(totalPending)} pending, minimum payments, plus ${fmt$(debtSim.extra)}/mo extra</div>
+      </div>
+      <div class="chart-box"><canvas id="chartPayoff"></canvas></div>
+    </div>
+  `;
+  document.getElementById('panel-debt').innerHTML = html;
+
+  document.querySelectorAll('.editable-inline').forEach(el=>{
+    el.addEventListener('blur', ()=>{
+      const id = el.dataset.id, field = el.dataset.debtfield;
+      const d = debts.find(x=>x.id===id);
+      const v = parseFloat(el.textContent.replace(/[^0-9.\-]/g,''));
+      d[field] = isNaN(v)? 0 : v;
+      saveData(); renderDebt();
+    });
+    el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){e.preventDefault(); el.blur();}});
+  });
+
+  document.getElementById('addDebtBtn').addEventListener('click', ()=>{
+    const inp = document.getElementById('newDebtName');
+    const name = inp.value.trim();
+    if(!name){ inp.focus(); return; }
+    debts.push({id:uid(), name, pending:0, total:0, cleared:0, interest:0, emi:0, m:n12()});
+    saveData(); renderDebt();
+  });
+
+  const slider = document.getElementById('extraSlider');
+  const numInp = document.getElementById('extraNumber');
+  slider.addEventListener('input', ()=>{ debtSim.extra = Number(slider.value); numInp.value = slider.value; renderDebt(); });
+  numInp.addEventListener('change', ()=>{ debtSim.extra = Math.max(0, Number(numInp.value)||0); renderDebt(); });
+  document.querySelectorAll('[data-strat]').forEach(p=>{
+    p.addEventListener('click', ()=>{ debtSim.strategy = p.dataset.strat; renderDebt(); });
+  });
+
+  destroyChart('payoff');
+  charts.payoff = safeChart(document.getElementById('chartPayoff'), {
+    type:'line',
+    data:{ labels: sim.series.map(s=>'M'+s.month), datasets:[
+      {label:'Remaining balance', data: sim.series.map(s=>s.total), borderColor:'#C06A46', backgroundColor:'rgba(192,106,70,0.12)', fill:true, tension:.25, pointRadius:0}
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}, ticks:{maxTicksLimit:12}} } }
+  });
+}
+
+/* =========================================================================
+   DATA / IMPORT TAB
+   ========================================================================= */
+function parseNumCell(v){
+  if(v===null || v===undefined || v==='') return null;
+  if(typeof v==='number') return v;
+  if(typeof v==='string'){
+    const s = v.trim();
+    if(/^-?[0-9.]+$/.test(s)) return parseFloat(s);
+    if(/^[0-9.+\s]+$/.test(s)){ try{ return Function('"use strict";return ('+s.replace(/\s+/g,'')+')')(); }catch(e){ return null; } }
+    const f = parseFloat(s.replace(/[^0-9.\-]/g,''));
+    return isNaN(f)? null : f;
+  }
+  return null;
+}
+function isMonthHeaderRow(row){
+  const slice = row.slice(1,13).map(v=> (v||'').toString().trim().toLowerCase().slice(0,3));
+  let hits=0; slice.forEach(s=>{ if(MONTH_ALIASES[s]!==undefined) hits++; });
+  return hits>=8;
+}
+
+function parseYearSheet(rows){
+  const income=[]; const expenseGroups=[]; const investments=[]; const debts=[];
+  let i=0;
+  while(i<rows.length){
+    const row = rows[i] || [];
+    const label = (row[0]||'').toString().trim();
+    if(label && isMonthHeaderRow(row)){
+      const groupName = label;
+      const isIncome = /^income$/i.test(groupName);
+      const isInvest = /^invest/i.test(groupName);
+      const isLoan = /^loan payments?$/i.test(groupName);
+      i++;
+      const cats=[];
+      while(i<rows.length){
+        const r = rows[i]||[];
+        const first = (r[0]||'').toString().trim();
+        if(/^total$/i.test(first)){ i++; break; }
+        if(first==='' ){ i++; continue; }
+        if(isMonthHeaderRow(r)) break; // next group started without explicit Total row
+        if(isLoan){
+          debts.push({
+            id:uid(), name:first,
+            pending: parseNumCell(r[14]) ?? 0,
+            total: parseNumCell(r[15]) ?? 0,
+            cleared: parseNumCell(r[16]) ?? 0,
+            interest: (parseNumCell(r[17])||0) * ((parseNumCell(r[17])||0) < 1 ? 100 : 1),
+            emi: parseNumCell(r[18]),
+            m: Array.from({length:12}, (_,k)=>parseNumCell(r[k+1]))
+          });
+        } else if(isInvest){
+          investments.push({
+            id:uid(), name:first, category:'Other',
+            m: Array.from({length:12}, (_,k)=>parseNumCell(r[k+1])),
+            currentValue: parseNumCell(r[13]) ?? 0,
+            invested: parseNumCell(r[14]) ?? 0
+          });
+        } else {
+          cats.push({ id:uid(), name:first, m: Array.from({length:12}, (_,k)=>parseNumCell(r[k+1])) });
+        }
+        i++;
+      }
+      if(isIncome){ income.push(...cats); }
+      else if(!isInvest && !isLoan){ expenseGroups.push({id:uid(), name:groupName, categories:cats}); }
+    } else {
+      i++;
+    }
+  }
+  return {income, expenseGroups, investments, debts};
+}
+
+function renderDataTab(){
+  const html = `
+    <div class="section-title">Data & Import</div>
+    <p class="section-sub">Upload a new spreadsheet to refresh a year's numbers, export what's here, or reset back to the sample data.</p>
+
+    <div class="card">
+      <div class="card-head"><h3>Import a spreadsheet</h3></div>
+      <div class="notice">Works best with a workbook shaped like your original tracker: a sheet named for the year (e.g. <b>2026</b>), with group headers like <b>INCOME</b>, <b>HOME</b>, <b>Investment</b>, or <b>Loan Payments</b> followed by <b>JAN…DEC</b> columns, each ending in a <b>Total</b> row. Re-uploading it any time refreshes this ledger — including brand-new categories you've added in Excel.</div>
+      <div class="dropzone" id="dropzone">
+        <div>📄 Drop an .xlsx file here, or click to browse</div>
+        <div style="font-size:11px; margin-top:6px; color:var(--text-faint);">Data is parsed entirely in your browser — nothing is uploaded anywhere.</div>
+        <input type="file" id="fileInput" accept=".xlsx,.xls">
+      </div>
+      <div id="importStatus" style="margin-top:12px; font-family:var(--font-mono); font-size:12px; color:var(--text-dim);"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Housekeeping</h3></div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn" id="exportBtn2">Export current data (.json)</button>
+        <button class="btn danger-outline" id="resetBtn">Reset to sample data</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('panel-data').innerHTML = html;
+
+  const dz = document.getElementById('dropzone');
+  const fi = document.getElementById('fileInput');
+  dz.addEventListener('click', ()=>fi.click());
+  ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault(); dz.classList.add('drag');}));
+  ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault(); dz.classList.remove('drag');}));
+  dz.addEventListener('drop', (e)=>{ const f=e.dataTransfer.files[0]; if(f) handleFile(f); });
+  fi.addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) handleFile(f); });
+
+  document.getElementById('exportBtn2').addEventListener('click', ()=>document.getElementById('exportBtn').click());
+  document.getElementById('resetBtn').addEventListener('click', async ()=>{
+    if(confirm('This replaces everything with the original sample data. Continue?')){
+      DATA = buildDefaultData(); await saveData(); showToast('Reset to sample data'); renderActive();
+    }
+  });
+
+  function handleFile(file){
+    const status = document.getElementById('importStatus');
+    status.textContent = 'Reading '+file.name+'…';
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      try{
+        const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+        let importedAny = false;
+        [2026,2025].forEach(yr=>{
+          const sheetName = wb.SheetNames.find(n=> n.trim()===String(yr));
+          if(!sheetName) return;
+          const ws = wb.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+          const parsed = parseYearSheet(rows);
+          if(parsed.income.length || parsed.expenseGroups.length || parsed.investments.length || parsed.debts.length){
+            DATA[yr] = parsed;
+            importedAny = true;
+          }
+        });
+        if(importedAny){
+          saveData();
+          status.innerHTML = '<span style="color:var(--good)">✓ Import complete.</span> Your Overview, Income, Expenses, Investments and Debt tabs now reflect the new file.';
+          showToast('Spreadsheet imported');
+          refreshMonthOptions();
+          renderActive();
+        } else {
+          status.innerHTML = '<span style="color:var(--danger)">No matching "2025"/"2026" sheet with the expected layout was found.</span> The sheet names in your file were: '+wb.SheetNames.join(', ');
+        }
+      }catch(err){
+        status.innerHTML = '<span style="color:var(--danger)">Could not read that file: '+err.message+'</span>';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+/* =========================================================================
+   BOOT
+   ========================================================================= */
+(async function boot(){
+  const panelsEl = document.getElementById('panels');
+  panelsEl.innerHTML = '<div class="section-sub" id="bootStatus" style="padding:30px 0;">Loading charting library…</div>';
+
+  const chartOk = await loadFirstWorking(CHART_SOURCES, ()=>typeof Chart!=='undefined');
+  if(chartOk){
+    Chart.defaults.color = '#A2AEA9';
+    Chart.defaults.font.family = "'IBM Plex Mono', monospace";
+    Chart.defaults.font.size = 11;
+    Chart.defaults.borderColor = '#33433F';
+  }
+  if(!chartOk){
+    document.getElementById('bootStatus').innerHTML =
+      '<span style="color:var(--danger)">Could not load the charting library from any CDN.</span> ' +
+      'This can happen if your network blocks cdnjs.cloudflare.com / jsdelivr.net / unpkg.com. ' +
+      'Everything except the charts (tables, editing, debt calculator, import) will still work below once you continue.';
+  }
+  const xlsxOk = await loadFirstWorking(XLSX_SOURCES, ()=>typeof XLSX!=='undefined');
+
+  await loadData();
+  initShell();
+  renderActive();
+
+  if(!xlsxOk){
+    showToast('Spreadsheet import unavailable (library failed to load)');
+  }
+})();
+</script>
+</body>
+</html>
