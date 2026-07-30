@@ -242,6 +242,14 @@ table.ledger td.zero{color:var(--text-faint);}
 }
 .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
 
+.kpi-card.clickable{cursor:pointer; transition:transform .12s ease, border-color .12s ease;}
+.kpi-card.clickable:hover{transform:translateY(-2px); border-color:var(--gold);}
+.flash-highlight{animation:flashPulse 1.6s ease;}
+@keyframes flashPulse{
+  0%{box-shadow:0 0 0 0 rgba(201,169,97,0);}
+  15%{box-shadow:0 0 0 3px rgba(201,169,97,0.55);}
+  100%{box-shadow:0 0 0 0 rgba(201,169,97,0);}
+}
 .pill-row{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;}
 .pill{font-family:var(--font-mono); font-size:11px; padding:5px 11px; border-radius:14px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
 .pill.active{border-color:var(--gold); color:var(--gold-soft); background:rgba(201,169,97,.08);}
@@ -351,7 +359,7 @@ function buildDefaultData(){
           {id:uid(), name:'Friends transportation', m:[null,8.5,2.25,null,null,null,null,null,null,null,null,null]},
           {id:uid(), name:'Cabs', m:[null,5.34,null,null,null,null,null,null,null,null,null,null]}
         ]},
-        {id:uid(), name:'Credit Card Spend', categories:[
+        {id:uid(), name:'Credit Card Spend', excludeFromTotal:true, categories:[
           {id:uid(), name:'Chase', m:[48,252,300,100,null,null,null,null,null,null,null,null]},
           {id:uid(), name:'Amex (fee)', m:[8.95,null,null,null,null,325,null,null,null,null,null,null]},
           {id:uid(), name:'Capital One', m:n12()},
@@ -439,7 +447,7 @@ function buildDefaultData(){
           {id:uid(), name:'Friends transportation', m:[null,null,null,null,null,null,15,15,null,null,null,null]},
           {id:uid(), name:'Cabs', m:[null,null,null,null,null,null,null,null,16.15,null,32,null]}
         ]},
-        {id:uid(), name:'Credit Card Spend', categories:[
+        {id:uid(), name:'Credit Card Spend', excludeFromTotal:true, categories:[
           {id:uid(), name:'Chase', m:[null,null,null,null,null,null,null,null,40,41,44,null]},
           {id:uid(), name:'Amex', m:[null,null,null,null,null,null,null,95.25,400,1700,900,null]},
           {id:uid(), name:'Capital One', m:n12()},
@@ -490,6 +498,37 @@ function buildDefaultData(){
   };
 }
 
+function buildDefaultPaymentPlan(){
+  const colSalary=uid(), colCollegeFees=uid(), colRent=uid(), colGrocery=uid(), colUtilities=uid(), colTrips=uid(), colCollege=uid(), colMisc=uid();
+  const columns = [
+    {id:colSalary, name:'Salary', kind:'income'},
+    {id:colCollegeFees, name:'College Fees (paid outside this budget)', kind:'memo'},
+    {id:colRent, name:'Rent', kind:'expense'},
+    {id:colGrocery, name:'Grocery', kind:'expense'},
+    {id:colUtilities, name:'Utilities', kind:'expense'},
+    {id:colTrips, name:'Trips', kind:'expense'},
+    {id:colCollege, name:'College', kind:'expense'},
+    {id:colMisc, name:'Misc', kind:'expense'}
+  ];
+  function row(label, vals){
+    return {id:uid(), label, values:{
+      [colSalary]:vals[0], [colCollegeFees]:vals[1], [colRent]:vals[2], [colGrocery]:vals[3],
+      [colUtilities]:vals[4], [colTrips]:vals[5], [colCollege]:vals[6], [colMisc]:vals[7]
+    }};
+  }
+  const rows = [
+    row('September 2026', [6000,3800,400,150,50,null,null,150]),
+    row('October 2026',   [6000,null,400,150,50,null,null,150]),
+    row('November 2026',  [6000,null,400,150,50,null,null,150]),
+    row('December 2026',  [6000,null,400,150,50,null,null,150]),
+    row('January 2027',   [6000,3800,400,150,50,800,500,150]),
+    row('February 2027',  [6000,null,400,150,50,null,null,150]),
+    row('March 2027',     [6000,null,400,150,50,null,null,150]),
+    row('April 2027',     [6000,null,400,150,50,null,500,150])
+  ];
+  return {columns, rows};
+}
+
 /* =========================================================================
    STATE + PERSISTENCE
    ========================================================================= */
@@ -501,9 +540,14 @@ const STORAGE_KEY = 'ledger:data:v1';
 async function loadData(){
   try{
     const res = await window.storage.get(STORAGE_KEY, false);
-    if(res && res.value){ DATA = JSON.parse(res.value); return; }
+    if(res && res.value){
+      DATA = JSON.parse(res.value);
+      if(!DATA.paymentPlan) DATA.paymentPlan = buildDefaultPaymentPlan();
+      return;
+    }
   }catch(e){ /* not found or storage unavailable */ }
   DATA = buildDefaultData();
+  DATA.paymentPlan = buildDefaultPaymentPlan();
   await saveData(true);
 }
 let saveTimer=null;
@@ -558,6 +602,24 @@ function expenseTotalsAllGroups(y){
   });
   return out;
 }
+function expenseTotalsCounted(y){
+  const out = n12().map(()=>0);
+  yearData(y).expenseGroups.forEach(g=>{
+    if(g.excludeFromTotal) return;
+    const gt = groupTotals(g);
+    gt.forEach((v,i)=> out[i]+=v);
+  });
+  return out;
+}
+function expenseTotalsExcluded(y){
+  const out = n12().map(()=>0);
+  yearData(y).expenseGroups.forEach(g=>{
+    if(!g.excludeFromTotal) return;
+    const gt = groupTotals(g);
+    gt.forEach((v,i)=> out[i]+=v);
+  });
+  return out;
+}
 function investContribTotals(y){
   const out = n12().map(()=>0);
   yearData(y).investments.forEach(inv=> inv.m.forEach((v,i)=> out[i]+=num(v)));
@@ -573,10 +635,35 @@ function findLatestMonthWithData(y){
 }
 
 /* =========================================================================
+   CASH FLOW: income minus categorized spend minus card bill payments,
+   carried month to month (and year to year unless overridden).
+   ========================================================================= */
+function getCashFlowStart(y){
+  const yd = yearData(y);
+  if(yd.cashFlowStart!==undefined && yd.cashFlowStart!==null) return yd.cashFlowStart;
+  const prevY = y-1;
+  if(DATA[prevY]) return computeCashFlow(prevY)[11].carryOut;
+  return 0;
+}
+function computeCashFlow(y){
+  const inc = incomeTotals(y), exp = expenseTotalsCounted(y), card = expenseTotalsExcluded(y);
+  let carryIn = getCashFlowStart(y);
+  const rows = [];
+  for(let i=0;i<12;i++){
+    const netFlow = inc[i] - exp[i] - card[i];
+    const carryOut = carryIn + netFlow;
+    rows.push({income:inc[i], expenses:exp[i], card:card[i], netFlow, carryIn, carryOut});
+    carryIn = carryOut;
+  }
+  return rows;
+}
+
+/* =========================================================================
    INIT / SHELL
    ========================================================================= */
 const TABS = [
   {id:'overview', label:'Overview'},
+  {id:'cashflow', label:'Cash Flow'},
   {id:'income', label:'Income'},
   {id:'expenses', label:'Expenses'},
   {id:'investments', label:'Investments'},
@@ -651,6 +738,7 @@ function renderActive(){
   updateScopeStr();
   const active = document.querySelector('.tab-btn.active').dataset.tab;
   if(active==='overview') renderOverview();
+  if(active==='cashflow') renderCashFlow();
   if(active==='income') renderIncome();
   if(active==='expenses') renderExpenses();
   if(active==='investments') renderInvestments();
@@ -675,17 +763,42 @@ const chartFont = { family:"'IBM Plex Mono', monospace", size:11 };
 /* =========================================================================
    OVERVIEW TAB
    ========================================================================= */
+function goToTab(tabId, highlightSelector){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tabId));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', p.id==='panel-'+tabId));
+  if(tabId==='expenses' && highlightSelector){
+    const m = highlightSelector.match(/data-group-id="([^"]+)"/);
+    if(m) collapsedGroups[m[1]] = false;
+  }
+  renderActive();
+  if(highlightSelector){
+    requestAnimationFrame(()=>{
+      const el = document.querySelector(highlightSelector);
+      if(el){
+        el.scrollIntoView({behavior:'smooth', block:'center'});
+        el.classList.add('flash-highlight');
+        setTimeout(()=>el.classList.remove('flash-highlight'), 1600);
+      }
+    });
+  }
+}
+
 function renderOverview(){
   const y = state.year;
   const months = monthRange();
   const isFullYear = state.month==='ALL';
-  const incT = incomeTotals(y), expT = expenseTotalsAllGroups(y);
-  const incNow = sumRange(incT, months), expNow = sumRange(expT, months);
+  const incT = incomeTotals(y), expT = expenseTotalsCounted(y), cardT = expenseTotalsExcluded(y);
+  const incNow = sumRange(incT, months), expNow = sumRange(expT, months), cardNow = sumRange(cardT, months);
   const net = incNow - expNow;
+  const hasExcluded = yearData(y).expenseGroups.some(g=>g.excludeFromTotal);
 
   const debts = yearData(y).debts;
   const debtPending = sumArr(debts.map(d=>d.pending));
   const invCurrent = sumArr(yearData(y).investments.map(i=>i.currentValue));
+  const cfRows = computeCashFlow(y);
+  const cfIdx = isFullYear ? findLatestMonthWithData(y) : Number(state.month);
+  const cashOnHand = cfRows[cfIdx].carryOut;
+  const cashPrev = cfIdx>0 ? cfRows[cfIdx-1].carryOut : null;
 
   let prevLabel='', incPrev=0, expPrev=0;
   if(!isFullYear){
@@ -704,15 +817,15 @@ function renderOverview(){
 
   const html = `
   <div class="section-title">Overview</div>
-  <p class="section-sub">${isFullYear? 'Full-year snapshot for '+y : MONTHS[Number(state.month)]+' '+y+', compared against the prior month.'}</p>
+  <p class="section-sub">${isFullYear? 'Full-year snapshot for '+y : MONTHS[Number(state.month)]+' '+y+', compared against the prior month.'} Click any card or chart segment to jump to where that figure comes from.</p>
 
-  <div class="kpi-grid">
-    <div class="kpi-card c-gold">
+  <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px,1fr));">
+    <div class="kpi-card c-gold clickable" data-goto="income">
       <div class="kpi-label">Income</div>
       <div class="kpi-value">${fmt$(incNow)}</div>
       ${deltaHtml(incNow, incPrev, 'income')}
     </div>
-    <div class="kpi-card c-rust">
+    <div class="kpi-card c-rust clickable" data-goto="expenses">
       <div class="kpi-label">Expenses</div>
       <div class="kpi-value">${fmt$(expNow)}</div>
       ${deltaHtml(expNow, expPrev, 'expenses', true)}
@@ -722,17 +835,24 @@ function renderOverview(){
       <div class="kpi-value">${fmt$(net)}</div>
       ${deltaHtml(net, incPrev-expPrev, 'net')}
     </div>
-    <div class="kpi-card c-teal">
+    <div class="kpi-card c-gold clickable" data-goto="cashflow">
+      <div class="kpi-label">Cash on Hand, end of ${MONTHS[cfIdx]}</div>
+      <div class="kpi-value">${fmt$(cashOnHand)}</div>
+      ${cashPrev===null ? '<div class="kpi-delta flat">no prior month in '+y+'</div>' : `<div class="kpi-delta ${cashOnHand>=cashPrev?'up':'down'}">${cashOnHand>=cashPrev?'▲':'▼'} ${fmt$(Math.abs(cashOnHand-cashPrev))} vs ${MONTHS[cfIdx-1]}</div>`}
+    </div>
+    <div class="kpi-card c-teal clickable" data-goto="investments">
       <div class="kpi-label">Invested (current value)</div>
       <div class="kpi-value">${fmt$(invCurrent)}</div>
       <div class="kpi-delta flat">across ${yearData(y).investments.length} holdings</div>
     </div>
-    <div class="kpi-card c-danger">
+    <div class="kpi-card c-danger clickable" data-goto="debt">
       <div class="kpi-label">Debt Remaining</div>
       <div class="kpi-value">${fmt$(debtPending)}</div>
       <div class="kpi-delta flat">across ${debts.filter(d=>d.pending>0).length} open loans</div>
     </div>
   </div>
+
+  ${hasExcluded ? `<div class="notice">Card payments of <b>${fmt$(cardNow)}</b> for this period aren't added into Expenses above — they're excluded by default since those purchases are already counted under their own category (groceries, dining, etc.) when you swipe. They still reduce your real cash balance though — see the <b>Cash Flow</b> tab.</div>` : ''}
 
   <div class="grid-2">
     <div class="card">
@@ -742,15 +862,20 @@ function renderOverview(){
     <div class="card">
       <div class="card-head"><h3>Where ${isFullYear?'the year':MONTHS[Number(state.month)]} went</h3></div>
       <div class="chart-box tall"><canvas id="chartBreakdown"></canvas></div>
+      <div class="section-sub" style="margin-top:8px; margin-bottom:0;">Click a slice to open that category.</div>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>d.total)))} originally owed</span></div>
+    <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>d.total)))} originally owed · click a bar to open that loan</span></div>
     <div class="chart-box short"><canvas id="chartDebtMini"></canvas></div>
   </div>
   `;
   document.getElementById('panel-overview').innerHTML = html;
+
+  document.querySelectorAll('#panel-overview [data-goto]').forEach(el=>{
+    el.addEventListener('click', ()=> goToTab(el.dataset.goto));
+  });
 
   destroyChart('trend'); destroyChart('breakdown'); destroyChart('debtmini');
 
@@ -762,17 +887,21 @@ function renderOverview(){
     ]},
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{legend:{labels:{boxWidth:10, boxHeight:10}}},
+      onClick:(evt,els)=>{ if(els.length) goToTab(els[0].datasetIndex===0?'income':'expenses'); },
+      onHover:(evt,els)=>{ evt.native.target.style.cursor = els.length?'pointer':'default'; },
       scales:{ y:{ grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
   });
 
-  // breakdown: expense groups for selected scope (or income vs group split for full year)
-  const groups = yearData(y).expenseGroups;
+  // breakdown: expense groups counted toward totals, for the selected scope
+  const groups = yearData(y).expenseGroups.filter(g=>!g.excludeFromTotal);
   const labels = groups.map(g=>g.name);
   const vals = groups.map(g=> sumRange(groupTotals(g), months) );
   charts.breakdown = safeChart(document.getElementById('chartBreakdown'), {
     type:'doughnut',
     data:{ labels, datasets:[{ data:vals, backgroundColor:labels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2 }] },
     options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
+      onClick:(evt,els)=>{ if(els.length){ const g=groups[els[0].index]; goToTab('expenses', `[data-group-id="${g.id}"]`); } },
+      onHover:(evt,els)=>{ evt.native.target.style.cursor = els.length?'pointer':'default'; },
       plugins:{legend:{position:'right', labels:{boxWidth:9, boxHeight:9, padding:10, font:{size:10.5}}}} }
   });
 
@@ -784,7 +913,103 @@ function renderOverview(){
     ]},
     options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
+      onClick:(evt,els)=>{ if(els.length){ const d=debts[els[0].index]; goToTab('debt', `[data-debt-id="${d.id}"]`); } },
+      onHover:(evt,els)=>{ evt.native.target.style.cursor = els.length?'pointer':'default'; },
       scales:{ x:{ stacked:true, grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v} }, y:{stacked:true, grid:{display:false}} } }
+  });
+}
+
+/* =========================================================================
+   CASH FLOW TAB
+   ========================================================================= */
+function renderCashFlow(){
+  const y = state.year;
+  const rows = computeCashFlow(y);
+  const isFullYear = state.month==='ALL';
+  const mi = isFullYear ? findLatestMonthWithData(y) : Number(state.month);
+  const thisRow = rows[mi];
+  const prevRow = mi>0 ? rows[mi-1] : null;
+  const explicitStart = yearData(y).cashFlowStart;
+  const effectiveStart = getCashFlowStart(y);
+
+  const deltaHtml = (curr, prev)=>{
+    if(prev===null) return `<div class="kpi-delta flat">no prior month in ${y}</div>`;
+    const d = curr - prev.carryOut;
+    return `<div class="kpi-delta ${d>=0?'up':'down'}">${d>=0?'▲':'▼'} ${fmt$(Math.abs(d))} vs ${MONTHS[mi-1]}</div>`;
+  };
+
+  const tableRows = rows.map((r,i)=>`
+    <tr>
+      <td>${MONTHS[i]}</td>
+      <td>${fmt$(r.carryIn,2)}</td>
+      <td>${fmt$(r.income,2)}</td>
+      <td>${fmt$(r.expenses,2)}</td>
+      <td>${fmt$(r.card,2)}</td>
+      <td style="font-weight:600; color:${r.netFlow>=0?'var(--teal-soft)':'var(--rust-soft)'}">${r.netFlow>=0?'+':''}${fmt$(r.netFlow,2)}</td>
+      <td style="font-weight:700; color:var(--gold-soft)">${fmt$(r.carryOut,2)}</td>
+    </tr>`).join('');
+
+  const html = `
+    <div class="section-title">Cash Flow · ${y}</div>
+    <p class="section-sub">What you actually have on hand: income, minus categorized spending, minus whatever you pay toward the credit card bill that month — carried forward month over month.</p>
+
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
+      <div class="kpi-card c-gold"><div class="kpi-label">Carried in from ${mi>0?MONTHS[mi-1]:'prior year'}</div><div class="kpi-value">${fmt$(thisRow.carryIn)}</div></div>
+      <div class="kpi-card c-teal"><div class="kpi-label">${MONTHS[mi]} net flow</div><div class="kpi-value">${thisRow.netFlow>=0?'+':''}${fmt$(thisRow.netFlow)}</div></div>
+      <div class="kpi-card c-rust"><div class="kpi-label">Card bill paid this month</div><div class="kpi-value">${fmt$(thisRow.card)}</div></div>
+      <div class="kpi-card c-gold"><div class="kpi-label">Cash on hand, end of ${MONTHS[mi]}</div><div class="kpi-value">${fmt$(thisRow.carryOut)}</div>${deltaHtml(thisRow.carryOut, prevRow)}</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Starting balance</h3></div>
+      <div class="sim-controls">
+        <div class="sim-field">
+          <label>Cash on hand at start of Jan ${y}</label>
+          <input type="number" id="cfStartInput" step="25" value="${effectiveStart.toFixed(2)}">
+        </div>
+        <div class="section-sub" style="margin:0;">${explicitStart===undefined||explicitStart===null ? (DATA[y-1] ? `Auto-filled from ${y-1}'s year-end balance — edit to override.` : 'Defaults to $0 — edit if you know your real starting balance.') : 'Manually set — clear and leave blank to go back to the automatic value.'}</div>
+        <button class="btn small" id="cfResetBtn" ${explicitStart===undefined||explicitStart===null?'disabled':''}>Use automatic value</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Running cash balance</h3></div>
+      <div class="chart-box tall"><canvas id="chartCashRunning"></canvas></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Month by month</h3></div>
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr><th>Month</th><th>Carry-in</th><th>Income</th><th>Expenses</th><th>Card Paid</th><th>Net Flow</th><th>Carry-out</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+      <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Expenses here exclude any group marked "excluded from totals" (like Credit Card Spend) — those show separately in the Card Paid column so nothing is counted twice, while still hitting your actual cash balance.</div>
+    </div>
+  `;
+  document.getElementById('panel-cashflow').innerHTML = html;
+
+  document.getElementById('cfStartInput').addEventListener('change', (e)=>{
+    const v = parseFloat(e.target.value);
+    yearData(y).cashFlowStart = isNaN(v) ? null : v;
+    saveData(); renderCashFlow();
+  });
+  document.getElementById('cfResetBtn').addEventListener('click', ()=>{
+    yearData(y).cashFlowStart = null;
+    saveData(); renderCashFlow();
+  });
+
+  destroyChart('cashRunning');
+  charts.cashRunning = safeChart(document.getElementById('chartCashRunning'), {
+    type:'line',
+    data:{ labels: MONTHS, datasets:[
+      {label:'Cash on hand (end of month)', data: rows.map(r=>r.carryOut), borderColor:'#C9A961', backgroundColor:'rgba(201,169,97,0.12)', fill:true, tension:.3},
+      {label:'Net flow', data: rows.map(r=>r.netFlow), borderColor:'#6FA491', borderDash:[4,3], tension:.3, pointRadius:2}
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
+      scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
   });
 }
 
@@ -899,7 +1124,8 @@ let collapsedGroups = {};
 function renderExpenses(){
   const y = state.year;
   const groups = yearData(y).expenseGroups;
-  const grandTotals = expenseTotalsAllGroups(y);
+  const countedTotal = sumArr(expenseTotalsCounted(y));
+  const excludedTotal = sumArr(expenseTotalsExcluded(y));
 
   let groupsHtml = groups.map((g, gi)=>{
     const totals = groupTotals(g);
@@ -907,8 +1133,13 @@ function renderExpenses(){
     return `
     <div class="group-block ${collapsed?'collapsed':''}" data-group-id="${g.id}">
       <div class="group-head" data-toggle="${g.id}">
-        <h4><span class="g-caret">▾</span> ${g.name}</h4>
-        <div class="g-total">${fmt$(sumArr(totals),2)} <span class="row-del" data-delgroup="${g.id}" title="remove group" style="margin-left:10px;">✕</span></div>
+        <h4><span class="g-caret">▾</span> ${g.name} ${g.excludeFromTotal?'<span class="debt-tag" style="margin-left:8px;">excluded from totals</span>':''}</h4>
+        <div class="g-total">
+          <label style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); display:inline-flex; gap:6px; align-items:center; cursor:pointer; margin-right:14px;" onclick="event.stopPropagation()">
+            <input type="checkbox" data-excltoggle="${g.id}" ${g.excludeFromTotal?'':'checked'}> counts in totals
+          </label>
+          ${fmt$(sumArr(totals),2)} <span class="row-del" data-delgroup="${g.id}" title="remove group" style="margin-left:10px;">✕</span>
+        </div>
       </div>
       <div class="group-body">
         <div class="table-scroll">
@@ -930,7 +1161,12 @@ function renderExpenses(){
 
   const html = `
     <div class="section-title">Expenses · ${y}</div>
-    <p class="section-sub">Grouped by category. Click any figure to edit it, add new line items inside a group, or start an entirely new group below.</p>
+    <p class="section-sub">Grouped by category. Click any figure to edit it, add new line items inside a group, or start an entirely new group below. Toggle "counts in totals" off for any group that just tracks a payment or transfer (like paying down a credit card) rather than new spending — otherwise it gets counted twice.</p>
+
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">
+      <div class="kpi-card c-rust"><div class="kpi-label">Counted toward totals</div><div class="kpi-value">${fmt$(countedTotal)}</div></div>
+      <div class="kpi-card c-gold"><div class="kpi-label">Excluded (e.g. card payments)</div><div class="kpi-value">${fmt$(excludedTotal)}</div></div>
+    </div>
 
     <div class="card">
       <div class="card-head"><h3>All groups over the year</h3></div>
@@ -951,6 +1187,14 @@ function renderExpenses(){
 
   groups.forEach(g=>{
     attachEditableHandlers(document.getElementById('grpbody-'+g.id), g.categories, renderExpenses);
+  });
+  document.querySelectorAll('[data-excltoggle]').forEach(cb=>{
+    cb.addEventListener('click', (e)=>e.stopPropagation());
+    cb.addEventListener('change', ()=>{
+      const g = groups.find(x=>x.id===cb.dataset.excltoggle);
+      g.excludeFromTotal = !cb.checked;
+      saveData(); renderExpenses();
+    });
   });
   document.querySelectorAll('[data-toggle]').forEach(el=>{
     el.addEventListener('click', (e)=>{
@@ -985,7 +1229,7 @@ function renderExpenses(){
     const inp = document.getElementById('newGroupName');
     const name = inp.value.trim();
     if(!name){ inp.focus(); return; }
-    groups.push({id:uid(), name, categories:[{id:uid(), name:'General', m:n12()}]});
+    groups.push({id:uid(), name, excludeFromTotal:/credit card/i.test(name), categories:[{id:uid(), name:'General', m:n12()}]});
     saveData(); renderExpenses();
   });
 
@@ -993,7 +1237,7 @@ function renderExpenses(){
   charts.expAll = safeChart(document.getElementById('chartExpAll'), {
     type:'bar',
     data:{ labels: MONTHS, datasets: groups.map((g,i)=>({
-      label:g.name, data: groupTotals(g), backgroundColor: PALETTE[i%PALETTE.length], stack:'s'
+      label:g.name + (g.excludeFromTotal?' *':''), data: groupTotals(g), backgroundColor: PALETTE[i%PALETTE.length], stack:'s'
     })) },
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{legend:{labels:{boxWidth:10,boxHeight:10, font:{size:10}}}},
@@ -1034,8 +1278,9 @@ function renderInvestments(){
 
   const alloc = {};
   items.forEach(it=>{ alloc[it.category] = (alloc[it.category]||0) + num(it.currentValue); });
-  const allocLabels = Object.keys(alloc);
-  const allocVals = Object.values(alloc);
+  const allocSorted = Object.entries(alloc).sort((a,b)=>b[1]-a[1]);
+  const allocLabels = allocSorted.map(e=>e[0]);
+  const allocVals = allocSorted.map(e=>e[1]);
 
   const html = `
     <div class="section-title">Investments · ${y}</div>
@@ -1129,32 +1374,39 @@ function renderInvestments(){
 /* =========================================================================
    DEBT PAYOFF TAB
    ========================================================================= */
-let debtSim = { extra: 200, strategy:'avalanche' };
+function planRowTotal(plan, row){
+  return plan.columns.filter(c=>c.kind==='expense').reduce((a,c)=>a+num(row.values[c.id]),0);
+}
+function planRowIncome(plan, row){
+  return plan.columns.filter(c=>c.kind==='income').reduce((a,c)=>a+num(row.values[c.id]),0);
+}
+function planRowRemaining(plan, row){
+  return planRowIncome(plan,row) - planRowTotal(plan,row);
+}
 
-function simulatePayoff(debts, extraMonthly, strategy){
-  // clone workable balances
+function simulatePayoffWithPlan(debts, plan){
   const items = debts.filter(d=>d.pending>0).map(d=>({
     name:d.name, balance:d.pending, rate:(num(d.interest)/100)/12,
     minPay: d.emi && d.emi>0 ? Math.min(d.emi, d.pending*1.5) : Math.max(d.pending*0.03, 25)
   }));
   if(items.length===0) return {months:0, perDebt:{}, series:[{month:0,total:0}], payoffDate:new Date()};
-  const order = ()=> items.filter(x=>x.balance>0.01).sort((a,b)=> strategy==='avalanche' ? b.rate-a.rate : a.balance-b.balance);
+  const remainders = plan.rows.map(r=>Math.max(0, planRowRemaining(plan,r)));
+  const lastRemaining = remainders.length ? remainders[remainders.length-1] : 0;
+  const order = ()=> items.filter(x=>x.balance>0.01).sort((a,b)=> b.rate-a.rate);
   const perDebt = {};
   const series = [{month:0, total: items.reduce((a,b)=>a+b.balance,0)}];
   let month=0;
   const maxMonths = 600;
   while(items.some(x=>x.balance>0.01) && month<maxMonths){
+    const extra = month < remainders.length ? remainders[month] : lastRemaining;
     month++;
-    // accrue interest
     items.forEach(x=>{ if(x.balance>0.01) x.balance += x.balance*x.rate; });
-    // pay minimums
-    let pool = extraMonthly;
     items.forEach(x=>{
       if(x.balance<=0.01) return;
       const pay = Math.min(x.minPay, x.balance);
       x.balance -= pay;
     });
-    // apply extra to priority order
+    let pool = extra;
     for(const x of order()){
       if(pool<=0) break;
       if(x.balance<=0.01) continue;
@@ -1168,7 +1420,7 @@ function simulatePayoff(debts, extraMonthly, strategy){
   }
   const payoffDate = new Date();
   payoffDate.setMonth(payoffDate.getMonth()+month);
-  return {months:month, perDebt, series, payoffDate};
+  return {months:month, perDebt, series, payoffDate, remainders, lastRemaining};
 }
 
 function renderDebt(){
@@ -1177,6 +1429,7 @@ function renderDebt(){
   const totalPending = sumArr(debts.map(d=>d.pending));
   const totalOriginal = sumArr(debts.map(d=>d.total));
   const totalCleared = sumArr(debts.map(d=>d.cleared));
+  const plan = DATA.paymentPlan;
 
   const cards = debts.map(d=>{
     const pct2 = d.total>0 ? Math.min(100, (d.cleared/d.total)*100) : 100;
@@ -1200,13 +1453,33 @@ function renderDebt(){
     </div>`;
   }).join('');
 
-  const sim = simulatePayoff(debts, debtSim.extra, debtSim.strategy);
+  const sim = simulatePayoffWithPlan(debts, plan);
   const freedomText = sim.months===0 ? 'You are debt-free right now.' :
     `${sim.months} month${sim.months===1?'':'s'} from today — around <span style="color:var(--gold-soft)">${sim.payoffDate.toLocaleDateString('en-US',{month:'long', year:'numeric'})}</span>`;
 
+  const colHeaders = plan.columns.map(c=>
+    `<th>${c.name}${c.kind==='memo'?' <span style="opacity:.6;">(memo)</span>':c.kind==='income'?' <span style="opacity:.6;">(income)</span>':''} <span class="row-del" data-delcol="${c.id}" title="remove column">✕</span></th>`
+  ).join('');
+
+  const planRowsHtml = plan.rows.map(r=>{
+    const total = planRowTotal(plan,r);
+    const remaining = planRowRemaining(plan,r);
+    const cells = plan.columns.map(c=>{
+      const val = r.values[c.id];
+      const display = (val===null||val===undefined) ? '' : val;
+      return `<td class="editable ${!display?'zero':''}" contenteditable="true" data-plancell="${r.id}" data-col="${c.id}">${display===''?'–':display}</td>`;
+    }).join('');
+    return `<tr data-planrow="${r.id}">
+      <td>${r.label} <span class="row-del" data-delplanrow="${r.id}">✕</span></td>
+      ${cells}
+      <td style="font-weight:600;">${fmt$(total,2)}</td>
+      <td style="font-weight:700; color:${remaining>=0?'var(--teal-soft)':'var(--rust-soft)'}">${fmt$(remaining,2)}</td>
+    </tr>`;
+  }).join('');
+
   const html = `
     <div class="section-title">Debt Payoff Planner · ${y}</div>
-    <p class="section-sub">What's left, what it costs monthly, and when it disappears if you keep paying at this pace — or faster.</p>
+    <p class="section-sub">What's left, what it costs monthly, and when it disappears based on a real month-by-month plan.</p>
 
     <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
       <div class="kpi-card c-danger"><div class="kpi-label">Total Pending</div><div class="kpi-value">${fmt$(totalPending)}</div></div>
@@ -1224,27 +1497,30 @@ function renderDebt(){
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>Freedom calculator</h3><span class="section-sub" style="margin:0;">Minimums are paid on every loan first; extra goes to the highest-interest balance (avalanche method).</span></div>
-      <div class="sim-controls">
-        <div class="sim-field">
-          <label>Extra monthly payment</label>
-          <input type="range" id="extraSlider" min="0" max="3000" step="25" value="${debtSim.extra}">
-        </div>
-        <div class="sim-field">
-          <label>Exact amount</label>
-          <input type="number" id="extraNumber" min="0" step="25" value="${debtSim.extra}">
-        </div>
-        <div class="sim-field">
-          <label>Strategy</label>
-          <div class="pill-row">
-            <div class="pill ${debtSim.strategy==='avalanche'?'active':''}" data-strat="avalanche">Avalanche (highest rate)</div>
-            <div class="pill ${debtSim.strategy==='snowball'?'active':''}" data-strat="snowball">Snowball (smallest balance)</div>
-          </div>
-        </div>
+      <div class="card-head"><h3>Payment plan</h3><span class="section-sub" style="margin:0;">Lay out expected salary and expenses month by month. Whatever's "Remaining" each month goes toward your highest-interest debt first — after the last planned month, that same "Remaining" amount keeps repeating.</span></div>
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr><th>Month</th>${colHeaders}<th>Total</th><th>Remaining</th></tr></thead>
+          <tbody id="planBody">${planRowsHtml}</tbody>
+        </table>
       </div>
-      <div class="freedom-banner">
+      <div class="addcat-row">
+        <input type="text" id="newPlanRow" placeholder="New month, e.g. May 2027…">
+        <button class="btn small" id="addPlanRowBtn">+ Add month</button>
+      </div>
+      <div class="addcat-row">
+        <input type="text" id="newPlanCol" placeholder="New column, e.g. Investment…">
+        <select id="newPlanColKind" style="background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:7px 10px; font-family:var(--font-body); font-size:12.5px;">
+          <option value="expense">Counts against remaining</option>
+          <option value="income">Adds to remaining (income)</option>
+          <option value="memo">Memo only — not counted</option>
+        </select>
+        <button class="btn small" id="addPlanColBtn">+ Add column</button>
+      </div>
+
+      <div class="freedom-banner" style="margin-top:18px;">
         <div><div class="small">DEBT-FREE PROJECTION</div><div class="big">${freedomText}</div></div>
-        <div class="small">based on ${fmt$(totalPending)} pending, minimum payments, plus ${fmt$(debtSim.extra)}/mo extra</div>
+        <div class="small">based on ${fmt$(totalPending)} pending today, minimum payments, plus each month's "Remaining" above</div>
       </div>
       <div class="chart-box"><canvas id="chartPayoff"></canvas></div>
     </div>
@@ -1270,12 +1546,52 @@ function renderDebt(){
     saveData(); renderDebt();
   });
 
-  const slider = document.getElementById('extraSlider');
-  const numInp = document.getElementById('extraNumber');
-  slider.addEventListener('input', ()=>{ debtSim.extra = Number(slider.value); numInp.value = slider.value; renderDebt(); });
-  numInp.addEventListener('change', ()=>{ debtSim.extra = Math.max(0, Number(numInp.value)||0); renderDebt(); });
-  document.querySelectorAll('[data-strat]').forEach(p=>{
-    p.addEventListener('click', ()=>{ debtSim.strategy = p.dataset.strat; renderDebt(); });
+  document.querySelectorAll('[data-plancell]').forEach(td=>{
+    td.addEventListener('focus', ()=>{ if(td.textContent==='–') td.textContent=''; });
+    td.addEventListener('blur', ()=>{
+      const rowId = td.dataset.plancell, colId = td.dataset.col;
+      const row = plan.rows.find(r=>r.id===rowId);
+      const raw = td.textContent.trim().replace(/[$,]/g,'');
+      let v = raw===''? null : parseFloat(raw);
+      if(isNaN(v)) v = null;
+      row.values[colId] = v;
+      td.textContent = v===null ? '–' : v;
+      td.classList.toggle('zero', !v);
+      saveData(); renderDebt();
+    });
+    td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
+  });
+  document.querySelectorAll('[data-delplanrow]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const idx = plan.rows.findIndex(r=>r.id===el.dataset.delplanrow);
+      if(idx>-1 && confirm('Remove this month from the plan?')){ plan.rows.splice(idx,1); saveData(); renderDebt(); }
+    });
+  });
+  document.querySelectorAll('[data-delcol]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const idx = plan.columns.findIndex(c=>c.id===el.dataset.delcol);
+      if(idx>-1 && confirm('Remove the "'+plan.columns[idx].name+'" column?')){
+        const removedId = plan.columns[idx].id;
+        plan.columns.splice(idx,1);
+        plan.rows.forEach(r=>{ delete r.values[removedId]; });
+        saveData(); renderDebt();
+      }
+    });
+  });
+  document.getElementById('addPlanRowBtn').addEventListener('click', ()=>{
+    const inp = document.getElementById('newPlanRow');
+    const label = inp.value.trim();
+    if(!label){ inp.focus(); return; }
+    plan.rows.push({id:uid(), label, values:{}});
+    saveData(); renderDebt();
+  });
+  document.getElementById('addPlanColBtn').addEventListener('click', ()=>{
+    const inp = document.getElementById('newPlanCol');
+    const name = inp.value.trim();
+    if(!name){ inp.focus(); return; }
+    const kind = document.getElementById('newPlanColKind').value;
+    plan.columns.push({id:uid(), name, kind});
+    saveData(); renderDebt();
   });
 
   destroyChart('payoff');
@@ -1353,7 +1669,7 @@ function parseYearSheet(rows){
         i++;
       }
       if(isIncome){ income.push(...cats); }
-      else if(!isInvest && !isLoan){ expenseGroups.push({id:uid(), name:groupName, categories:cats}); }
+      else if(!isInvest && !isLoan){ expenseGroups.push({id:uid(), name:groupName, excludeFromTotal:/credit card/i.test(groupName), categories:cats}); }
     } else {
       i++;
     }
@@ -1461,6 +1777,7 @@ function renderDataTab(){
   const xlsxOk = await loadFirstWorking(XLSX_SOURCES, ()=>typeof XLSX!=='undefined');
 
   await loadData();
+  panelsEl.innerHTML = '';
   initShell();
   renderActive();
 
