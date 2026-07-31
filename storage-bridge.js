@@ -1,7 +1,7 @@
 /* storage-bridge.js — Supabase backend for The Ledger */
 (function(){
   // ==================== REPLACE THESE TWO LINES ====================
-  const SUPABASE_URL = 'https://dkwdzvwaoxekicycednh.supabase.co/rest/v1/'; // ← your URL
+  const SUPABASE_URL = 'https://dkwdzvwaoxekicycednh.supabase.co'; // ← your URL
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRrd2R6dndhb3hla2ljeWNlZG5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1MDUyMTYsImV4cCI6MjEwMTA4MTIxNn0.GM5__BLAfksdQhZ-udTeAsXZwSpvzXfd8JHPB9_B-Hc';        // ← your anon key
   // =================================================================
 
