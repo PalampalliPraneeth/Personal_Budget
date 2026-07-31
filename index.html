@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Ledger — Personal Budget 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="masthead">
+    <div>
+      <div class="brand-eyebrow">Personal Finance · Ledger</div>
+      <h1 class="brand-title">The Ledger <em>2026</em></h1>
+      <div class="today-line">Today is <b id="todayStr">—</b> · showing <b id="scopeStr">—</b></div>
+    </div>
+    <div class="controls">
+      <div class="selectbox">
+        <select id="yearSelect"></select>
+      </div>
+      <div class="selectbox">
+        <select id="monthSelect"></select>
+      </div>
+      <button class="btn" id="headerSaveBtn" title="Save all changes now">Save</button>
+      <button class="btn" id="exportBtn" title="Download your current data as JSON">Export data</button>
+      <button class="btn ghost" id="lockBtn" title="Lock the ledger">🔒</button>
+    </div>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+
+  <div id="panels"></div>
+
+  <div class="footer-note">Every figure here lives in your browser's private storage for this ledger — edit a cell, add a category, or drop in a new spreadsheet any time.</div>
+</div>
+
+<div class="save-bar" id="saveBar">
+  <span class="save-bar-msg">You have unsaved changes.</span>
+  <button class="btn primary small" id="saveBarSaveBtn">Save now</button>
+  <button class="btn small danger-outline" id="saveBarDiscardBtn">Discard</button>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="cell-tooltip" id="cellTooltip"></div>
+<script src="core-data.js"></script>
+<script src="core-shell.js"></script>
+<script src="tab-overview.js"></script>
+<script src="tab-cashflow.js"></script>
+<script src="shared-editable.js"></script>
+<script src="tab-income.js"></script>
+<script src="tab-expenses.js"></script>
+<script src="tab-investments.js"></script>
+<script src="tab-debt.js"></script>
+<script src="tab-data.js"></script>
+<script src="auth.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>
