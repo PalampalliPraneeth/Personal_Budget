@@ -4,30 +4,32 @@
   const SUPABASE_URL = 'https://dkwdzvwaoxekicycednh.supabase.co'; // ← your URL
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRrd2R6dndhb3hla2ljeWNlZG5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1MDUyMTYsImV4cCI6MjEwMTA4MTIxNn0.GM5__BLAfksdQhZ-udTeAsXZwSpvzXfd8JHPB9_B-Hc';        // ← your anon key
   // =================================================================
+  
+  const LEDGER_ID = 'the-ledger-main-7663';
+  // Safety: strip /rest/v1 if accidentally pasted
+  let cleanUrl = SUPABASE_URL.trim().replace(/\/+$/, '');
+  if (cleanUrl.endsWith('/rest/v1')) {
+    cleanUrl = cleanUrl.slice(0, -'/rest/v1'.length).replace(/\/+$/, '');
+  }
 
   let sb = null;
   let useSupabase = false;
 
-  // Only try Supabase if you actually pasted real credentials
-  const looksReal = SUPABASE_URL.length > 20 
+  const looksReal = cleanUrl.length > 20 
     && SUPABASE_ANON_KEY.length > 20 
     && !SUPABASE_ANON_KEY.includes('...');
 
   if (looksReal && typeof supabase !== 'undefined') {
     try {
-      sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      sb = supabase.createClient(cleanUrl, SUPABASE_ANON_KEY);
       useSupabase = true;
     } catch(e) { console.error('Supabase init failed:', e); }
   }
 
-  // Persistent anonymous user id for this browser
-  let userId = localStorage.getItem('ledger:supabase:user');
-  if (!userId) {
-    userId = 'u_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
-    localStorage.setItem('ledger:supabase:user', userId);
-  }
+  // Use the SAME user ID everywhere so data syncs across devices
+  let userId = LEDGER_ID;
+  localStorage.setItem('ledger:supabase:user', userId);
 
-  // Supabase backend
   const supaStorage = {
     async get(key, isShared){
       if (!sb) return null;
@@ -77,7 +79,6 @@
     }
   };
 
-  // localStorage fallback (works immediately if Supabase isn't configured yet)
   const localStorageBackend = {
     async get(key, isShared){
       try{ const raw = localStorage.getItem(key); return raw !== null ? { value: raw } : null; }
@@ -94,5 +95,5 @@
   };
 
   window.storage = useSupabase ? supaStorage : localStorageBackend;
-  console.log('[Ledger Storage]', useSupabase ? 'Supabase cloud' : 'localStorage fallback (paste Supabase credentials to enable cloud sync)');
+  console.log('[Ledger Storage]', useSupabase ? 'Supabase cloud (' + cleanUrl + ')' : 'localStorage fallback');
 })();
