@@ -90,9 +90,15 @@ function renderExpenses(){
       ${isMonthScope ? `<button class="btn small" id="expenseViewToggle">${showFullYear && expenseFullYearView ? '◀ Show only '+MONTHS[Number(state.month)] : 'Show full year →'}</button>` : `<span class="section-sub" style="margin:0;">Showing the full year — pick a specific month above to narrow the tables.</span>`}
     </div>
 
-    <div class="card">
-      <div class="card-head"><h3>All groups over the year</h3></div>
-      <div class="chart-box tall"><canvas id="chartExpAll"></canvas></div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><h3>All groups over the year</h3></div>
+        <div class="chart-box tall"><canvas id="chartExpAll"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Where money went (${scopeLabel})</h3></div>
+        <div class="chart-box tall"><canvas id="chartExpPie"></canvas></div>
+      </div>
     </div>
 
     ${groupsHtml}
