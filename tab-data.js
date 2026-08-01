@@ -72,4 +72,109 @@ function parseYearSheet(rows){
 function renderDataTab(){
   const html = `
     <div class="section-title">Data & Import</div>
-    <p class="section-sub">
+    <p class="section-sub">Upload a new spreadsheet to refresh a year's numbers, export what's here, or reset back to empty.</p>
+
+    <div class="card">
+      <div class="card-head"><h3>Import a spreadsheet</h3></div>
+      <div class="notice">Works best with a workbook shaped like your original tracker: a sheet named for the year (e.g. <b>2026</b>), with group headers like <b>INCOME</b>, <b>HOME</b>, <b>Investment</b>, or <b>Loan Payments</b> followed by <b>JAN…DEC</b> columns, each ending in a <b>Total</b> row. Re-uploading it any time refreshes this ledger — including brand-new categories you've added in Excel.</div>
+      <div class="dropzone" id="dropzone">
+        <div>📄 Drop an .xlsx file here, or click to browse</div>
+        <div style="font-size:11px; margin-top:6px; color:var(--text-faint);">Data is parsed entirely in your browser — nothing is uploaded anywhere.</div>
+        <input type="file" id="fileInput" accept=".xlsx,.xls">
+      </div>
+      <div id="importStatus" style="margin-top:12px; font-family:var(--font-mono); font-size:12px; color:var(--text-dim);"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Housekeeping</h3></div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn" id="exportBtn2">Export current data (.json)</button>
+        <button class="btn danger-outline" id="resetBtn">Reset to empty</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Activity — last 15 days</h3><span class="section-sub" style="margin:0;">${currentRole==='admin' ? '' : 'Sign in as admin to see full detail.'}</span></div>
+      <div class="grid-2">
+        <div>
+          <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Save history</div>
+          <div class="table-scroll" style="max-height:280px; overflow-y:auto;">
+            <table class="ledger">
+              <thead><tr><th>When</th><th>What</th></tr></thead>
+              <tbody>
+                ${changeLog.length ? changeLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.summary}</td></tr>`).join('') : '<tr><td colspan="2" style="color:var(--text-faint);">No saves recorded yet in the last 15 days.</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Login history</div>
+          <div class="table-scroll" style="max-height:280px; overflow-y:auto;">
+            <table class="ledger">
+              <thead><tr><th>When</th><th>Access</th><th>Location</th></tr></thead>
+              <tbody>
+                ${accessLog.length ? accessLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.role==='admin'?'Admin':'Read-only'}</td><td style="font-family:var(--font-mono); font-size:11px;">${e.locationText}</td></tr>`).join('') : '<tr><td colspan="3" style="color:var(--text-faint);">No logins recorded yet in the last 15 days.</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Location is only ever your browser's approximate coordinates (if you allowed it) — nothing is sent anywhere outside this app's own storage.</div>
+    </div>
+  `;
+  document.getElementById('panel-data').innerHTML = html;
+
+  const dz = document.getElementById('dropzone');
+  const fi = document.getElementById('fileInput');
+  dz.addEventListener('click', ()=>fi.click());
+  ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault(); dz.classList.add('drag');}));
+  ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault(); dz.classList.remove('drag');}));
+  dz.addEventListener('drop', (e)=>{ const f=e.dataTransfer.files[0]; if(f) handleFile(f); });
+  fi.addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) handleFile(f); });
+
+  document.getElementById('exportBtn2').addEventListener('click', ()=>document.getElementById('exportBtn').click());
+  document.getElementById('resetBtn').addEventListener('click', async ()=>{
+    if(confirm('This wipes everything and resets to empty. Continue?')){
+      DATA = buildDefaultData(); DATA.paymentPlan = buildDefaultPaymentPlan(); await persistData(true); showToast('Reset to empty'); refreshMonthOptions(); renderActive();
+    }
+  });
+
+  function handleFile(file){
+    const status = document.getElementById('importStatus');
+    status.textContent = 'Reading '+file.name+'…';
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      try{
+        const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+        let importedAny = false;
+        [2026,2025].forEach(yr=>{
+          const sheetName = wb.SheetNames.find(n=> n.trim()===String(yr));
+          if(!sheetName) return;
+          const ws = wb.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+          const parsed = parseYearSheet(rows);
+          if(parsed.income.length || parsed.expenseGroups.length || parsed.investments.length || parsed.debts.length){
+            DATA[yr] = parsed;
+            importedAny = true;
+          }
+        });
+        if(importedAny){
+          persistData(true);
+          status.innerHTML = '<span style="color:var(--good)">✓ Import complete.</span> Your Overview, Income, Expenses, Investments and Debt tabs now reflect the new file.';
+          showToast('Spreadsheet imported');
+          refreshMonthOptions();
+          renderActive();
+        } else {
+          status.innerHTML = '<span style="color:var(--danger)">No matching "2025"/"2026" sheet with the expected layout was found.</span> The sheet names in your file were: '+wb.SheetNames.join(', ');
+        }
+      }catch(err){
+        status.innerHTML = '<span style="color:var(--danger)">Could not read that file: '+err.message+'</span>';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+/* =========================================================================
+   BOOT
+   ========================================================================= */
