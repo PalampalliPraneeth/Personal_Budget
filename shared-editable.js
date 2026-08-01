@@ -40,13 +40,13 @@ function makeEditableRow(item, monthsToShow){
   </tr>`;
 }
 
-function attachEditableHandlers(container, items, onChange){
+function attachEditableHandlers(container, items, onChange, tabName){
+  tabName = tabName || 'data';
   container.querySelectorAll('td.editable[data-field="m"]').forEach(td=>{
     td.addEventListener('focus', ()=>{
       const item = items.find(x=>x.id===td.dataset.id);
       const idx = Number(td.dataset.idx);
       td.dataset.origRaw = td.textContent;
-      // populate with the raw expression (if any) so you can just append "+40" instead of retyping the total
       const raw = item.raw && item.raw[idx];
       td.textContent = raw!=null ? raw : (item.m[idx]!=null ? item.m[idx] : '');
     });
@@ -57,18 +57,18 @@ function attachEditableHandlers(container, items, onChange){
       const prevDisplay = item.m[idx]!=null ? String(item.m[idx]) : '';
       const prevRaw = (item.raw && item.raw[idx]) || prevDisplay;
       
-      // If user starts with + or -, merge with previous raw expression (even if cell was cleared)
       if((entered.startsWith('+') || entered.startsWith('-')) && prevRaw && prevRaw !== entered){
         entered = prevRaw + entered;
       }
       
-      if(entered === prevRaw){ td.textContent = item.m[idx]==null ? '–' : item.m[idx]; return; } // untouched
+      if(entered === prevRaw){ td.textContent = item.m[idx]==null ? '–' : item.m[idx]; return; }
       if(!item.raw) item.raw = n12();
       if(entered===''){
         item.m[idx] = null; item.raw[idx] = null;
         td.textContent = '–'; td.classList.add('zero');
         td.removeAttribute('data-tip'); td.classList.remove('has-tip');
-        markDirty(); onChange && onChange();
+        markDirty(tabName, {tab: tabName, action: 'edit', target: item.name, field: MONTHS[idx], oldVal: prevDisplay || 'empty', newVal: 'empty'});
+        onChange && onChange();
         return;
       }
       const v = evalExpr(entered);
@@ -80,7 +80,8 @@ function attachEditableHandlers(container, items, onChange){
       const tip = formatTip(item.raw[idx]);
       if(tip){ td.dataset.tip = tip; td.classList.add('has-tip'); }
       else { td.removeAttribute('data-tip'); td.classList.remove('has-tip'); }
-      markDirty(); onChange && onChange();
+      markDirty(tabName, {tab: tabName, action: 'edit', target: item.name, field: MONTHS[idx], oldVal: prevDisplay || 'empty', newVal: v});
+      onChange && onChange();
     });
     td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
   });
@@ -92,7 +93,8 @@ function attachEditableHandlers(container, items, onChange){
       const val = td.textContent.trim();
       if(item.notes===val) return;
       item.notes = val;
-      markDirty(); onChange && onChange();
+      markDirty(tabName, {tab: tabName, action: 'edit', target: item.name, field: 'notes', oldVal: td.dataset.origRaw, newVal: val});
+      onChange && onChange();
     });
     td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
   });
@@ -101,7 +103,10 @@ function attachEditableHandlers(container, items, onChange){
       const id = el.dataset.del;
       const idx = items.findIndex(x=>x.id===id);
       if(idx>-1 && confirm('Remove "'+items[idx].name+'"?')){
-        items.splice(idx,1); markDirty(); onChange && onChange();
+        const name = items[idx].name;
+        items.splice(idx,1);
+        markDirty(tabName, {tab: tabName, action: 'delete', target: name});
+        onChange && onChange();
       }
     });
   });

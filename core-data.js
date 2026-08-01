@@ -86,11 +86,21 @@ async function loadData(){
 let isDirty = false;
 let lastSavedSnapshot = null;
 let dirtyTabs = new Set();
+let pendingChanges = [];
 let storageMode = 'unknown'; // 'connected' | 'unavailable' (API missing entirely) | 'failing' (API present but calls erroring)
 
-function markDirty(tabId){
+function markDirty(tabId, changeDetail){
   isDirty = true;
   if(tabId) dirtyTabs.add(tabId);
+  if(changeDetail){
+    const last = pendingChanges[pendingChanges.length-1];
+    if(!last || last.target !== changeDetail.target || last.tab !== changeDetail.tab || last.field !== changeDetail.field){
+      pendingChanges.push(changeDetail);
+    } else {
+      last.newVal = changeDetail.newVal;
+      last.detail = changeDetail.detail || `${last.oldVal} → ${changeDetail.newVal}`;
+    }
+  }
   updateSaveUI();
 }
 
@@ -123,7 +133,28 @@ async function persistData(silent, attempt){
     dirtyTabs.clear();
     storageMode = 'connected';
     updateSaveUI();
-    logChange('Saved changes' + (silent ? ' (auto)' : ''));
+    let summary = 'Saved changes';
+    let detailsToSave = [];
+    if(pendingChanges.length > 0){
+      detailsToSave = pendingChanges.slice();
+      const byTab = {};
+      pendingChanges.forEach(c => {
+        if(!byTab[c.tab]) byTab[c.tab] = {edit:0, add:0, delete:0, items:new Set()};
+        byTab[c.tab][c.action] = (byTab[c.tab][c.action] || 0) + 1;
+        byTab[c.tab].items.add(c.target);
+      });
+      const parts = Object.entries(byTab).map(([tab, info]) => {
+        const pieces = [];
+        if(info.edit) pieces.push(`${info.edit} edit${info.edit>1?'s':''}`);
+        if(info.add) pieces.push(`${info.add} added`);
+        if(info.delete) pieces.push(`${info.delete} deleted`);
+        const itemList = Array.from(info.items).slice(0,2).join(', ') + (info.items.size>2 ? ` +${info.items.size-2} more` : '');
+        return `${tab.charAt(0).toUpperCase()+tab.slice(1)}: ${pieces.join(', ')} (${itemList})`;
+      });
+      summary = parts.join(' | ');
+      pendingChanges = [];
+    }
+    logChange(summary + (silent ? ' (auto)' : ''), detailsToSave);
     if(!silent) showToast('Saved');
   }catch(e){
     if(attempt < 3){
@@ -206,20 +237,20 @@ async function loadLogs(){
   changeLog = pruneOld(changeLog);
   accessLog = pruneOld(accessLog);
 }
-async function logChange(summary){
-  changeLog.unshift({ts:Date.now(), summary});
+async function logChange(summary, details){
+  changeLog.unshift({ts:Date.now(), summary, details: details || []});
   changeLog = pruneOld(changeLog).slice(0,200);
   try{ await window.storage.set(CHANGELOG_KEY, JSON.stringify(changeLog), false); }catch(e){}
 }
 async function logAccess(role){
   let locationText = 'location unavailable';
-  try{
-    const pos = await new Promise((res,rej)=>{
-      if(!navigator.geolocation) return rej();
-      navigator.geolocation.getCurrentPosition(res, rej, {timeout:2500});
-    });
-    locationText = pos.coords.latitude.toFixed(2)+', '+pos.coords.longitude.toFixed(2);
-  }catch(e){ /* denied, unavailable, or timed out — logged without location */ }
+  // try{
+  //   const pos = await new Promise((res,rej)=>{
+  //     if(!navigator.geolocation) return rej();
+  //     navigator.geolocation.getCurrentPosition(res, rej, {timeout:2500});
+  //   });
+  //   locationText = pos.coords.latitude.toFixed(2)+', '+pos.coords.longitude.toFixed(2);
+  // }catch(e){ /* denied, unavailable, or timed out — logged without location */ }
   accessLog.unshift({ts:Date.now(), role, locationText});
   accessLog = pruneOld(accessLog).slice(0,200);
   try{ await window.storage.set(ACCESSLOG_KEY, JSON.stringify(accessLog), false); }catch(e){}

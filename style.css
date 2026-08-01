@@ -295,24 +295,24 @@ td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decora
 /* ---------- Activity dropdown (notification bell) ---------- */
 .activity-dropdown{
   position:fixed;
-  top:72px;
-  right:24px;
-  width:480px;
-  max-height:70vh;
+  top:68px;
+  right:20px;
+  width:520px;
+  max-height:75vh;
   background:var(--bg-card);
   border:1px solid var(--line);
   border-radius:var(--radius);
-  padding:18px;
+  padding:20px;
   z-index:100;
   overflow-y:auto;
-  box-shadow:0 10px 40px rgba(0,0,0,0.45);
-  animation:fadein .18s ease;
+  box-shadow:0 16px 48px rgba(0,0,0,0.55);
+  display:none;
 }
 .activity-dropdown::before{
   content:"";
   position:absolute;
   top:-6px;
-  right:56px;
+  right:58px;
   width:12px;
   height:12px;
   background:var(--bg-card);
@@ -321,23 +321,23 @@ td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decora
   transform:rotate(45deg);
 }
 .activity-dropdown h4{
-  margin:0 0 14px;
+  margin:0;
   font-family:var(--font-display);
-  font-size:16px;
+  font-size:17px;
   color:var(--gold-soft);
-}
-.activity-dropdown .grid-2{
-  grid-template-columns:1fr 1fr;
-  gap:16px;
 }
 @media(max-width:600px){
   .activity-dropdown{
-    right:12px;
-    left:12px;
+    right:10px;
+    left:10px;
     width:auto;
-    top:68px;
+    top:64px;
+    padding:14px;
   }
-  .activity-dropdown .grid-2{
-    grid-template-columns:1fr;
+  .activity-dropdown::before{
+    right:48px;
+  }
+  .activity-dropdown > div[style*="grid-template-columns"]{
+    grid-template-columns:1fr !important;
   }
 }

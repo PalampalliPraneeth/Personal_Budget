@@ -19,36 +19,51 @@ function guardAndSwitch(doSwitch){
   doSwitch();
 }
 
-function renderActivityDropdown(){
+async function renderActivityDropdown(){
   const container = document.getElementById('activityDropdownContent');
   if(!container) return;
+  await loadLogs();
+
   const html = `
-    <h4>Activity — last 15 days</h4>
-    <div class="grid-2" style="grid-template-columns:1fr 1fr; gap:16px;">
-      <div>
-        <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Save history</div>
-        <div class="table-scroll" style="max-height:220px; overflow-y:auto;">
-          <table class="ledger">
-            <thead><tr><th>When</th><th>What</th></tr></thead>
-            <tbody>
-              ${changeLog.length ? changeLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.summary}</td></tr>`).join('') : '<tr><td colspan="2" style="color:var(--text-faint);">No saves recorded yet.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div>
-        <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Login history</div>
-        <div class="table-scroll" style="max-height:220px; overflow-y:auto;">
-          <table class="ledger">
-            <thead><tr><th>When</th><th>Access</th><th>Location</th></tr></thead>
-            <tbody>
-              ${accessLog.length ? accessLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.role==='admin'?'Admin':'Read-only'}</td><td style="font-family:var(--font-mono); font-size:11px;">${e.locationText}</td></tr>`).join('') : '<tr><td colspan="3" style="color:var(--text-faint);">No logins recorded yet.</td></tr>'}
-            </tbody>
-          </table>
-        </div>
-      </div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h4 style="margin:0;">Activity — last 15 days</h4>
+      <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">ID: ${localStorage.getItem('ledger:supabase:user')?.slice(0,16)||'unknown'}…</span>
     </div>
-    <div class="section-sub" style="margin-top:10px; margin-bottom:0; font-size:11px;">Location is only ever your browser's approximate coordinates — nothing is sent outside this app.</div>
+
+    <div style="max-height:60vh; overflow-y:auto;">
+      ${changeLog.length ? changeLog.map((e, i) => `
+        <div style="padding:10px 0; border-bottom:1px solid var(--line-soft); ${i===0?'border-top:1px solid var(--line-soft);':''}">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+            <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--gold-soft); font-weight:600; line-height:1.4;">${e.summary}</div>
+            <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-dim); white-space:nowrap; flex-shrink:0;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
+          </div>
+          ${e.details && e.details.length ? `
+            <div style="margin-top:6px; padding-left:10px; border-left:2px solid var(--line);">
+              ${e.details.slice(0,5).map(d => `
+                <div style="font-size:11px; color:var(--text-dim); margin:3px 0; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                  <span style="color:var(--text); font-weight:500;">${d.target}</span>
+                  ${d.field ? `<span style="color:var(--text-faint);">(${d.field})</span>` : ''}
+                  ${d.action==='edit' && d.oldVal!==undefined ? `
+                    <span style="font-family:var(--font-mono); font-size:11px;">
+                      <span style="color:var(--text-faint); text-decoration:line-through;">${d.oldVal}</span>
+                      <span style="color:var(--gold-soft); margin:0 4px;">→</span>
+                      <span style="color:var(--good);">${d.newVal}</span>
+                    </span>
+                  ` : ''}
+                  ${d.action==='add' ? '<span style="color:var(--good); font-size:10px;">[+ added]</span>' : ''}
+                  ${d.action==='delete' ? '<span style="color:var(--danger); font-size:10px;">[✕ deleted]</span>' : ''}
+                </div>
+              `).join('')}
+              ${e.details.length > 5 ? `<div style="font-size:10px; color:var(--text-faint); margin-top:4px;">+${e.details.length-5} more changes</div>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      `).join('') : '<div style="color:var(--text-faint); padding:20px 0; text-align:center;">No activity recorded yet.</div>'}
+    </div>
+
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--line); font-size:10.5px; color:var(--text-faint); text-align:center;">
+      Location tracking is disabled.
+    </div>
   `;
   container.innerHTML = html;
 }
@@ -116,17 +131,23 @@ function initShell(){
   const dropdown = document.getElementById('activityDropdown');
   if(currentRole==='admin' && bell){
     bell.style.display = '';
-    bell.addEventListener('click', (e)=>{
+    bell.addEventListener('click', async (e)=>{
       e.stopPropagation();
       const isOpen = dropdown.style.display === 'block';
-      dropdown.style.display = isOpen ? 'none' : 'block';
-      if(!isOpen) renderActivityDropdown();
+      if(!isOpen){
+        await renderActivityDropdown(); // fresh fetch every open
+        dropdown.style.display = 'block';
+      } else {
+        dropdown.style.display = 'none';
+      }
     });
     document.addEventListener('click', (e)=>{
       if(dropdown.style.display==='block' && !dropdown.contains(e.target) && e.target!==bell){
         dropdown.style.display = 'none';
       }
     });
+  } else if(bell){
+    bell.style.display = 'none';
   }
 
   window.addEventListener('beforeunload', (e)=>{
