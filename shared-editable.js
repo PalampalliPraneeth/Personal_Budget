@@ -53,9 +53,15 @@ function attachEditableHandlers(container, items, onChange){
     td.addEventListener('blur', ()=>{
       const id = td.dataset.id, idx = Number(td.dataset.idx);
       const item = items.find(x=>x.id===id);
-      const entered = td.textContent.trim();
+      let entered = td.textContent.trim();
       const prevDisplay = item.m[idx]!=null ? String(item.m[idx]) : '';
       const prevRaw = (item.raw && item.raw[idx]) || prevDisplay;
+      
+      // If user starts with + or -, merge with previous raw expression (even if cell was cleared)
+      if((entered.startsWith('+') || entered.startsWith('-')) && prevRaw && prevRaw !== entered){
+        entered = prevRaw + entered;
+      }
+      
       if(entered === prevRaw){ td.textContent = item.m[idx]==null ? '–' : item.m[idx]; return; } // untouched
       if(!item.raw) item.raw = n12();
       if(entered===''){
