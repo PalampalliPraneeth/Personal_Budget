@@ -26,6 +26,7 @@
       </div>
       <button class="btn" id="headerSaveBtn" title="Save all changes now">Save</button>
       <button class="btn" id="exportBtn" title="Download your current data as JSON">Export data</button>
+      <button class="btn ghost" id="activityBell" title="Activity logs" style="display:none;">🔔</button>
       <button class="btn ghost" id="lockBtn" title="Lock the ledger">🔒</button>
     </div>
   </div>
@@ -41,6 +42,10 @@
   <span class="save-bar-msg">You have unsaved changes.</span>
   <button class="btn primary small" id="saveBarSaveBtn">Save now</button>
   <button class="btn small danger-outline" id="saveBarDiscardBtn">Discard</button>
+</div>
+
+<div class="activity-dropdown" id="activityDropdown" style="display:none;">
+  <div id="activityDropdownContent"></div>
 </div>
 
 <div class="toast" id="toast"></div>

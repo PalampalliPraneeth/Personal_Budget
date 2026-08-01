@@ -291,3 +291,53 @@ td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decora
 }
 .pill{font-family:var(--font-mono); font-size:11px; padding:5px 11px; border-radius:14px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
 .pill.active{border-color:var(--gold); color:var(--gold-soft); background:rgba(201,169,97,.08);}
+
+/* ---------- Activity dropdown (notification bell) ---------- */
+.activity-dropdown{
+  position:fixed;
+  top:72px;
+  right:24px;
+  width:480px;
+  max-height:70vh;
+  background:var(--bg-card);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  padding:18px;
+  z-index:100;
+  overflow-y:auto;
+  box-shadow:0 10px 40px rgba(0,0,0,0.45);
+  animation:fadein .18s ease;
+}
+.activity-dropdown::before{
+  content:"";
+  position:absolute;
+  top:-6px;
+  right:56px;
+  width:12px;
+  height:12px;
+  background:var(--bg-card);
+  border-left:1px solid var(--line);
+  border-top:1px solid var(--line);
+  transform:rotate(45deg);
+}
+.activity-dropdown h4{
+  margin:0 0 14px;
+  font-family:var(--font-display);
+  font-size:16px;
+  color:var(--gold-soft);
+}
+.activity-dropdown .grid-2{
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+}
+@media(max-width:600px){
+  .activity-dropdown{
+    right:12px;
+    left:12px;
+    width:auto;
+    top:68px;
+  }
+  .activity-dropdown .grid-2{
+    grid-template-columns:1fr;
+  }
+}

@@ -92,35 +92,6 @@ function renderDataTab(){
         <button class="btn danger-outline" id="resetBtn">Reset to empty</button>
       </div>
     </div>
-
-    <div class="card">
-      <div class="card-head"><h3>Activity — last 15 days</h3><span class="section-sub" style="margin:0;">${currentRole==='admin' ? '' : 'Sign in as admin to see full detail.'}</span></div>
-      <div class="grid-2">
-        <div>
-          <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Save history</div>
-          <div class="table-scroll" style="max-height:280px; overflow-y:auto;">
-            <table class="ledger">
-              <thead><tr><th>When</th><th>What</th></tr></thead>
-              <tbody>
-                ${changeLog.length ? changeLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.summary}</td></tr>`).join('') : '<tr><td colspan="2" style="color:var(--text-faint);">No saves recorded yet in the last 15 days.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div>
-          <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Login history</div>
-          <div class="table-scroll" style="max-height:280px; overflow-y:auto;">
-            <table class="ledger">
-              <thead><tr><th>When</th><th>Access</th><th>Location</th></tr></thead>
-              <tbody>
-                ${accessLog.length ? accessLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.role==='admin'?'Admin':'Read-only'}</td><td style="font-family:var(--font-mono); font-size:11px;">${e.locationText}</td></tr>`).join('') : '<tr><td colspan="3" style="color:var(--text-faint);">No logins recorded yet in the last 15 days.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-      <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Location is only ever your browser's approximate coordinates (if you allowed it) — nothing is sent anywhere outside this app's own storage.</div>
-    </div>
   `;
   document.getElementById('panel-data').innerHTML = html;
 

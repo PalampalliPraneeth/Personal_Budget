@@ -18,6 +18,40 @@ function guardAndSwitch(doSwitch){
   doSwitch();
 }
 
+function renderActivityDropdown(){
+  const container = document.getElementById('activityDropdownContent');
+  if(!container) return;
+  const html = `
+    <h4>Activity — last 15 days</h4>
+    <div class="grid-2" style="grid-template-columns:1fr 1fr; gap:16px;">
+      <div>
+        <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Save history</div>
+        <div class="table-scroll" style="max-height:220px; overflow-y:auto;">
+          <table class="ledger">
+            <thead><tr><th>When</th><th>What</th></tr></thead>
+            <tbody>
+              ${changeLog.length ? changeLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.summary}</td></tr>`).join('') : '<tr><td colspan="2" style="color:var(--text-faint);">No saves recorded yet.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin-bottom:8px;">Login history</div>
+        <div class="table-scroll" style="max-height:220px; overflow-y:auto;">
+          <table class="ledger">
+            <thead><tr><th>When</th><th>Access</th><th>Location</th></tr></thead>
+            <tbody>
+              ${accessLog.length ? accessLog.map(e=>`<tr><td style="font-family:var(--font-mono); font-size:11px; white-space:nowrap;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</td><td>${e.role==='admin'?'Admin':'Read-only'}</td><td style="font-family:var(--font-mono); font-size:11px;">${e.locationText}</td></tr>`).join('') : '<tr><td colspan="3" style="color:var(--text-faint);">No logins recorded yet.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="section-sub" style="margin-top:10px; margin-bottom:0; font-size:11px;">Location is only ever your browser's approximate coordinates — nothing is sent outside this app.</div>
+  `;
+  container.innerHTML = html;
+}
+
 function initShell(){
   const today = new Date();
   document.getElementById('todayStr').textContent = today.toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit'});
@@ -75,6 +109,24 @@ function initShell(){
       showPinOverlay((role)=>{ currentRole=role; logAccess(role); initShellReadonlyRefresh(); renderActive(); });
     });
   });
+
+  /* ---- Activity bell (admin only) ---- */
+  const bell = document.getElementById('activityBell');
+  const dropdown = document.getElementById('activityDropdown');
+  if(currentRole==='admin' && bell){
+    bell.style.display = '';
+    bell.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const isOpen = dropdown.style.display === 'block';
+      dropdown.style.display = isOpen ? 'none' : 'block';
+      if(!isOpen) renderActivityDropdown();
+    });
+    document.addEventListener('click', (e)=>{
+      if(dropdown.style.display==='block' && !dropdown.contains(e.target) && e.target!==bell){
+        dropdown.style.display = 'none';
+      }
+    });
+  }
 
   window.addEventListener('beforeunload', (e)=>{
     if(isDirty){ e.preventDefault(); e.returnValue=''; }
