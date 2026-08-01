@@ -20,6 +20,15 @@ function renderExpenses(){
   const netAfterCard = incNow - expWithCard;
   const scopeLabel = state.month==='ALL' ? 'full year' : MONTHS[Number(state.month)];
 
+     // Data for the pie chart (current scope only, excludes "counted out" groups)
+  const pieGroups = groups
+    .filter(g => !g.excludeFromTotal)
+    .map(g => ({ name: g.name, total: sumRange(groupTotals(g), scopeMonths) }))
+    .filter(g => g.total > 0)
+    .sort((a,b) => b.total - a.total);
+  const pieLabels = pieGroups.map(g => g.name);
+  const pieVals   = pieGroups.map(g => g.total);
+
   const lastUpdated = yearData(y).expensesLastUpdated;
 
   let groupsHtml = groups.map((g, gi)=>{
@@ -205,14 +214,11 @@ function renderExpenses(){
     markDirty(); renderExpenses();
   });
 
-  destroyChart('expAll');
-  charts.expAll = safeChart(document.getElementById('chartExpAll'), {
-    type:'bar',
-    data:{ labels: MONTHS, datasets: groups.map((g,i)=>({
-      label:g.name + (g.excludeFromTotal?' *':''), data: groupTotals(g), backgroundColor: PALETTE[i%PALETTE.length], stack:'s'
-    })) },
-    options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{legend:{labels:{boxWidth:10,boxHeight:10, font:{size:10}}}},
-      scales:{ x:{stacked:true, grid:{display:false}}, y:{stacked:true, grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}} } }
+    destroyChart('expPie');
+  charts.expPie = safeChart(document.getElementById('chartExpPie'), {
+    type:'doughnut',
+    data:{ labels:pieLabels, datasets:[{ data:pieVals, backgroundColor:pieLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
+      plugins:{legend:{position:'right', labels:{boxWidth:9, boxHeight:9, font:{size:10.5}}}} }
   });
 }
