@@ -4,6 +4,7 @@ const TABS = [
   {id:'income', label:'Income'},
   {id:'expenses', label:'Expenses'},
   {id:'investments', label:'Investments'},
+  {id:'holdings', label:'Holdings'},
   {id:'debt', label:'Debt Payoff'},
   {id:'data', label:'Data & Import'}
 ];
@@ -183,6 +184,7 @@ function renderActive(){
   if(active==='income') renderIncome();
   if(active==='expenses') renderExpenses();
   if(active==='investments') renderInvestments();
+  if(active==='holdings') renderHoldings();
   if(active==='debt') renderDebt();
   if(active==='data') renderDataTab();
   applyReadOnlyGuard();

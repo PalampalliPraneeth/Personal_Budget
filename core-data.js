@@ -65,6 +65,14 @@ async function loadData(){
     const res = await window.storage.get(STORAGE_KEY, false);
     if(res && res.value){
       DATA = JSON.parse(res.value);
+      // Migrate investments to have holdings arrays
+      Object.keys(DATA).filter(k=>/^\d+$/.test(k)).forEach(y=>{
+        if(DATA[y].investments){
+          DATA[y].investments.forEach(inv=>{
+            if(!inv.holdings) inv.holdings = [];
+          });
+        }
+      });
       if(!DATA.paymentPlan) DATA.paymentPlan = buildDefaultPaymentPlan();
       lastSavedSnapshot = JSON.stringify(DATA);
       return;
