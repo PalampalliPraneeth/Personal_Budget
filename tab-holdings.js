@@ -3,6 +3,49 @@
    ========================================================================= */
 const HOLDING_TYPES = ['stock','mf','etf','index','crypto','other'];
 
+function _isIndianPlatform(inv){
+  const n = (inv.name||'').toLowerCase();
+  const c = (inv.category||'').toLowerCase();
+  return c.includes('indian') || c.includes('angel') ||
+         n.includes('zerodha') || n.includes('groww') || 
+         n.includes('angel') || n.includes('loan') ||
+         n.includes('coin by');
+}
+
+function getPortfolioSnapshots(y){
+  return yearData(y).portfolioSnapshots || [];
+}
+function filterSnapshots(snaps, timeframe){
+  if(!snaps.length) return [];
+  const now = new Date();
+  let cutoff = new Date(0);
+  switch(timeframe){
+    case '1W': cutoff = new Date(now.getTime() - 7*24*60*60*1000); break;
+    case '1M': cutoff = new Date(now.getTime() - 30*24*60*60*1000); break;
+    case '3M': cutoff = new Date(now.getTime() - 90*24*60*60*1000); break;
+    case '6M': cutoff = new Date(now.getTime() - 180*24*60*60*1000); break;
+    case '1Y': cutoff = new Date(now.getTime() - 365*24*60*60*1000); break;
+    case 'YTD': cutoff = new Date(now.getFullYear(), 0, 1); break;
+    default: return snaps;
+  }
+  return snaps.filter(s => new Date(s.date) >= cutoff);
+}
+function recordPortfolioSnapshot(y){
+  ensureHoldingsMigration();
+  const snaps = yearData(y).portfolioSnapshots || [];
+  const today = new Date().toISOString().slice(0,10);
+  const all = aggregateAllHoldings(y);
+  const totalValue = all.reduce((a,r)=>a+r.currentValue,0);
+  const totalInvested = all.reduce((a,r)=>a+r.invested,0);
+  const holdings = {};
+  all.forEach(h => { holdings[h.symbol] = { value: h.currentValue, invested: h.invested, qty: h.qty, price: h.currentPrice }; });
+  const filtered = snaps.filter(s => s.date !== today);
+  filtered.push({date: today, totalValue, totalInvested, totalPl: totalValue-totalInvested, holdings});
+  yearData(y).portfolioSnapshots = filtered.slice(-365); // keep last year of daily snaps
+  markDirty('holdings');
+  showToast('Snapshot recorded: '+today);
+}
+
 /* ---------- FX helpers ---------- */
 function _ensureFx(){
   if(typeof fxRates !== 'undefined' && fxRates) return fxRates;
@@ -15,7 +58,7 @@ function _toUsd(val, currency){
 }
 
 /* ---------- Live price fetch (best effort) ---------- */
-async function fetchLivePrice(symbol, isInian){
+async function fetchLivePrice(symbol, isIndian){
   let yahooSym = symbol.toUpperCase().trim();
   if(isIndian && !yahooSym.endsWith('.NS') && !yahooSym.endsWith('.BO')){
     yahooSym = yahooSym + '.NS';
@@ -57,8 +100,10 @@ async function fetchLivePrice(symbol, isInian){
 /* ---------- Data migration ---------- */
 function ensureHoldingsMigration(){
   const y = state.year;
+  if(!yearData(y).portfolioSnapshots) yearData(y).portfolioSnapshots = [];
   if(!yearData(y).investments) return;
   yearData(y).investments.forEach(inv => {
+    if(!inv.currency) inv.currency = _isIndianPlatform(inv) ? 'INR' : 'USD';
     if(!inv.holdings) inv.holdings = [];
     inv.holdings.forEach(h => {
       if(!h.lots) h.lots = [];
@@ -162,11 +207,37 @@ function renderHoldings(){
   ensureHoldingsMigration();
   if(!state.holdingsView) state.holdingsView = 'ALL';
   if(state.showClosedHoldings === undefined) state.showClosedHoldings = false;
+  if(state.holdingsSort === undefined) state.holdingsSort = 'valueDesc';
+  if(state.holdingsFilter === undefined) state.holdingsFilter = '';
+
+  if(!state.holdingsTimeframe) state.holdingsTimeframe = 'ALL';
+  const snaps = filterSnapshots(getPortfolioSnapshots(y), state.holdingsTimeframe);
 
   const investments = yearData(y).investments || [];
   const allRows = aggregateAllHoldings(y);
   const isAll = state.holdingsView === 'ALL';
   const rows = isAll ? allRows : platformHoldings(y, state.holdingsView, state.showClosedHoldings);
+
+  const filterText = (state.holdingsFilter || '').toLowerCase().trim();
+  let filteredRows = filterText 
+    ? rows.filter(r => ((r.name||'')+' '+(r.symbol||'')+' '+(r.type||'')).toLowerCase().includes(filterText))
+    : rows;
+  
+  // Apply sort
+  const sortMode = state.holdingsSort || 'valueDesc';
+  filteredRows = [...filteredRows].sort((a,b) => {
+    switch(sortMode){
+      case 'nameAsc': return (a.name||'').localeCompare(b.name||'');
+      case 'nameDesc': return (b.name||'').localeCompare(a.name||'');
+      case 'investedDesc': return b.invested - a.invested;
+      case 'investedAsc': return a.invested - b.invested;
+      case 'plDesc': return b.plNet - a.plNet;
+      case 'plAsc': return a.plNet - b.plNet;
+      case 'valueAsc': return a.currentValue - b.currentValue;
+      case 'type': return (a.type||'').localeCompare(b.type||'') || b.currentValue - a.currentValue;
+      default: return b.currentValue - a.currentValue; // valueDesc
+    }
+  });
   
   const totalInvested = rows.reduce((a,r)=>a+r.invested,0);
   const totalCurrent  = rows.reduce((a,r)=>a+r.currentValue,0);
@@ -205,17 +276,17 @@ function renderHoldings(){
   const plColors    = plVals.map(v => v >= 0 ? '#7FAE79' : '#C06A46');
 
   /* ---- Table ---- */
+  /* ALL PLATFORMS: Name | Symbol | Qty | Avg | Current | Invested | Value | Unrealized | YTD | Type | Platforms */
   const thead = isAll
-    ? `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th>Platforms</th></tr>`
+    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th>Type</th><th>Platforms</th></tr>`
     : `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th>Current</th><th style="min-width:70px;">Day Chg</th><th>YTD Start</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
 
-  const tbody = rows.map(r => {
+  const tbody = filteredRows.map(r => {
     const plColor = (v) => v>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
     if(isAll){
       return `<tr>
-        <td style="font-weight:600;">${r.symbol}</td>
         <td>${r.name}</td>
-        <td><span class="debt-tag">${r.type}</span></td>
+        <td style="font-weight:600;">${r.symbol}</td>
         <td>${r.qty}</td>
         <td>${fmt$(r.avgPrice,2)}</td>
         <td>${fmt$(r.currentPrice,2)}</td>
@@ -223,6 +294,7 @@ function renderHoldings(){
         <td style="font-weight:600;color:var(--gold-soft);">${fmt$(r.currentValue,2)}</td>
         <td style="font-weight:600;color:${plColor(r.plNet)}">${r.plNet>=0?'+':''}${fmt$(r.plNet,2)} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
         <td style="color:${plColor(r.ytdPl)}">${r.ytdPl>=0?'+':''}${fmt$(r.ytdPl,2)} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
+        <td><span class="debt-tag">${r.type}</span></td>
         <td><span class="debt-tag" style="font-size:10px;">${r.platforms.join(', ')}</span></td>
       </tr>`;
     }
@@ -272,6 +344,22 @@ function renderHoldings(){
       <div class="kpi-card ${totalYtdPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">YTD P&L</div><div class="kpi-value">${totalYtdPl>=0?'+':''}${fmt$(totalYtdPl)}</div></div>
     </div>
 
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-head" style="flex-wrap:wrap; gap:10px;">
+        <h3>Portfolio history</h3>
+        <div class="pill-row" style="margin:0;">
+          ${['ALL','YTD','1Y','6M','3M','1M','1W'].map(tf=>`
+            <button class="pill ${state.holdingsTimeframe===tf?'active':''}" data-timeframe="${tf}">${tf}</button>
+          `).join('')}
+        </div>
+        <button class="btn small" id="hRecordSnapshot">📸 Record snapshot</button>
+      </div>
+      <div class="chart-box tall"><canvas id="chartPortfolioHistory"></canvas></div>
+      <div class="section-sub" style="margin-top:8px; margin-bottom:0;">
+        ${snaps.length ? 'Snapshots: ' + snaps.length + ' · Last: ' + snaps[snaps.length-1].date : 'No snapshots yet. Click 📸 to record today\'s portfolio value.'}
+      </div>
+    </div>
+
     ${pillHtml}
     ${toolbar}
 
@@ -287,10 +375,27 @@ function renderHoldings(){
     </div>
 
     <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; flex:1;">
+          <input type="text" id="hFilter" placeholder="🔍 Filter by name, symbol, or type…" value="${state.holdingsFilter||''}" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 12px;font-family:var(--font-body);font-size:12.5px;flex:1;min-width:160px;max-width:260px;">
+          <select id="hSort" style="appearance:none;-webkit-appearance:none;background:var(--bg-card);color:var(--text);border:1px solid var(--line);padding:7px 28px 7px 10px;border-radius:7px;font-family:var(--font-mono);font-size:12px;cursor:pointer;min-width:170px;">
+            <option value="valueDesc" ${sortMode==='valueDesc'?'selected':''}>Sort: Value (high→low)</option>
+            <option value="valueAsc" ${sortMode==='valueAsc'?'selected':''}>Sort: Value (low→high)</option>
+            <option value="nameAsc" ${sortMode==='nameAsc'?'selected':''}>Sort: Name A→Z</option>
+            <option value="nameDesc" ${sortMode==='nameDesc'?'selected':''}>Sort: Name Z→A</option>
+            <option value="investedDesc" ${sortMode==='investedDesc'?'selected':''}>Sort: Invested (high→low)</option>
+            <option value="investedAsc" ${sortMode==='investedAsc'?'selected':''}>Sort: Invested (low→high)</option>
+            <option value="plDesc" ${sortMode==='plDesc'?'selected':''}>Sort: P&L (high→low)</option>
+            <option value="plAsc" ${sortMode==='plAsc'?'selected':''}>Sort: P&L (low→high)</option>
+            <option value="type" ${sortMode==='type'?'selected':''}>Sort: Type</option>
+          </select>
+        </div>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);">Showing ${filteredRows.length} of ${rows.length}</span>
+      </div>
       <div class="table-scroll">
         <table class="ledger">
           <thead>${thead}</thead>
-          <tbody id="holdingsBody">${tbody}</tbody>
+            <tbody id="holdingsBody">${filteredRows.length ? tbody : '<tr><td colspan="13" style="color:var(--text-faint);text-align:center;padding:20px;">No holdings match your filter.</td></tr>'}</tbody>
         </table>
       </div>
       ${addForm}
@@ -406,6 +511,53 @@ function renderHoldings(){
         });
       }
     }
+  }
+
+    /* ---- Snapshot & timeframe ---- */
+  const snapBtn = document.getElementById('hRecordSnapshot');
+  if(snapBtn) snapBtn.addEventListener('click', ()=>{ recordPortfolioSnapshot(y); renderHoldings(); });
+  
+  document.querySelectorAll('[data-timeframe]').forEach(b => b.addEventListener('click', ()=>{
+    state.holdingsTimeframe = b.dataset.timeframe; renderHoldings();
+  }));
+
+  /* ---- Portfolio history chart ---- */
+  destroyChart('portfolioHistory');
+  if(snaps.length > 1){
+    const labels = snaps.map(s => s.date.slice(5)); // MM-DD
+    charts.portfolioHistory = safeChart(document.getElementById('chartPortfolioHistory'), {
+      type: 'line',
+      data: { 
+        labels, 
+        datasets: [
+          {label:'Portfolio value', data: snaps.map(s=>s.totalValue), borderColor:'#C9A961', backgroundColor:'rgba(201,169,97,0.08)', fill:true, tension:0.3, pointRadius:3},
+          {label:'Invested', data: snaps.map(s=>s.totalInvested), borderColor:'#6FA491', borderDash:[4,3], tension:0.3, pointRadius:0}
+        ] 
+      },
+      options: { responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+        plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
+        scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
+    });
+  } else if(document.getElementById('chartPortfolioHistory')){
+    document.getElementById('chartPortfolioHistory').parentElement.innerHTML = 
+      '<div class="section-sub" style="padding:40px 0; text-align:center;">Need at least 2 snapshots to draw a chart.<br>Click 📸 Record snapshot on different days.</div>';
+  }
+  
+    /* ---- Filter listener ---- */
+  const filterInput = document.getElementById('hFilter');
+  if(filterInput){
+    filterInput.addEventListener('input', (e)=>{
+      state.holdingsFilter = e.target.value;
+      renderHoldings();
+    });
+  }
+
+  const sortSelect = document.getElementById('hSort');
+  if(sortSelect){
+    sortSelect.addEventListener('change', (e)=>{
+      state.holdingsSort = e.target.value;
+      renderHoldings();
+    });
   }
 
   /* ---- Charts ---- */

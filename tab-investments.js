@@ -64,9 +64,17 @@ function renderInvestments(){
   const rates = fxRates || { INR: FX_FALLBACK_INR };
   const y = state.year;
 
-  /* Legacy items: auto-tag Indian Stocks as INR, everything else as USD */
+  /* Legacy items: auto-tag Indian platforms as INR */
   yearData(y).investments.forEach(it => {
-    if (!it.currency) it.currency = (it.category === 'Indian Stocks' ? 'INR' : 'USD');
+    if (!it.currency) {
+      const name = (it.name || '').toLowerCase();
+      const cat = (it.category || '').toLowerCase();
+      const isIndian = cat.includes('indian') || cat.includes('angel') ||
+                       name.includes('zerodha') || name.includes('groww') || 
+                       name.includes('angel') || name.includes('loan') ||
+                       name.includes('coin by');
+      it.currency = isIndian ? 'INR' : 'USD';
+    }
   });
 
   const items = [...yearData(y).investments].sort((a,b)=>{
