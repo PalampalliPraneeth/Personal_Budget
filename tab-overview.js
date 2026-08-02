@@ -34,6 +34,7 @@ function renderOverview(){
 
   const debts = yearData(y).debts;
   const debtPending = sumArr(debts.map(d=>debtPendingCalc(d)));
+  const netWorth = cashOnHand + invCurrent - debtPending;
   const invCurrent = sumArr(yearData(y).investments.map(i=>i.currentValue));
   const cfRows = computeCashFlow(y);
   const cfIdx = findLatestMonthWithData(y);
@@ -83,6 +84,11 @@ function renderOverview(){
       <div class="kpi-label">Debt Remaining</div>
       <div class="kpi-value">${fmt$(debtPending)}</div>
       <div class="kpi-delta flat">across ${debts.filter(d=>debtPendingCalc(d)>0).length} open loans</div>
+    </div>
+    <div class="kpi-card ${netWorth>=0?'c-gold':'c-danger'}">
+      <div class="kpi-label">Net Worth</div>
+      <div class="kpi-value">${fmt$(netWorth)}</div>
+      <div class="kpi-delta flat">cash + investments − debt</div>
     </div>
   </div>
 

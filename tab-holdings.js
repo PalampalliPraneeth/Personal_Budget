@@ -182,6 +182,12 @@ function platformHoldings(y, platformId, showClosed){
       const ytd = num(h.ytdStartPrice) || avg;
       const invested = q * avg, current = q * cur, ytdVal = q * ytd;
       const pl = current - invested, ytdPl = current - ytdVal;
+      // USD versions for KPIs and charts
+      const investedUSD = isINR ? invested / fx : invested;
+      const currentUSD  = isINR ? current / fx : current;
+      const ytdUSD      = isINR ? ytdVal / fx : ytdVal;
+      const plUSD       = isINR ? pl / fx : pl;
+      const ytdPlUSD    = isINR ? ytdPl / fx : ytdPl;
       const dayChg = h.dayChangePct !== null && h.dayChangePct !== undefined ? h.dayChangePct : null;
       const dayChgStr = dayChg !== null ? (dayChg >= 0 ? '+' : '') + dayChg.toFixed(2) + '%' : '—';
       const dayChgColor = dayChg > 0 ? 'var(--good)' : dayChg < 0 ? 'var(--danger)' : 'var(--text-dim)';
@@ -190,8 +196,10 @@ function platformHoldings(y, platformId, showClosed){
       return {
         ...h, qty: q, avgPrice: avg, currentPrice: cur, ytdStartPrice: ytd,
         invested, currentValue: current, ytdValue: ytdVal,
-        plNet: pl, plPct: invested > 0 ? pl / invested : 0,
-        ytdNet: ytdPl, ytdPct: ytdVal > 0 ? ytdPl / ytdVal : 0,
+        investedUSD, currentValueUSD: currentUSD, ytdValueUSD: ytdUSD,
+        plNet: pl, plNetUSD: plUSD, plPct: invested > 0 ? pl / invested : 0,
+        ytdNet: ytdPl, ytdNetUSD: ytdPlUSD, ytdPct: ytdVal > 0 ? ytdPl / ytdVal : 0,
+        // ... rest of display strings stay exactly the same
         dayChangePct: dayChg, dayChangeStr: dayChgStr, dayChangeColor: dayChgColor,
         dAvg: fmt(avg), dCur: fmt(cur), dYtd: fmt(ytd),
         dInv: fmt(invested), dVal: fmt(current), dPl: fmt(pl), dYtdPl: fmt(ytdPl),
@@ -239,9 +247,9 @@ function renderHoldings(){
     }
   });
   
-  const totalInvested = rows.reduce((a,r)=>a+r.invested,0);
-  const totalCurrent  = rows.reduce((a,r)=>a+r.currentValue,0);
-  const totalYtdStart = rows.reduce((a,r)=>a+(r.ytdStartValue||r.invested),0);
+  const totalInvested = rows.reduce((a,r)=>a+(r.investedUSD!==undefined?r.investedUSD:r.invested),0);
+  const totalCurrent  = rows.reduce((a,r)=>a+(r.currentValueUSD!==undefined?r.currentValueUSD:r.currentValue),0);
+  const totalYtdStart = rows.reduce((a,r)=>a+((r.ytdValueUSD!==undefined?r.ytdValueUSD:r.ytdValue)||(r.investedUSD!==undefined?r.investedUSD:r.invested)),0);
   const totalPl       = totalCurrent - totalInvested;
   const totalYtdPl    = totalCurrent - totalYtdStart;
 
@@ -268,18 +276,17 @@ function renderHoldings(){
   `;
 
   /* ---- Charts data prep ---- */
-  // Allocation pie: sorted by value (largest slice first)
-  const chartRows = rows.filter(r => r.currentValue > 0 || r.invested > 0)
-    .sort((a,b) => b.currentValue - a.currentValue)
-    .slice(0, 12);
-  const allocLabels = chartRows.map(r => r.symbol || r.name);
-  const allocVals   = chartRows.map(r => r.currentValue);
-  const allocTotal  = allocVals.reduce((a,b)=>a+b,0);
-  
-  // P&L bar chart: sorted by P&L (biggest profit first, deepest loss last)
-  const plRows = [...chartRows].sort((a,b) => b.plNet - a.plNet);
+  // Allocation doughnut: all holdings that have value
+  const allocRows = rows.filter(r => (r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue) > 0.01).slice(0, 12);
+  const allocLabels = allocRows.map(r => r.symbol || r.name);
+  const allocVals   = allocRows.map(r => r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue);
+
+  // P&L bar chart: ONLY holdings with actual gain/loss, sorted biggest winner → biggest loser
+  const plRows = rows.filter(r => Math.abs(r.plNetUSD !== undefined ? r.plNetUSD : r.plNet) > 0.01)
+                     .sort((a,b) => ((b.plNetUSD !== undefined ? b.plNetUSD : b.plNet) || 0) - ((a.plNetUSD !== undefined ? a.plNetUSD : a.plNet) || 0))
+                     .slice(0, 15);
   const plLabels = plRows.map(r => r.symbol || r.name);
-  const plVals   = plRows.map(r => r.plNet || 0);
+  const plVals   = plRows.map(r => r.plNetUSD !== undefined ? r.plNetUSD : r.plNet);
   const plColors = plVals.map(v => v >= 0 ? '#7FAE79' : '#C06A46');
 
   /* ---- Table ---- */
