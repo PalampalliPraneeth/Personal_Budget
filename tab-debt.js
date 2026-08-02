@@ -52,7 +52,12 @@ function simulatePayoffWithPlan(debts, plan){
 
 function renderDebt(){
   const y = state.year;
-  const debts = yearData(y).debts;
+  const debts = [...yearData(y).debts].sort((a,b)=>{
+    const pa = debtPendingCalc(a), pb = debtPendingCalc(b);
+    if(pa <= 0 && pb > 0) return 1;   // a paid off → push down
+    if(pb <= 0 && pa > 0) return -1;  // b paid off → push down
+    return pb - pa;                    // both active: bigger pending first
+  });
   const totalPending = sumArr(debts.map(d=>debtPendingCalc(d)));
   const totalOriginal = sumArr(debts.map(d=>d.total));
   const totalCleared = sumArr(debts.map(d=>d.cleared));

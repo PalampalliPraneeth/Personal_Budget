@@ -26,20 +26,26 @@ function renderOverview(){
   const hasPrevYear = !!DATA[prevY];
   const incT = incomeTotals(y), expT = expenseTotalsCounted(y), cardT = expenseTotalsExcluded(y);
   const incNow = sumArr(incT), expNow = sumArr(expT), cardNow = sumArr(cardT);
-  const net = incNow - expNow;
+  const net = incNow - expNow; 
   const hasExcluded = yearData(y).expenseGroups.some(g=>g.excludeFromTotal);
 
   const incPrevYear = hasPrevYear ? sumArr(incomeTotals(prevY)) : 0;
   const expPrevYear = hasPrevYear ? sumArr(expenseTotalsCounted(prevY)) : 0;
 
-  const debts = yearData(y).debts;
-  const debtPending = sumArr(debts.map(d=>debtPendingCalc(d)));
-  const netWorth = cashOnHand + invCurrent - debtPending;
-  const invCurrent = sumArr(yearData(y).investments.map(i=>i.currentValue));
   const cfRows = computeCashFlow(y);
   const cfIdx = findLatestMonthWithData(y);
   const cashOnHand = cfRows[cfIdx].carryOut;
   const cashPrevMonth = cfIdx>0 ? cfRows[cfIdx-1].carryOut : null;
+
+  const fx = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : 84.0;
+  const invCurrent = sumArr(yearData(y).investments.map(i => {
+    if (i.currency === 'INR') return num(i.currentValue) / fx;
+    return num(i.currentValue);
+  }));
+
+  const debts = yearData(y).debts;
+  const debtPending = sumArr(debts.map(d=>debtPendingCalc(d)));
+  const netWorth = cashOnHand + invCurrent - debtPending;
 
   const deltaHtml = (curr,prev,inverse)=>{
     if(!hasPrevYear) return `<div class="kpi-delta flat">no ${prevY} data to compare</div>`;
@@ -55,6 +61,13 @@ function renderOverview(){
   <p class="section-sub">Full-year snapshot for ${y}${hasPrevYear?', compared against '+prevY:''} — this tab always shows the whole year, regardless of the month selector above (that selector still drives Cash Flow, Expenses, and Debt Payoff). Click any card or chart segment to jump to where that figure comes from.</p>
 
   <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px,1fr));">
+    <!-- NET WORTH: now first -->
+    <div class="kpi-card ${netWorth>=0?'c-gold':'c-danger'}">
+      <div class="kpi-label">Net Worth</div>
+      <div class="kpi-value">${fmt$(netWorth)}</div>
+      <div class="kpi-delta flat">cash + investments − debt</div>
+    </div>
+
     <div class="kpi-card c-gold clickable" data-goto="income">
       <div class="kpi-label">Income (${y})</div>
       <div class="kpi-value">${fmt$(incNow)}</div>
@@ -65,11 +78,16 @@ function renderOverview(){
       <div class="kpi-value">${fmt$(expNow)}</div>
       ${deltaHtml(expNow, expPrevYear, true)}
     </div>
+
+    <!-- NET SAVINGS: hidden for now -->
+    <!--
     <div class="kpi-card ${net>=0?'c-teal':'c-danger'}">
       <div class="kpi-label">Net Savings (${y})</div>
       <div class="kpi-value">${fmt$(net)}</div>
       ${deltaHtml(net, incPrevYear-expPrevYear)}
     </div>
+    -->
+
     <div class="kpi-card c-gold clickable" data-goto="cashflow">
       <div class="kpi-label">Cash on Hand, end of ${MONTHS[cfIdx]}</div>
       <div class="kpi-value">${fmt$(cashOnHand)}</div>
@@ -84,11 +102,6 @@ function renderOverview(){
       <div class="kpi-label">Debt Remaining</div>
       <div class="kpi-value">${fmt$(debtPending)}</div>
       <div class="kpi-delta flat">across ${debts.filter(d=>debtPendingCalc(d)>0).length} open loans</div>
-    </div>
-    <div class="kpi-card ${netWorth>=0?'c-gold':'c-danger'}">
-      <div class="kpi-label">Net Worth</div>
-      <div class="kpi-value">${fmt$(netWorth)}</div>
-      <div class="kpi-delta flat">cash + investments − debt</div>
     </div>
   </div>
 
@@ -132,7 +145,6 @@ function renderOverview(){
       scales:{ y:{ grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
   });
 
-  // breakdown: expense groups counted toward totals, sorted largest to smallest for a stable, ordered pie
   const groupsSorted = yearData(y).expenseGroups
     .filter(g=>!g.excludeFromTotal)
     .map(g=>({g, total: sumArr(groupTotals(g))}))
@@ -148,7 +160,6 @@ function renderOverview(){
       plugins:{legend:{position:'right', labels:{boxWidth:9, boxHeight:9, padding:10, font:{size:10.5}}}} }
   });
 
-  // debt runway bars, sorted largest pending first
   const debtsSorted = debts.slice().sort((a,b)=> debtPendingCalc(b)-debtPendingCalc(a));
   charts.debtmini = safeChart(document.getElementById('chartDebtMini'), {
     type:'bar',
