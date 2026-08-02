@@ -215,10 +215,24 @@ function renderExpenses(){
   });
 
     destroyChart('expPie');
+  const pieTotal = pieVals.reduce((a,b)=>a+b,0); // ← ADD THIS LINE
+
+  destroyChart('expPie');
   charts.expPie = safeChart(document.getElementById('chartExpPie'), {
     type:'doughnut',
     data:{ labels:pieLabels, datasets:[{ data:pieVals, backgroundColor:pieLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2 }] },
     options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
-      plugins:{legend:{position:'right', labels:{boxWidth:9, boxHeight:9, font:{size:10.5}}}} }
+      plugins:{
+        legend:{position:'right', labels:{boxWidth:9, boxHeight:9, font:{size:10.5}}},
+        tooltip:{
+          callbacks:{
+            label: function(ctx){
+              const v = ctx.raw;
+              const pct = pieTotal > 0 ? ((v/pieTotal)*100).toFixed(1) : 0;
+              return ` ${ctx.label}: ${fmt$(v)} (${pct}%)`;
+            }
+          }
+        }
+      } }
   });
 }

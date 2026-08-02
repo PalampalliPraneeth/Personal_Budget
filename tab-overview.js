@@ -151,13 +151,26 @@ function renderOverview(){
     .sort((a,b)=> b.total-a.total);
   const labels = groupsSorted.map(x=>x.g.name);
   const vals = groupsSorted.map(x=>x.total);
+  const breakdownTotal = vals.reduce((a,b)=>a+b,0); // ← ADD THIS LINE
+
   charts.breakdown = safeChart(document.getElementById('chartBreakdown'), {
     type:'doughnut',
     data:{ labels, datasets:[{ data:vals, backgroundColor:labels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2 }] },
     options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
       onClick:(evt,els)=>{ if(els.length){ const g=groupsSorted[els[0].index].g; goToTab('expenses', `[data-group-id="${g.id}"]`); } },
       onHover:(evt,els)=>{ evt.native.target.style.cursor = els.length?'pointer':'default'; },
-      plugins:{legend:{position:'right', labels:{boxWidth:9, boxHeight:9, padding:10, font:{size:10.5}}}} }
+      plugins:{
+        legend:{position:'right', labels:{boxWidth:9, boxHeight:9, padding:10, font:{size:10.5}}},
+        tooltip:{
+          callbacks:{
+            label: function(ctx){
+              const v = ctx.raw;
+              const pct = breakdownTotal > 0 ? ((v/breakdownTotal)*100).toFixed(1) : 0;
+              return ` ${ctx.label}: ${fmt$(v)} (${pct}%)`;
+            }
+          }
+        }
+      } }
   });
 
   const debtsSorted = debts.slice().sort((a,b)=> debtPendingCalc(b)-debtPendingCalc(a));

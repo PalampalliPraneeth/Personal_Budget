@@ -578,6 +578,8 @@ function renderHoldings(){
   destroyChart('holdingAlloc');
   destroyChart('holdingPl');
 
+  const allocTotal = allocVals.reduce((a,b)=>a+b,0); // ← ADD THIS LINE
+
   if(allocLabels.length > 0){
     charts.holdingAlloc = safeChart(document.getElementById('chartHoldingAlloc'), {
       type: 'doughnut',
@@ -590,7 +592,7 @@ function renderHoldings(){
               label: function(context) {
                 const val = context.raw;
                 const pct = allocTotal > 0 ? ((val / allocTotal) * 100).toFixed(1) : 0;
-                return `${context.label}: ${fmt$(val)} (${pct}%)`;
+                return ` ${context.label}: ${fmt$(val)} (${pct}%)`;
               }
             }
           }
