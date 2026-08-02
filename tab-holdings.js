@@ -15,8 +15,11 @@ function _toUsd(val, currency){
 }
 
 /* ---------- Live price fetch (best effort) ---------- */
-async function fetchLivePrice(symbol, isIndian){
-  const yahooSym = isIndian ? symbol + '.NS' : symbol;
+async function fetchLivePrice(symbol, isInian){
+  let yahooSym = symbol.toUpperCase().trim();
+  if(isIndian && !yahooSym.endsWith('.NS') && !yahooSym.endsWith('.BO')){
+    yahooSym = yahooSym + '.NS';
+  }
   const target = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1d&range=1d`;
   const proxies = [
     'https://api.allorigins.win/raw?url=',
@@ -26,17 +29,29 @@ async function fetchLivePrice(symbol, isIndian){
     try{
       const res = await fetch(proxy + encodeURIComponent(target));
       const data = await res.json();
-      const price = data.chart?.result?.[0]?.meta?.regularMarketPrice;
-      if(typeof price === 'number' && price > 0) return price;
+      const meta = data.chart?.result?.[0]?.meta;
+      const price = meta?.regularMarketPrice;
+      const prevClose = meta?.previousClose || meta?.chartPreviousClose;
+      let changePct = null;
+      if(prevClose && prevClose > 0 && typeof price === 'number'){
+        changePct = ((price - prevClose) / prevClose) * 100;
+      }
+      if(typeof price === 'number' && price > 0) return {price, changePct};
     }catch(e){}
   }
   try{
     const res = await fetch(target);
     const data = await res.json();
-    const price = data.chart?.result?.[0]?.meta?.regularMarketPrice;
-    if(typeof price === 'number' && price > 0) return price;
+    const meta = data.chart?.result?.[0]?.meta;
+    const price = meta?.regularMarketPrice;
+    const prevClose = meta?.previousClose || meta?.chartPreviousClose;
+    let changePct = null;
+    if(prevClose && prevClose > 0 && typeof price === 'number'){
+      changePct = ((price - prevClose) / prevClose) * 100;
+    }
+    if(typeof price === 'number' && price > 0) return {price, changePct};
   }catch(e){}
-  throw new Error('Could not fetch live price. CORS restrictions in browsers often block free stock APIs. Enter the price manually.');
+  throw new Error('Could not fetch. Try entering the price manually.');
 }
 
 /* ---------- Data migration ---------- */
@@ -122,6 +137,9 @@ function platformHoldings(y, platformId, showClosed){
       const ytd = num(h.ytdStartPrice) || avg;
       const invested = q * avg, current = q * cur, ytdVal = q * ytd;
       const pl = current - invested, ytdPl = current - ytdVal;
+      const dayChg = h.dayChangePct !== null && h.dayChangePct !== undefined ? h.dayChangePct : null;
+      const dayChgStr = dayChg !== null ? (dayChg >= 0 ? '+' : '') + dayChg.toFixed(2) + '%' : '—';
+      const dayChgColor = dayChg > 0 ? 'var(--good)' : dayChg < 0 ? 'var(--danger)' : 'var(--text-dim)';
       const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
       const tip = (v) => isINR ? fmtInr(v) : null;
       return {
@@ -129,6 +147,7 @@ function platformHoldings(y, platformId, showClosed){
         invested, currentValue: current, ytdValue: ytdVal,
         plNet: pl, plPct: invested > 0 ? pl / invested : 0,
         ytdNet: ytdPl, ytdPct: ytdVal > 0 ? ytdPl / ytdVal : 0,
+        dayChangePct: dayChg, dayChangeStr: dayChgStr, dayChangeColor: dayChgColor,
         dAvg: fmt(avg), dCur: fmt(cur), dYtd: fmt(ytd),
         dInv: fmt(invested), dVal: fmt(current), dPl: fmt(pl), dYtdPl: fmt(ytdPl),
         tAvg: tip(avg), tCur: tip(cur), tYtd: tip(ytd),
@@ -188,7 +207,7 @@ function renderHoldings(){
   /* ---- Table ---- */
   const thead = isAll
     ? `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th>Platforms</th></tr>`
-    : `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>YTD Start</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
+    : `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th>Current</th><th style="min-width:70px;">Day Chg</th><th>YTD Start</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
 
   const tbody = rows.map(r => {
     const plColor = (v) => v>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
@@ -202,8 +221,8 @@ function renderHoldings(){
         <td>${fmt$(r.currentPrice,2)}</td>
         <td style="font-weight:600;">${fmt$(r.invested,2)}</td>
         <td style="font-weight:600;color:var(--gold-soft);">${fmt$(r.currentValue,2)}</td>
-        <td style="font-weight:600;color:${plColor(r.plNet)}">${r.plNet>=0?'+':''}${fmt$(r.plNet,2)}</td>
-        <td style="color:${plColor(r.ytdPl)}">${r.ytdPl>=0?'+':''}${fmt$(r.ytdPl,2)}</td>
+        <td style="font-weight:600;color:${plColor(r.plNet)}">${r.plNet>=0?'+':''}${fmt$(r.plNet,2)} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
+        <td style="color:${plColor(r.ytdPl)}">${r.ytdPl>=0?'+':''}${fmt$(r.ytdPl,2)} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
         <td><span class="debt-tag" style="font-size:10px;">${r.platforms.join(', ')}</span></td>
       </tr>`;
     }
@@ -217,11 +236,12 @@ function renderHoldings(){
       <td class="editable" contenteditable="true" data-f="qty" data-id="${r.id}" data-raw="${r.qty}">${r.qty||0}</td>
       <td class="editable" contenteditable="true" data-f="avgPrice" data-id="${r.id}" ${tip(r.tAvg)} data-raw="${r.avgPrice}">${r.dAvg}</td>
       <td class="editable" contenteditable="true" data-f="currentPrice" data-id="${r.id}" ${tip(r.tCur)} data-raw="${r.currentPrice}">${r.dCur}</td>
+      <td style="color:${r.dayChangeColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;">${r.dayChangeStr}</td>
       <td class="editable" contenteditable="true" data-f="ytdStartPrice" data-id="${r.id}" ${tip(r.tYtd)} data-raw="${r.ytdStartPrice}">${r.dYtd}</td>
       <td style="font-weight:600;" ${tip(r.tInv)}>${r.dInv}</td>
       <td style="font-weight:600;color:var(--gold-soft);" ${tip(r.tVal)}>${r.dVal}</td>
-      <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl}</td>
-      <td style="color:${plColor(r.ytdNet)}" ${tip(r.tYtdPl)}>${r.ytdNet>=0?'+':''}${r.dYtdPl}</td>
+      <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
+      <td style="color:${plColor(r.ytdNet)}" ${tip(r.tYtdPl)}>${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
       <td><span class="row-del" data-delh="${r.id}">✕</span></td>
     </tr>`;
   }).join('');
@@ -365,8 +385,10 @@ function renderHoldings(){
           for(const h of inv.holdings){
             if(num(h.qty) <= 0) continue;
             try{
-              const price = await fetchLivePrice(h.symbol, inv.currency==='INR');
-              h.currentPrice = price;
+              const result = await fetchLivePrice(h.symbol, inv.currency==='INR');
+              h.currentPrice = result.price;
+              h.dayChangePct = result.changePct;
+              h.lastFetched = Date.now();
               updated++;
             }catch(e){ failed++; }
             await new Promise(r => setTimeout(r, 300));
