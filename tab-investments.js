@@ -64,17 +64,17 @@ function renderInvestments(){
   const rates = fxRates || { INR: FX_FALLBACK_INR };
   const y = state.year;
 
-  /* Legacy items: auto-tag Indian platforms as INR */
+  /* Auto-tag & correct Indian platforms to INR */
   yearData(y).investments.forEach(it => {
-    if (!it.currency) {
-      const name = (it.name || '').toLowerCase();
-      const cat = (it.category || '').toLowerCase();
-      const isIndian = cat.includes('indian') || cat.includes('angel') ||
-                       name.includes('zerodha') || name.includes('groww') || 
-                       name.includes('angel') || name.includes('loan') ||
-                       name.includes('coin by');
-      it.currency = isIndian ? 'INR' : 'USD';
-    }
+    const name = (it.name || '').toLowerCase();
+    const cat = (it.category || '').toLowerCase();
+    const isIndian = cat.includes('indian') || cat.includes('angel') ||
+                     name.includes('zerodha') || name.includes('groww') || 
+                     name.includes('angel') || name.includes('loan') ||
+                     name.includes('coin by');
+    // Force-correct: if it looks Indian, make it INR regardless of old saved value
+    if (isIndian) it.currency = 'INR';
+    else if (!it.currency) it.currency = 'USD';
   });
 
   const items = [...yearData(y).investments].sort((a,b)=>{
@@ -261,9 +261,22 @@ function renderInvestments(){
     data:{ labels:MONTHS, datasets:[{label:'Contributions (USD)', data:totalsUSD, backgroundColor:'#6FA491', borderRadius:4}] },
     options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
   });
+  const allocTotal = allocVals.reduce((a,b)=>a+b,0);
   charts.alloc = safeChart(document.getElementById('chartAlloc'), {
     type:'doughnut',
     data:{ labels:allocLabels, datasets:[{data:allocVals, backgroundColor:allocLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2}] },
-    options:{ responsive:true, maintainAspectRatio:false, cutout:'60%', plugins:{legend:{position:'right', labels:{boxWidth:9, boxHeight:9, font:{size:10.5}}}} }
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
+      plugins:{
+        legend:{position:'right', labels:{boxWidth:9,boxHeight:9, font:{size:10.5}}},
+        tooltip: {
+          callbacks: {
+            label: function(context) {
+              const val = context.raw;
+              const pct = allocTotal > 0 ? ((val / allocTotal) * 100).toFixed(1) : 0;
+              return `${context.label}: ${fmt$(val)} (${pct}%)`;
+            }
+          }
+        }
+      } }
   });
 }

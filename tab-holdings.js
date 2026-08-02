@@ -268,12 +268,19 @@ function renderHoldings(){
   `;
 
   /* ---- Charts data prep ---- */
-  const chartRows = rows.filter(r => r.currentValue > 0 || r.invested > 0).slice(0, 12);
+  // Allocation pie: sorted by value (largest slice first)
+  const chartRows = rows.filter(r => r.currentValue > 0 || r.invested > 0)
+    .sort((a,b) => b.currentValue - a.currentValue)
+    .slice(0, 12);
   const allocLabels = chartRows.map(r => r.symbol || r.name);
   const allocVals   = chartRows.map(r => r.currentValue);
-  const plLabels    = chartRows.map(r => r.symbol || r.name);
-  const plVals      = chartRows.map(r => r.plNet || 0);
-  const plColors    = plVals.map(v => v >= 0 ? '#7FAE79' : '#C06A46');
+  const allocTotal  = allocVals.reduce((a,b)=>a+b,0);
+  
+  // P&L bar chart: sorted by P&L (biggest profit first, deepest loss last)
+  const plRows = [...chartRows].sort((a,b) => b.plNet - a.plNet);
+  const plLabels = plRows.map(r => r.symbol || r.name);
+  const plVals   = plRows.map(r => r.plNet || 0);
+  const plColors = plVals.map(v => v >= 0 ? '#7FAE79' : '#C06A46');
 
   /* ---- Table ---- */
   /* ALL PLATFORMS: Name | Symbol | Qty | Avg | Current | Invested | Value | Unrealized | YTD | Type | Platforms */
@@ -569,7 +576,18 @@ function renderHoldings(){
       type: 'doughnut',
       data: { labels: allocLabels, datasets: [{ data: allocVals, backgroundColor: allocLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor: '#1C2726', borderWidth: 2 }] },
       options: { responsive: true, maintainAspectRatio: false, cutout: '60%',
-        plugins: { legend: { position: 'right', labels: { boxWidth: 9, boxHeight: 9, font: { size: 10.5 } } } } }
+        plugins: { 
+          legend: { position: 'right', labels: { boxWidth: 9, boxHeight: 9, font: { size: 10.5 } } },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const val = context.raw;
+                const pct = allocTotal > 0 ? ((val / allocTotal) * 100).toFixed(1) : 0;
+                return `${context.label}: ${fmt$(val)} (${pct}%)`;
+              }
+            }
+          }
+        } }
     });
 
     charts.holdingPl = safeChart(document.getElementById('chartHoldingPl'), {
