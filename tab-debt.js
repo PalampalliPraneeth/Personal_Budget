@@ -16,7 +16,7 @@ function simulatePayoffWithPlan(debts, plan){
     name:d.name, balance:p, rate:(num(d.interest)/100)/12,
     minPay: d.emi && d.emi>0 ? Math.min(d.emi, p*1.5) : Math.max(p*0.03, 25)
   };});
-  if(items.length===0) return {months:0, perDebt:{}, series:[{month:0,total:0}], payoffDate:new Date()};
+  if(items.length===0) return {months:0, perDebt:{}, series:[{month:0,total:0}], payoffDate:new Date(), remainders:[], lastRemaining:0};
   const remainders = plan.rows.map(r=>Math.max(0, planRowRemaining(plan,r)));
   const lastRemaining = remainders.length ? remainders[remainders.length-1] : 0;
   const order = ()=> items.filter(x=>x.balance>0.01).sort((a,b)=> b.rate-a.rate);
@@ -52,31 +52,39 @@ function simulatePayoffWithPlan(debts, plan){
 
 function renderDebt(){
   const y = state.year;
+  
+  /* FIX: ensure paymentPlan exists so mutations persist */
+  if(!DATA.paymentPlan) DATA.paymentPlan = {columns:[], rows:[]};
+  const plan = DATA.paymentPlan;
+  
   const debts = [...yearData(y).debts].sort((a,b)=>{
     const pa = debtPendingCalc(a), pb = debtPendingCalc(b);
-    if(pa <= 0 && pb > 0) return 1;   // a paid off → push down
-    if(pb <= 0 && pa > 0) return -1;  // b paid off → push down
-    return pb - pa;                    // both active: bigger pending first
+    if(pa <= 0 && pb > 0) return 1;
+    if(pb <= 0 && pa > 0) return -1;
+    return pb - pa;
   });
   const totalPending = sumArr(debts.map(d=>debtPendingCalc(d)));
   const totalOriginal = sumArr(debts.map(d=>d.total));
   const totalCleared = sumArr(debts.map(d=>d.cleared));
-  const plan = DATA.paymentPlan;
 
   const cards = debts.map(d=>{
     const clearedToDate = debtClearedToDate(d);
-    const pct2 = d.total>0 ? Math.min(100, (clearedToDate/d.total)*100) : 100;
-    const isPaid = debtPendingCalc(d)<=0;
+    const pct2 = d.total>0 ? Math.min(100, (clearedToDate/d.total)*100) : 0;
+    const isPaid = d.total>0 && debtPendingCalc(d)<=0;
+    const needsTotal = num(d.total)===0;
     return `
     <div class="debt-card" data-debt-id="${d.id}">
       <div class="debt-card-head">
-        <div><span class="debt-name">${d.name}</span>${isPaid?'<span class="debt-tag" style="color:var(--good); border-color:var(--good);">paid off</span>':''}</div>
+        <div><span class="debt-name">${d.name}</span>
+          ${isPaid?'<span class="debt-tag" style="color:var(--good); border-color:var(--good);">paid off</span>':''}
+          ${needsTotal?'<span class="debt-tag" style="color:var(--gold); border-color:var(--gold);">set total below</span>':''}
+        </div>
         <div class="debt-figs">
           <span>Interest <b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}">${d.interest}</b>%/yr</span>
           <span>EMI/min <b class="editable-inline" contenteditable="true" data-debtfield="emi" data-id="${d.id}">${d.emi||0}</b></span>
         </div>
       </div>
-      <div class="runway ${isPaid?'':''}"><div class="runway-fill" style="width:${pct2}%"></div></div>
+      <div class="runway ${isPaid?'zero':''}"><div class="runway-fill" style="width:${pct2}%"></div></div>
       <div class="debt-foot">
         <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedToDate.toFixed(2)}</b> <span style="opacity:.55">(incl. ${fmt$(sumArr(d.m),2)} from monthly payments this year)</span></span>
         <span>Pending: <b style="color:var(--rust-soft)">${fmt$(debtPendingCalc(d),2)}</b></span>
@@ -87,14 +95,20 @@ function renderDebt(){
   }).join('');
 
   const sim = simulatePayoffWithPlan(debts, plan);
-  const freedomText = sim.months===0 ? 'You are debt-free right now.' :
-    `${sim.months} month${sim.months===1?'':'s'} from today — around <span style="color:var(--gold-soft)">${sim.payoffDate.toLocaleDateString('en-US',{month:'long', year:'numeric'})}</span>`;
+  
+  let freedomText;
+  if(debts.length===0) freedomText = 'No debts entered yet.';
+  else if(totalPending<=0) freedomText = 'You are debt-free right now.';
+  else if(plan.rows.length===0) freedomText = `${sim.months} month${sim.months===1?'':'s'} with minimum payments only — <span style="color:var(--gold-soft)">add a payment plan above to see how fast you can pay it off</span>`;
+  else freedomText = `${sim.months} month${sim.months===1?'':'s'} from today — around <span style="color:var(--gold-soft)">${sim.payoffDate.toLocaleDateString('en-US',{month:'long', year:'numeric'})}</span>`;
 
+  /* ---- Payment plan table ---- */
+  const hasPlan = plan.columns.length > 0 && plan.rows.length > 0;
   const colHeaders = plan.columns.map(c=>
     `<th>${c.name}${c.kind==='memo'?' <span style="opacity:.6;">(memo)</span>':c.kind==='income'?' <span style="opacity:.6;">(income)</span>':''} <span class="row-del" data-delcol="${c.id}" title="remove column">✕</span></th>`
   ).join('');
 
-  const planRowsHtml = plan.rows.map(r=>{
+  const planRowsHtml = hasPlan ? plan.rows.map(r=>{
     const total = planRowTotal(plan,r);
     const remaining = planRowRemaining(plan,r);
     const cells = plan.columns.map(c=>{
@@ -108,7 +122,43 @@ function renderDebt(){
       <td style="font-weight:600;">${fmt$(total,2)}</td>
       <td style="font-weight:700; color:${remaining>=0?'var(--teal-soft)':'var(--rust-soft)'}">${fmt$(remaining,2)}</td>
     </tr>`;
-  }).join('');
+  }).join('') : '';
+
+  const planTable = hasPlan ? `
+    <div class="table-scroll">
+      <table class="ledger">
+        <thead><tr><th>Month</th>${colHeaders}<th>Total</th><th>Remaining</th></tr></thead>
+        <tbody id="planBody">${planRowsHtml}</tbody>
+      </table>
+    </div>
+    <div class="addcat-row">
+      <input type="text" id="newPlanRow" placeholder="New month, e.g. May 2027…">
+      <button class="btn small" id="addPlanRowBtn">+ Add month</button>
+    </div>
+    <div class="addcat-row">
+      <input type="text" id="newPlanCol" placeholder="New column, e.g. Investment…">
+      <select id="newPlanColKind" style="background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:7px 10px; font-family:var(--font-body); font-size:12.5px;">
+        <option value="expense">Counts against remaining</option>
+        <option value="income">Adds to remaining (income)</option>
+        <option value="memo">Memo only — not counted</option>
+      </select>
+      <button class="btn small" id="addPlanColBtn">+ Add column</button>
+    </div>
+  ` : `
+    <div class="notice" style="text-align:center; padding:24px;">
+      <b style="color:var(--gold-soft);">No payment plan yet.</b><br>
+      Add your expected salary and expenses month-by-month below. Whatever's "Remaining" each month goes toward your highest-interest debt first.
+    </div>
+    <div class="addcat-row" style="justify-content:center;">
+      <input type="text" id="newPlanCol" placeholder="e.g. Salary" style="min-width:120px;">
+      <select id="newPlanColKind" style="background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:7px 10px; font-family:var(--font-body); font-size:12.5px;">
+        <option value="income">Income</option>
+        <option value="expense">Expense</option>
+        <option value="memo">Memo</option>
+      </select>
+      <button class="btn primary small" id="addPlanColBtn">+ Add first column</button>
+    </div>
+  `;
 
   const html = `
     <div class="section-title">Debt Payoff Planner · ${y}</div>
@@ -122,34 +172,18 @@ function renderDebt(){
 
     <div class="card">
       <div class="card-head"><h3>Loans</h3></div>
-      ${cards}
+      ${cards || '<div class="section-sub" style="padding:20px 0; text-align:center;">No debts yet. Add one below.</div>'}
       <div class="addcat-row">
         <input type="text" id="newDebtName" placeholder="New loan / debt name…">
+        <input type="number" id="newDebtTotal" placeholder="Total owed" style="width:110px;">
+        <input type="number" id="newDebtInterest" placeholder="Interest %" step="0.1" style="width:90px;">
         <button class="btn primary small" id="addDebtBtn">+ Add debt</button>
       </div>
     </div>
 
     <div class="card">
       <div class="card-head"><h3>Payment plan</h3><span class="section-sub" style="margin:0;">Lay out expected salary and expenses month by month. Whatever's "Remaining" each month goes toward your highest-interest debt first — after the last planned month, that same "Remaining" amount keeps repeating.</span></div>
-      <div class="table-scroll">
-        <table class="ledger">
-          <thead><tr><th>Month</th>${colHeaders}<th>Total</th><th>Remaining</th></tr></thead>
-          <tbody id="planBody">${planRowsHtml}</tbody>
-        </table>
-      </div>
-      <div class="addcat-row">
-        <input type="text" id="newPlanRow" placeholder="New month, e.g. May 2027…">
-        <button class="btn small" id="addPlanRowBtn">+ Add month</button>
-      </div>
-      <div class="addcat-row">
-        <input type="text" id="newPlanCol" placeholder="New column, e.g. Investment…">
-        <select id="newPlanColKind" style="background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:7px; padding:7px 10px; font-family:var(--font-body); font-size:12.5px;">
-          <option value="expense">Counts against remaining</option>
-          <option value="income">Adds to remaining (income)</option>
-          <option value="memo">Memo only — not counted</option>
-        </select>
-        <button class="btn small" id="addPlanColBtn">+ Add column</button>
-      </div>
+      ${planTable}
 
       <div class="freedom-banner" style="margin-top:18px;">
         <div><div class="small">DEBT-FREE PROJECTION</div><div class="big">${freedomText}</div></div>
@@ -160,6 +194,7 @@ function renderDebt(){
   `;
   document.getElementById('panel-debt').innerHTML = html;
 
+  /* ---- Debt inline edits ---- */
   document.querySelectorAll('.editable-inline').forEach(el=>{
     el.addEventListener('focus', ()=>{ el.dataset.origRaw = el.textContent; });
     el.addEventListener('blur', ()=>{
@@ -171,86 +206,118 @@ function renderDebt(){
       if(field==='clearedDisplay'){
         const beforeDisplay = debtClearedToDate(d);
         if(beforeDisplay===safeV) return;
-        d.cleared = safeV - sumArr(d.m); // back-solve baseline so displayed total-cleared matches what was typed
+        d.cleared = safeV - sumArr(d.m);
       } else {
         if(d[field]===safeV) return;
         d[field] = safeV;
       }
-      markDirty(); renderDebt();
+      markDirty('debt', {tab:'debt', action:'edit', target:d.name, field:field, oldVal:el.dataset.origRaw, newVal:safeV});
+      renderDebt();
     });
     el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){e.preventDefault(); el.blur();}});
   });
 
+  /* ---- Add debt ---- */
   document.getElementById('addDebtBtn').addEventListener('click', ()=>{
-    const inp = document.getElementById('newDebtName');
-    const name = inp.value.trim();
-    if(!name){ inp.focus(); return; }
-    debts.push({id:uid(), name, total:0, cleared:0, interest:0, emi:0, m:n12()});
-    markDirty(); renderDebt();
+    const nameInp = document.getElementById('newDebtName');
+    const totalInp = document.getElementById('newDebtTotal');
+    const intInp = document.getElementById('newDebtInterest');
+    const name = nameInp.value.trim();
+    if(!name){ nameInp.focus(); return; }
+    
+    /* FIX: push to the REAL data array, not the local sorted copy */
+    yearData(y).debts.push({
+      id:uid(), name,
+      total: parseFloat(totalInp.value)||0,
+      cleared:0,
+      interest: parseFloat(intInp.value)||0,
+      emi:0,
+      m:n12()
+    });
+    
+    markDirty('debt', {tab:'debt', action:'add', target:name});
+    renderDebt();
   });
 
-  document.querySelectorAll('[data-plancell]').forEach(td=>{
-    td.addEventListener('focus', ()=>{
-      td.dataset.origRaw = td.textContent;
-      if(td.textContent==='–') td.textContent='';
+  /* ---- Plan cell edits ---- */
+  if(hasPlan){
+    document.querySelectorAll('[data-plancell]').forEach(td=>{
+      td.addEventListener('focus', ()=>{
+        td.dataset.origRaw = td.textContent;
+        if(td.textContent==='–') td.textContent='';
+      });
+      td.addEventListener('blur', ()=>{
+        if(td.textContent === td.dataset.origRaw) return;
+        const rowId = td.dataset.plancell, colId = td.dataset.col;
+        const row = plan.rows.find(r=>r.id===rowId);
+        const raw = td.textContent.trim().replace(/[$,]/g,'');
+        let v = raw===''? null : parseFloat(raw);
+        if(isNaN(v)) v = null;
+        const before = row.values[colId]===undefined ? null : row.values[colId];
+        if(before===v) return;
+        row.values[colId] = v;
+        td.textContent = v===null ? '–' : v;
+        td.classList.toggle('zero', !v);
+        markDirty('debt', {tab:'debt', action:'edit', target:'plan '+row.label, field:plan.columns.find(c=>c.id===colId)?.name, oldVal:before, newVal:v});
+        renderDebt();
+      });
+      td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
     });
-    td.addEventListener('blur', ()=>{
-      if(td.textContent === td.dataset.origRaw) return;
-      const rowId = td.dataset.plancell, colId = td.dataset.col;
-      const row = plan.rows.find(r=>r.id===rowId);
-      const raw = td.textContent.trim().replace(/[$,]/g,'');
-      let v = raw===''? null : parseFloat(raw);
-      if(isNaN(v)) v = null;
-      const before = row.values[colId]===undefined ? null : row.values[colId];
-      if(before===v) return;
-      row.values[colId] = v;
-      td.textContent = v===null ? '–' : v;
-      td.classList.toggle('zero', !v);
-      markDirty(); renderDebt();
+
+    document.querySelectorAll('[data-delplanrow]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const idx = plan.rows.findIndex(r=>r.id===el.dataset.delplanrow);
+        if(idx>-1 && confirm('Remove this month from the plan?')){ plan.rows.splice(idx,1); markDirty('debt', {tab:'debt', action:'delete', target:'plan month'}); renderDebt(); }
+      });
     });
-    td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
-  });
-  document.querySelectorAll('[data-delplanrow]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const idx = plan.rows.findIndex(r=>r.id===el.dataset.delplanrow);
-      if(idx>-1 && confirm('Remove this month from the plan?')){ plan.rows.splice(idx,1); markDirty(); renderDebt(); }
+
+    document.querySelectorAll('[data-delcol]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const idx = plan.columns.findIndex(c=>c.id===el.dataset.delcol);
+        if(idx>-1 && confirm('Remove the "'+plan.columns[idx].name+'" column?')){
+          const removedId = plan.columns[idx].id;
+          plan.columns.splice(idx,1);
+          plan.rows.forEach(r=>{ delete r.values[removedId]; });
+          markDirty('debt', {tab:'debt', action:'delete', target:'column '+plan.columns[idx].name});
+          renderDebt();
+        }
+      });
     });
-  });
-  document.querySelectorAll('[data-delcol]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const idx = plan.columns.findIndex(c=>c.id===el.dataset.delcol);
-      if(idx>-1 && confirm('Remove the "'+plan.columns[idx].name+'" column?')){
-        const removedId = plan.columns[idx].id;
-        plan.columns.splice(idx,1);
-        plan.rows.forEach(r=>{ delete r.values[removedId]; });
-        markDirty(); renderDebt();
-      }
+
+    document.getElementById('addPlanRowBtn').addEventListener('click', ()=>{
+      const inp = document.getElementById('newPlanRow');
+      const label = inp.value.trim();
+      if(!label){ inp.focus(); return; }
+      plan.rows.push({id:uid(), label, values:{}});
+      markDirty('debt', {tab:'debt', action:'add', target:'plan month '+label});
+      renderDebt();
     });
-  });
-  document.getElementById('addPlanRowBtn').addEventListener('click', ()=>{
-    const inp = document.getElementById('newPlanRow');
-    const label = inp.value.trim();
-    if(!label){ inp.focus(); return; }
-    plan.rows.push({id:uid(), label, values:{}});
-    markDirty(); renderDebt();
-  });
+  }
+
   document.getElementById('addPlanColBtn').addEventListener('click', ()=>{
     const inp = document.getElementById('newPlanCol');
     const name = inp.value.trim();
     if(!name){ inp.focus(); return; }
     const kind = document.getElementById('newPlanColKind').value;
     plan.columns.push({id:uid(), name, kind});
-    markDirty(); renderDebt();
+    markDirty('debt', {tab:'debt', action:'add', target:'column '+name});
+    renderDebt();
   });
 
+  /* ---- Chart ---- */
   destroyChart('payoff');
-  charts.payoff = safeChart(document.getElementById('chartPayoff'), {
-    type:'line',
-    data:{ labels: sim.series.map(s=>'M'+s.month), datasets:[
-      {label:'Remaining balance', data: sim.series.map(s=>s.total), borderColor:'#C06A46', backgroundColor:'rgba(192,106,70,0.12)', fill:true, tension:.25, pointRadius:0}
-    ]},
-    options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{legend:{display:false}},
-      scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}, ticks:{maxTicksLimit:12}} } }
-  });
+  if(sim.series.length > 1){
+    charts.payoff = safeChart(document.getElementById('chartPayoff'), {
+      type:'line',
+      data:{ labels: sim.series.map(s=>'M'+s.month), datasets:[
+        {label:'Remaining balance', data: sim.series.map(s=>s.total), borderColor:'#C06A46', backgroundColor:'rgba(192,106,70,0.12)', fill:true, tension:.25, pointRadius:0}
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{legend:{display:false}},
+        scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}, ticks:{maxTicksLimit:12}} } }
+    });
+  } else {
+    const box = document.getElementById('chartPayoff');
+    if(box && box.parentElement) box.parentElement.innerHTML = '<div class="section-sub" style="padding:30px 0; text-align:center;">Add debts with a total above $0 to see the payoff projection chart.</div>';
+  }
 }
