@@ -1,8 +1,8 @@
 /* =========================================================================
    ACCESS GATE — a soft PIN lock, not real security (see caveat shown on screen)
    ========================================================================= */
-const ADMIN_PIN = '7663';
-const READONLY_PIN = '0906';
+const ADMIN_PIN = '2186';
+const READONLY_PIN = '3868';
 const SESSION_KEY = 'ledger:session:v1';
 const SESSION_TTL_MS = 0; // remembered for 12 hours, then re-prompts
 let currentRole = null;
