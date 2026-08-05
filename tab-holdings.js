@@ -3,6 +3,11 @@
    ========================================================================= */
 const HOLDING_TYPES = ['stock','mf','etf','index','crypto','other'];
 
+function _ensureFx(){
+  if(typeof fxRates !== 'undefined' && fxRates && fxRates.INR) return fxRates;
+  return { INR: 95.0 };
+}
+
 function _isIndianPlatform(inv){
   const n = (inv.name||'').toLowerCase();
   const c = (inv.category||'').toLowerCase();
@@ -47,16 +52,17 @@ function recordPortfolioSnapshot(y){
 }
 
 /* ---------- FX helpers ---------- */
-function _ensureFx(){
-  if(typeof fxRates !== 'undefined' && fxRates) return fxRates;
-  return { INR: 84.0 };
+/* Reuse the investments tab's live FX. If it hasn't loaded yet, trigger it. */
+async function ensureHoldingsFx(){
+  if(typeof ensureFxRates === 'function' && (!fxRates || !fxRates.INR)){
+    await ensureFxRates();
+  }
 }
 function _toUsd(val, currency){
   if(currency !== 'INR') return num(val);
-  const r = _ensureFx().INR || 84.0;
+  const r = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : 95.0;
   return num(val) / r;
 }
-
 /* ---------- Live price fetch (best effort) ---------- */
 async function fetchLivePrice(symbol, isIndian){
   let yahooSym = symbol.toUpperCase().trim();
@@ -110,22 +116,47 @@ function ensureHoldingsMigration(){
       if(!h.dividends) h.dividends = [];
       if(!h.type) h.type = 'stock';
       if(!h.currency) h.currency = inv.currency || 'USD';
+      h.lots.forEach(l => { if(!l.type) l.type = 'buy'; if(!l.id) l.id = uid(); });
       if(h.lots.length === 0 && (h.qty > 0 || h.avgPrice > 0)){
-        h.lots.push({qty: num(h.qty), price: num(h.avgPrice), date: `${y}-01-01`});
+        h.lots.push({id: uid(), type:'buy', qty: num(h.qty), price: num(h.avgPrice), date: `${y}-01-01`});
       }
-      const totalQty = h.lots.reduce((a,l)=>a+num(l.qty),0);
-      const totalCost = h.lots.reduce((a,l)=>a+num(l.qty)*num(l.price),0);
-      h.qty = totalQty;
-      h.avgPrice = totalQty > 0 ? totalCost / totalQty : 0;
+      recalcHolding(h);
     });
   });
 }
 
 function recalcHolding(h){
-  const totalQty = h.lots.reduce((a,l)=>a+num(l.qty),0);
-  const totalCost = h.lots.reduce((a,l)=>a+num(l.qty)*num(l.price),0);
-  h.qty = totalQty;
-  h.avgPrice = totalQty > 0 ? totalCost / totalQty : 0;
+  const lots = (h.lots||[]).slice().sort((a,b)=> new Date(a.date||0) - new Date(b.date||0));
+  let qty = 0, costBasis = 0, realizedPL = 0, boughtQty = 0, soldQty = 0, proceeds = 0, costBasisSold = 0, lastSellDate = null;
+  lots.forEach(l=>{
+    const lq = num(l.qty);
+    if(l.type === 'sell'){
+      const avgCost = qty > 0 ? costBasis/qty : 0;
+      const sq = Math.min(lq, qty);
+      const saleCost = sq*avgCost;
+      realizedPL += sq*num(l.price) - saleCost;
+      proceeds += sq*num(l.price);
+      costBasisSold += saleCost;
+      costBasis -= saleCost;
+      qty -= sq;
+      soldQty += sq;
+      if(!lastSellDate || (l.date && l.date > lastSellDate)) lastSellDate = l.date;
+    } else {
+      qty += lq;
+      costBasis += lq*num(l.price);
+      boughtQty += lq;
+    }
+  });
+  h.qty = qty;
+  h.avgPrice = qty > 0 ? costBasis/qty : 0;
+  h.realizedPL = realizedPL;
+  h.totalBoughtQty = boughtQty;
+  h.totalSoldQty = soldQty;
+  h.avgSellPrice = soldQty > 0 ? proceeds/soldQty : 0;
+  h.costBasisSold = costBasisSold;
+  h.proceeds = proceeds;
+  h.lastSellDate = lastSellDate;
+  h.status = (qty > 0.0000001 || soldQty <= 0) ? 'open' : 'closed';
   if(!h.ytdStartPrice) h.ytdStartPrice = h.avgPrice;
 }
 
@@ -136,6 +167,7 @@ function aggregateAllHoldings(y){
   yearData(y).investments.forEach(inv => {
     const isINR = inv.currency === 'INR';
     (inv.holdings || []).forEach(h => {
+      if(h.status === 'closed') return;
       const sym = (h.symbol || 'unknown').toString().toUpperCase();
       if(!map[sym]) map[sym] = {
         symbol: sym, name: h.name || sym, type: h.type || 'stock',
@@ -169,20 +201,19 @@ function aggregateAllHoldings(y){
   }).sort((a,b) => b.currentValue - a.currentValue);
 }
 
-function platformHoldings(y, platformId, showClosed){
+function platformHoldings(y, platformId){
   ensureHoldingsMigration();
   const inv = yearData(y).investments.find(i => i.id === platformId);
   if(!inv) return [];
   const isINR = inv.currency === 'INR';
-  const fx = _ensureFx().INR || 84.0;
+  const fx = _ensureFx().INR || 95.0;
   return (inv.holdings || [])
-    .filter(h => showClosed || num(h.qty) > 0)
+    .filter(h => h.status !== 'closed')
     .map(h => {
       const q = num(h.qty), avg = num(h.avgPrice), cur = num(h.currentPrice);
       const ytd = num(h.ytdStartPrice) || avg;
       const invested = q * avg, current = q * cur, ytdVal = q * ytd;
       const pl = current - invested, ytdPl = current - ytdVal;
-      // USD versions for KPIs and charts
       const investedUSD = isINR ? invested / fx : invested;
       const currentUSD  = isINR ? current / fx : current;
       const ytdUSD      = isINR ? ytdVal / fx : ytdVal;
@@ -199,7 +230,6 @@ function platformHoldings(y, platformId, showClosed){
         investedUSD, currentValueUSD: currentUSD, ytdValueUSD: ytdUSD,
         plNet: pl, plNetUSD: plUSD, plPct: invested > 0 ? pl / invested : 0,
         ytdNet: ytdPl, ytdNetUSD: ytdPlUSD, ytdPct: ytdVal > 0 ? ytdPl / ytdVal : 0,
-        // ... rest of display strings stay exactly the same
         dayChangePct: dayChg, dayChangeStr: dayChgStr, dayChangeColor: dayChgColor,
         dAvg: fmt(avg), dCur: fmt(cur), dYtd: fmt(ytd),
         dInv: fmt(invested), dVal: fmt(current), dPl: fmt(pl), dYtdPl: fmt(ytdPl),
@@ -209,12 +239,124 @@ function platformHoldings(y, platformId, showClosed){
     }).sort((a,b) => b.currentValue - a.currentValue);
 }
 
+function platformSoldHoldings(y, platformId){
+  ensureHoldingsMigration();
+  const inv = yearData(y).investments.find(i => i.id === platformId);
+  if(!inv) return [];
+  const isINR = inv.currency === 'INR';
+  const fx = _ensureFx().INR || 95.0;
+  return (inv.holdings || [])
+    .filter(h => h.status === 'closed')
+    .map(h => {
+      const costBasisSold = num(h.costBasisSold), proceeds = num(h.proceeds), realized = num(h.realizedPL);
+      const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
+      const tip = (v) => isINR ? fmtInr(v) : null;
+      return {
+        ...h,
+        dAvgBuy: fmt(h.avgPrice), dAvgSell: fmt(h.avgSellPrice),
+        dCostBasis: fmt(costBasisSold), dProceeds: fmt(proceeds), dRealized: fmt(realized),
+        tCostBasis: tip(costBasisSold), tProceeds: tip(proceeds), tRealized: tip(realized),
+        realizedUSD: isINR ? realized/fx : realized,
+        realizedPct: costBasisSold > 0 ? realized/costBasisSold : 0
+      };
+    })
+    .sort((a,b) => new Date(b.lastSellDate||0) - new Date(a.lastSellDate||0));
+}
+
+function allSoldHoldingsByPlatform(y){
+  ensureHoldingsMigration();
+  const investments = yearData(y).investments || [];
+  return investments
+    .map(inv => ({ platformId: inv.id, platformName: inv.name, rows: platformSoldHoldings(y, inv.id) }))
+    .filter(p => p.rows.length > 0);
+}
+
+/* ---------- Sell modal ---------- */
+function openSellModal(h, onConfirm){
+  const old = document.getElementById('sellModalOverlay');
+  if(old) old.remove();
+
+  const maxQty = h.qty;
+  const defaultPrice = h.currentPrice || h.avgPrice || 0;
+  const today = new Date().toISOString().slice(0,10);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'sellModalOverlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <h3>Sell ${h.symbol}</h3>
+      <p class="modal-sub">${h.name && h.name!==h.symbol ? h.name+' · ' : ''}You currently hold ${maxQty} share${maxQty===1?'':'s'}.</p>
+      <div class="modal-field">
+        <label>Quantity <span class="hint">max ${maxQty}</span></label>
+        <input type="number" id="sellQty" value="${maxQty}" min="0" max="${maxQty}" step="any">
+      </div>
+      <div class="modal-field">
+        <label>Sale price / share</label>
+        <input type="number" id="sellPrice" value="${defaultPrice || ''}" min="0" step="any">
+      </div>
+      <div class="modal-field">
+        <label>Date</label>
+        <input type="date" id="sellDate" value="${today}" max="${today}">
+      </div>
+      <div class="modal-preview">
+        <span class="label">Estimated realized P&L</span>
+        <span class="value" id="sellPreviewVal">—</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="sellCancelBtn">Cancel</button>
+        <button class="btn primary" id="sellConfirmBtn">Confirm sale</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const qtyEl = overlay.querySelector('#sellQty');
+  const priceEl = overlay.querySelector('#sellPrice');
+  const dateEl = overlay.querySelector('#sellDate');
+  const previewEl = overlay.querySelector('#sellPreviewVal');
+
+  function updatePreview(){
+    const q = Math.min(Math.max(parseFloat(qtyEl.value)||0, 0), maxQty);
+    const p = parseFloat(priceEl.value)||0;
+    const est = q*(p - (h.avgPrice||0));
+    previewEl.textContent = (est>=0?'+':'') + fmt$(est,2);
+    previewEl.style.color = est>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
+  }
+  updatePreview();
+  qtyEl.addEventListener('input', updatePreview);
+  priceEl.addEventListener('input', updatePreview);
+
+  function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if(e.key==='Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  overlay.querySelector('#sellCancelBtn').addEventListener('click', close);
+
+  overlay.querySelector('#sellConfirmBtn').addEventListener('click', ()=>{
+    const qty = parseFloat(qtyEl.value);
+    const price = parseFloat(priceEl.value);
+    const date = dateEl.value || today;
+    if(!qty || qty<=0){ qtyEl.focus(); return; }
+    if(qty > maxQty){ qtyEl.value = maxQty; qtyEl.focus(); return; }
+    if(isNaN(price) || price<0){ priceEl.focus(); return; }
+    close();
+    onConfirm(qty, price, date);
+  });
+
+  qtyEl.focus(); qtyEl.select();
+}
+
 /* ---------- Render ---------- */
 function renderHoldings(){
   const y = state.year;
   ensureHoldingsMigration();
+  ensureHoldingsFx();
+  if(typeof ensureFxRates === 'function' && (!fxRates || !fxRates.INR)){
+    ensureFxRates().then(() => { renderHoldings(); });
+  }
   if(!state.holdingsView) state.holdingsView = 'ALL';
-  if(state.showClosedHoldings === undefined) state.showClosedHoldings = false;
+  if(state.holdingsSubView === undefined) state.holdingsSubView = 'open';
   if(state.holdingsSort === undefined) state.holdingsSort = 'valueDesc';
   if(state.holdingsFilter === undefined) state.holdingsFilter = '';
 
@@ -224,14 +366,15 @@ function renderHoldings(){
   const investments = yearData(y).investments || [];
   const allRows = aggregateAllHoldings(y);
   const isAll = state.holdingsView === 'ALL';
-  const rows = isAll ? allRows : platformHoldings(y, state.holdingsView, state.showClosedHoldings);
+  const rows = isAll ? allRows : platformHoldings(y, state.holdingsView);
+  const soldGroups = isAll ? allSoldHoldingsByPlatform(y) : [{ platformId: state.holdingsView, platformName: (investments.find(i=>i.id===state.holdingsView)||{}).name || '', rows: platformSoldHoldings(y, state.holdingsView) }].filter(g=>g.rows.length>0);
+  const showSold = state.holdingsSubView === 'sold';
 
   const filterText = (state.holdingsFilter || '').toLowerCase().trim();
   let filteredRows = filterText 
     ? rows.filter(r => ((r.name||'')+' '+(r.symbol||'')+' '+(r.type||'')).toLowerCase().includes(filterText))
     : rows;
   
-  // Apply sort
   const sortMode = state.holdingsSort || 'valueDesc';
   filteredRows = [...filteredRows].sort((a,b) => {
     switch(sortMode){
@@ -243,20 +386,66 @@ function renderHoldings(){
       case 'plAsc': return a.plNet - b.plNet;
       case 'valueAsc': return a.currentValue - b.currentValue;
       case 'type': return (a.type||'').localeCompare(b.type||'') || b.currentValue - a.currentValue;
-      default: return b.currentValue - a.currentValue; // valueDesc
+      default: return b.currentValue - a.currentValue;
     }
   });
   
-  const totalInvested = rows.reduce((a,r)=>a+(r.investedUSD!==undefined?r.investedUSD:r.invested),0);
-  const totalCurrent  = rows.reduce((a,r)=>a+(r.currentValueUSD!==undefined?r.currentValueUSD:r.currentValue),0);
-  const totalYtdStart = rows.reduce((a,r)=>a+((r.ytdValueUSD!==undefined?r.ytdValueUSD:r.ytdValue)||(r.investedUSD!==undefined?r.investedUSD:r.invested)),0);
-  const totalPl       = totalCurrent - totalInvested;
-  const totalYtdPl    = totalCurrent - totalYtdStart;
+  /* ---- KPIs: OPEN vs SOLD view ---- */
+  let kpiHtml = '';
+  if(showSold){
+    // SOLD VIEW: Realized metrics
+    const allSold = soldGroups.flatMap(g=>g.rows);
+    const totalRealized = allSold.reduce((a,r)=>a+(r.realizedUSD||0),0);
+    const totalProceeds = allSold.reduce((a,r)=>a+(r.proceeds||0),0);
+    const totalCostBasisSold = allSold.reduce((a,r)=>a+(r.costBasisSold||0),0);
+    const winners = allSold.filter(r=>(r.realizedUSD||0)>0);
+    const losers = allSold.filter(r=>(r.realizedUSD||0)<0);
+    const winRate = allSold.length > 0 ? (winners.length / allSold.length) * 100 : 0;
+    const avgWin = winners.length > 0 ? winners.reduce((a,r)=>a+(r.realizedUSD||0),0)/winners.length : 0;
+    const avgLoss = losers.length > 0 ? losers.reduce((a,r)=>a+(r.realizedUSD||0),0)/losers.length : 0;
+    const biggestWin = allSold.length ? Math.max(...allSold.map(r=>r.realizedUSD||0)) : 0;
+    const biggestLoss = allSold.length ? Math.min(...allSold.map(r=>r.realizedUSD||0)) : 0;
+
+    kpiHtml = `
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="kpi-card ${totalRealized>=0?'c-teal':'c-danger'}"><div class="kpi-label">Total Realized P&L</div><div class="kpi-value">${totalRealized>=0?'+':''}${fmt$(totalRealized)}</div></div>
+        <div class="kpi-card c-gold"><div class="kpi-label">Total Proceeds</div><div class="kpi-value">${fmt$(totalProceeds)}</div></div>
+        <div class="kpi-card c-rust"><div class="kpi-label">Cost Basis (sold)</div><div class="kpi-value">${fmt$(totalCostBasisSold)}</div></div>
+        <div class="kpi-card c-teal"><div class="kpi-label">Win Rate</div><div class="kpi-value">${winRate.toFixed(1)}%</div><div class="kpi-delta flat">${winners.length}W / ${losers.length}L of ${allSold.length}</div></div>
+      </div>
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr); margin-top:12px;">
+        <div class="kpi-card c-teal"><div class="kpi-label">Avg Winner</div><div class="kpi-value">+${fmt$(avgWin)}</div></div>
+        <div class="kpi-card c-danger"><div class="kpi-label">Avg Loser</div><div class="kpi-value">${fmt$(avgLoss)}</div></div>
+        <div class="kpi-card c-teal"><div class="kpi-label">Biggest Win</div><div class="kpi-value">+${fmt$(biggestWin)}</div></div>
+        <div class="kpi-card c-danger"><div class="kpi-label">Biggest Loss</div><div class="kpi-value">${fmt$(biggestLoss)}</div></div>
+      </div>
+    `;
+    } else {
+    // OPEN VIEW: Standard portfolio metrics
+    const totalInvested = rows.reduce((a,r)=>a+(r.investedUSD!==undefined?r.investedUSD:r.invested),0);
+    const totalCurrent  = rows.reduce((a,r)=>a+(r.currentValueUSD!==undefined?r.currentValueUSD:r.currentValue),0);
+    const totalYtdStart = rows.reduce((a,r)=>a+((r.ytdValueUSD!==undefined?r.ytdValueUSD:r.ytdValue)||(r.investedUSD!==undefined?r.investedUSD:r.invested)),0);
+    const totalPl       = totalCurrent - totalInvested;
+    const totalYtdPl    = totalCurrent - totalYtdStart;
+    const fxRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : null;
+    const fxSource = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? 'live' : 'updating...';
+    kpiHtml = `
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value">${fmt$(totalInvested)}</div></div>
+        <div class="kpi-card c-teal"><div class="kpi-label">Current Value</div><div class="kpi-value">${fmt$(totalCurrent)}</div></div>
+        <div class="kpi-card ${totalPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value">${totalPl>=0?'+':''}${fmt$(totalPl)}</div></div>
+        <div class="kpi-card ${totalYtdPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">YTD P&L</div><div class="kpi-value">${totalYtdPl>=0?'+':''}${fmt$(totalYtdPl)}</div></div>
+      </div>
+      <div class="section-sub" style="margin-top:8px; margin-bottom:0; text-align:right;">
+        ${fxRate ? `FX rate: <b style="color:var(--gold-soft);">1 USD = ${fxRate.toFixed(2)} INR</b> <span style="color:var(--text-faint);">(${fxSource})</span>` : '<span style="color:var(--text-faint);">Fetching FX rate...</span>'}
+      </div>
+    `;
+  }
 
   /* ---- Platform pills ---- */
   const pills = [
     {id:'ALL', label:'All Platforms', count: allRows.length},
-    ...investments.map(inv => ({id: inv.id, label: inv.name, count: (inv.holdings||[]).filter(h=>num(h.qty)>0).length}))
+    ...investments.map(inv => ({id: inv.id, label: inv.name, count: (inv.holdings||[]).filter(h=>h.status!=='closed').length}))
   ];
   const pillHtml = `<div class="pill-row" style="margin-bottom:18px;">${pills.map(p=>`
     <button class="pill ${state.holdingsView===p.id?'active':''}" data-hpill="${p.id}">
@@ -264,24 +453,28 @@ function renderHoldings(){
     </button>
   `).join('')}</div>`;
 
+  /* ---- Holdings / Sold toggle ---- */
+  const subToggle = `
+    <div class="seg-toggle">
+      <button class="seg-btn ${!showSold?'active':''}" data-subview="open">📈 Holdings <span class="seg-count">${rows.length}</span></button>
+      <button class="seg-btn ${showSold?'active':''}" data-subview="sold">💰 Sold <span class="seg-count">${soldGroups.reduce((a,g)=>a+g.rows.length,0)}</span></button>
+    </div>
+  `;
+
   /* ---- Toolbar ---- */
-  const toolbar = isAll ? '' : `
+  const toolbar = (isAll || showSold) ? '' : `
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap;">
       <button class="btn small" id="hFetchPrices">🔄 Fetch live prices</button>
-      <label style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim); display:flex; align-items:center; gap:6px; cursor:pointer;">
-        <input type="checkbox" id="hShowClosed" ${state.showClosedHoldings?'checked':''}> Show closed (zero qty)
-      </label>
       <span class="section-sub" style="margin:0;">Fetching uses Yahoo Finance. Browsers may block it (CORS) — if so, enter prices manually.</span>
     </div>
   `;
 
-  /* ---- Charts data prep ---- */
-  // Allocation doughnut: all holdings that have value
+  /* ---- Charts (only for open view) ---- */
   const allocRows = rows.filter(r => (r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue) > 0.01).slice(0, 12);
   const allocLabels = allocRows.map(r => r.symbol || r.name);
   const allocVals   = allocRows.map(r => r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue);
+  const allocTotal = allocVals.reduce((a,b)=>a+b,0);
 
-  // P&L bar chart: ONLY holdings with actual gain/loss, sorted biggest winner → biggest loser
   const plRows = rows.filter(r => Math.abs(r.plNetUSD !== undefined ? r.plNetUSD : r.plNet) > 0.01)
                      .sort((a,b) => ((b.plNetUSD !== undefined ? b.plNetUSD : b.plNet) || 0) - ((a.plNetUSD !== undefined ? a.plNetUSD : a.plNet) || 0))
                      .slice(0, 15);
@@ -289,12 +482,12 @@ function renderHoldings(){
   const plVals   = plRows.map(r => r.plNetUSD !== undefined ? r.plNetUSD : r.plNet);
   const plColors = plVals.map(v => v >= 0 ? '#7FAE79' : '#C06A46');
 
-  /* ---- Table ---- */
-  /* ALL PLATFORMS: Name | Symbol | Qty | Avg | Current | Invested | Value | Unrealized | YTD | Type | Platforms */
+  /* ---- Table headers ---- */
   const thead = isAll
-    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th>Type</th><th>Platforms</th></tr>`
-    : `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th>Current</th><th style="min-width:70px;">Day Chg</th><th>YTD Start</th><th>Invested</th><th>Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
+    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th>Type</th><th>Platforms</th></tr>`
+    : `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>YTD Start</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
 
+  /* ---- OPEN table body ---- */
   const tbody = filteredRows.map(r => {
     const plColor = (v) => v>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
     if(isAll){
@@ -328,12 +521,61 @@ function renderHoldings(){
       <td style="font-weight:600;color:var(--gold-soft);" ${tip(r.tVal)}>${r.dVal}</td>
       <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
       <td style="color:${plColor(r.ytdNet)}" ${tip(r.tYtdPl)}>${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
-      <td><span class="row-del" data-delh="${r.id}">✕</span></td>
+      <td style="white-space:nowrap;"><button class="btn small sell" data-sellh="${r.id}">Sell</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
     </tr>`;
   }).join('');
 
+  /* ---- SOLD table ---- */
+  const soldTheadCols = isAll
+    ? `<th>Platform</th><th>Symbol</th><th>Name</th><th>Type</th><th>Qty Sold</th><th>Avg Buy</th><th>Avg Sell</th><th>Cost Basis</th><th>Proceeds</th><th>Realized P&L</th><th>Sold</th>`
+    : `<th>Symbol</th><th>Name</th><th>Type</th><th>Qty Sold</th><th>Avg Buy</th><th>Avg Sell</th><th>Cost Basis</th><th>Proceeds</th><th>Realized P&L</th><th>Sold</th>`;
+  function soldRowHtml(r, platformName){
+    const plColor = (v) => v>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
+    return `<tr>
+      ${isAll ? `<td><span class="debt-tag" style="font-size:10px;">${platformName}</span></td>` : ''}
+      <td style="font-weight:600;">${r.symbol}</td>
+      <td>${r.name||''}</td>
+      <td><span class="debt-tag">${r.type}</span></td>
+      <td>${r.totalSoldQty}</td>
+      <td>${r.dAvgBuy}</td>
+      <td>${r.dAvgSell}</td>
+      <td ${r.tCostBasis?`data-tip="${r.tCostBasis}" class="has-tip"`:''}>${r.dCostBasis}</td>
+      <td ${r.tProceeds?`data-tip="${r.tProceeds}" class="has-tip"`:''}>${r.dProceeds}</td>
+      <td style="font-weight:600;color:${plColor(r.realizedPL)}" ${r.tRealized?`data-tip="${r.tRealized}" class="has-tip"`:''}>${r.realizedPL>=0?'+':''}${r.dRealized} <span style="font-size:11px;opacity:.75;">(${r.realizedPct>=0?'+':''}${pct(r.realizedPct)})</span></td>
+      <td style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim); white-space:nowrap;">${r.lastSellDate||'—'}</td>
+    </tr>`;
+  }
+  const soldSection = `
+    <div class="card" style="margin-top:20px;">
+      <div class="card-head" style="flex-wrap:wrap; gap:10px;">
+        <h3>Sold ${isAll ? '· all platforms' : '· ' + (investments.find(i=>i.id===state.holdingsView)||{}).name}</h3>
+      </div>
+      <p class="section-sub">Fully or partially exited positions. Kept separate from the totals above so they don't skew your current allocation.</p>
+      ${!soldGroups.length ? '<div class="section-sub" style="padding:16px 0; text-align:center;">Nothing sold yet. Switch to Holdings and use the Sell button on a position.</div>' :
+        isAll
+          ? soldGroups.map(g => `
+              <div style="margin-bottom:18px;">
+                <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--gold-soft); font-weight:600; margin-bottom:6px;">${g.platformName}</div>
+                <div class="table-scroll">
+                  <table class="ledger">
+                    <thead><tr>${soldTheadCols}</tr></thead>
+                    <tbody>${g.rows.map(r=>soldRowHtml(r, g.platformName)).join('')}</tbody>
+                  </table>
+                </div>
+              </div>
+            `).join('')
+          : `<div class="table-scroll">
+              <table class="ledger">
+                <thead><tr>${soldTheadCols}</tr></thead>
+                <tbody>${soldGroups[0].rows.map(r=>soldRowHtml(r)).join('')}</tbody>
+              </table>
+            </div>`
+      }
+    </div>
+  `;
+
   /* ---- Add form ---- */
-  const addForm = isAll ? '' : `
+  const addForm = (isAll || showSold) ? '' : `
     <div class="addcat-row" style="margin-top:14px;">
       <input type="text" id="hNewSym" placeholder="Symbol" style="min-width:80px;">
       <input type="text" id="hNewName" placeholder="Name" style="min-width:120px;">
@@ -347,17 +589,8 @@ function renderHoldings(){
     </div>
   `;
 
-  const html = `
-    <div class="section-title">Holdings · ${y}</div>
-    <p class="section-sub">Every stock, mutual fund, ETF, index, and crypto you own. <b>All Platforms</b> shows the consolidated view. Click a platform pill to edit its individual holdings. YTD uses Jan 1 price (defaults to your avg cost if not set).</p>
-
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
-      <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value">${fmt$(totalInvested)}</div></div>
-      <div class="kpi-card c-teal"><div class="kpi-label">Current Value</div><div class="kpi-value">${fmt$(totalCurrent)}</div></div>
-      <div class="kpi-card ${totalPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value">${totalPl>=0?'+':''}${fmt$(totalPl)}</div></div>
-      <div class="kpi-card ${totalYtdPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">YTD P&L</div><div class="kpi-value">${totalYtdPl>=0?'+':''}${fmt$(totalYtdPl)}</div></div>
-    </div>
-
+  /* ---- Portfolio history chart ---- */
+  const chartSection = showSold ? '' : `
     <div class="card" style="margin-bottom:20px;">
       <div class="card-head" style="flex-wrap:wrap; gap:10px;">
         <h3>Portfolio history</h3>
@@ -373,10 +606,10 @@ function renderHoldings(){
         ${snaps.length ? 'Snapshots: ' + snaps.length + ' · Last: ' + snaps[snaps.length-1].date : 'No snapshots yet. Click 📸 to record today\'s portfolio value.'}
       </div>
     </div>
+  `;
 
-    ${pillHtml}
-    ${toolbar}
-
+  /* ---- Allocation + P&L charts (only open view) ---- */
+  const openCharts = showSold ? '' : `
     <div class="grid-2">
       <div class="card">
         <div class="card-head"><h3>Portfolio allocation</h3></div>
@@ -387,6 +620,23 @@ function renderHoldings(){
         <div class="chart-box"><canvas id="chartHoldingPl"></canvas></div>
       </div>
     </div>
+  `;
+
+  const html = `
+    <div class="section-title">Holdings · ${y}</div>
+    <p class="section-sub">Every stock, mutual fund, ETF, index, and crypto you own. <b>All Platforms</b> shows the consolidated view. Click a platform pill to edit its individual holdings. YTD uses Jan 1 price (defaults to your avg cost if not set).</p>
+
+    ${kpiHtml}
+
+    ${chartSection}
+
+    ${pillHtml}
+    ${subToggle}
+
+    ${showSold ? soldSection : `
+    ${toolbar}
+
+    ${openCharts}
 
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
@@ -414,15 +664,21 @@ function renderHoldings(){
       </div>
       ${addForm}
     </div>
+    `}
   `;
   document.getElementById('panel-holdings').innerHTML = html;
+
+  /* ---- Toggle handler ---- */
+  document.querySelectorAll('[data-subview]').forEach(b => b.addEventListener('click', ()=>{
+    state.holdingsSubView = b.dataset.subview; renderHoldings();
+  }));
 
   /* ---- Handlers ---- */
   document.querySelectorAll('[data-hpill]').forEach(b => b.addEventListener('click', ()=>{
     state.holdingsView = b.dataset.hpill; renderHoldings();
   }));
 
-  if(!isAll){
+  if(!isAll && !showSold){
     const inv = investments.find(i => i.id === state.holdingsView);
     if(inv){
       document.getElementById('holdingsBody').querySelectorAll('td.editable').forEach(td => {
@@ -446,16 +702,20 @@ function renderHoldings(){
           if(isNaN(v)) v = null;
           if(field === 'qty') v = v !== null ? v : 0;
           if(field === 'qty'){
-            if(h.lots.length === 1){ h.lots[0].qty = v || 0; }
-            else if(h.lots.length === 0){ h.lots.push({qty: v||0, price: h.avgPrice||0, date: `${y}-01-01`}); }
-            else { h.lots[h.lots.length-1].qty = v || 0; }
+            const buyLots = h.lots.filter(l => l.type !== 'sell');
+            const otherBuysQty = buyLots.slice(0,-1).reduce((a,l)=>a+num(l.qty),0);
+            const targetLastBuyQty = Math.max((v||0) + num(h.totalSoldQty) - otherBuysQty, 0);
+            if(buyLots.length === 1){ buyLots[0].qty = targetLastBuyQty; }
+            else if(buyLots.length === 0){ h.lots.push({id: uid(), type:'buy', qty: v||0, price: h.avgPrice||0, date: `${y}-01-01`}); }
+            else { buyLots[buyLots.length-1].qty = targetLastBuyQty; }
             recalcHolding(h);
           } else if(field === 'avgPrice'){
-            const oldTotal = h.lots.reduce((a,l)=>a+num(l.qty)*num(l.price),0);
-            const oldQty = h.lots.reduce((a,l)=>a+num(l.qty),0);
+            const buyLots = h.lots.filter(l => l.type !== 'sell');
+            const oldTotal = buyLots.reduce((a,l)=>a+num(l.qty)*num(l.price),0);
+            const oldQty = buyLots.reduce((a,l)=>a+num(l.qty),0);
             if(oldQty > 0){
               const ratio = (v * oldQty) / oldTotal;
-              h.lots.forEach(l => l.price = num(l.price) * ratio);
+              buyLots.forEach(l => l.price = num(l.price) * ratio);
             }
             recalcHolding(h);
           } else if(field === 'currentPrice'){
@@ -486,14 +746,29 @@ function renderHoldings(){
         const avg = parseFloat(document.getElementById('hNewAvg').value) || 0;
         const cur = parseFloat(document.getElementById('hNewCur').value) || 0;
         if(!sym){ document.getElementById('hNewSym').focus(); return; }
-        inv.holdings.push({
+        const newH = {
           id: uid(), symbol: sym, name: name || sym, type,
-          qty, avgPrice: avg, currentPrice: cur, ytdStartPrice: avg,
-          lots: [{qty, price: avg, date: new Date().toISOString().slice(0,10)}],
+          currentPrice: cur, ytdStartPrice: avg,
+          lots: [{id: uid(), type:'buy', qty, price: avg, date: new Date().toISOString().slice(0,10)}],
           dividends: [], currency: inv.currency || 'USD'
-        });
+        };
+        recalcHolding(newH);
+        inv.holdings.push(newH);
         markDirty(); renderHoldings();
       });
+
+      document.querySelectorAll('[data-sellh]').forEach(el => el.addEventListener('click', ()=>{
+        const h = inv.holdings.find(x => x.id === el.dataset.sellh);
+        if(!h) return;
+        if(h.qty <= 0){ showToast('Nothing left to sell on this holding'); return; }
+        openSellModal(h, (qty, price, date) => {
+          h.lots.push({id: uid(), type:'sell', qty, price, date});
+          recalcHolding(h);
+          markDirty('holdings');
+          renderHoldings();
+          showToast(`Sold ${qty} ${h.symbol} @ ${fmt$(price,2)}`);
+        });
+      }));
 
       const fetchBtn = document.getElementById('hFetchPrices');
       if(fetchBtn){
@@ -516,18 +791,10 @@ function renderHoldings(){
           showToast(`${updated} prices updated${failed>0 ? ', '+failed+' failed (CORS/manual needed)' : ''}`);
         });
       }
-
-      const closedCb = document.getElementById('hShowClosed');
-      if(closedCb){
-        closedCb.addEventListener('change', ()=>{
-          state.showClosedHoldings = closedCb.checked;
-          renderHoldings();
-        });
-      }
     }
   }
 
-    /* ---- Snapshot & timeframe ---- */
+  /* ---- Snapshot & timeframe ---- */
   const snapBtn = document.getElementById('hRecordSnapshot');
   if(snapBtn) snapBtn.addEventListener('click', ()=>{ recordPortfolioSnapshot(y); renderHoldings(); });
   
@@ -537,8 +804,8 @@ function renderHoldings(){
 
   /* ---- Portfolio history chart ---- */
   destroyChart('portfolioHistory');
-  if(snaps.length > 1){
-    const labels = snaps.map(s => s.date.slice(5)); // MM-DD
+  if(!showSold && snaps.length > 1){
+    const labels = snaps.map(s => s.date.slice(5));
     charts.portfolioHistory = safeChart(document.getElementById('chartPortfolioHistory'), {
       type: 'line',
       data: { 
@@ -552,12 +819,12 @@ function renderHoldings(){
         plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
         scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
     });
-  } else if(document.getElementById('chartPortfolioHistory')){
+  } else if(!showSold && document.getElementById('chartPortfolioHistory')){
     document.getElementById('chartPortfolioHistory').parentElement.innerHTML = 
       '<div class="section-sub" style="padding:40px 0; text-align:center;">Need at least 2 snapshots to draw a chart.<br>Click 📸 Record snapshot on different days.</div>';
   }
   
-    /* ---- Filter listener ---- */
+  /* ---- Filter & sort listeners ---- */
   const filterInput = document.getElementById('hFilter');
   if(filterInput){
     filterInput.addEventListener('input', (e)=>{
@@ -565,7 +832,6 @@ function renderHoldings(){
       renderHoldings();
     });
   }
-
   const sortSelect = document.getElementById('hSort');
   if(sortSelect){
     sortSelect.addEventListener('change', (e)=>{
@@ -574,13 +840,11 @@ function renderHoldings(){
     });
   }
 
-  /* ---- Charts ---- */
+  /* ---- Charts (open view only) ---- */
   destroyChart('holdingAlloc');
   destroyChart('holdingPl');
 
-  const allocTotal = allocVals.reduce((a,b)=>a+b,0); // ← ADD THIS LINE
-
-  if(allocLabels.length > 0){
+  if(!showSold && allocLabels.length > 0){
     charts.holdingAlloc = safeChart(document.getElementById('chartHoldingAlloc'), {
       type: 'doughnut',
       data: { labels: allocLabels, datasets: [{ data: allocVals, backgroundColor: allocLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor: '#1C2726', borderWidth: 2 }] },
