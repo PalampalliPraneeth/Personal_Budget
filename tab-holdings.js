@@ -462,7 +462,7 @@ function renderHoldings(){
   `;
 
   /* ---- Toolbar ---- */
-  const toolbar = (isAll || showSold) ? '' : `
+  const toolbar = showSold ? '' : `
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap;">
       <button class="btn small" id="hFetchPrices">🔄 Fetch live prices</button>
       <span class="section-sub" style="margin:0;">Fetching uses Yahoo Finance. Browsers may block it (CORS) — if so, enter prices manually.</span>
@@ -770,27 +770,53 @@ function renderHoldings(){
         });
       }));
 
-      const fetchBtn = document.getElementById('hFetchPrices');
-      if(fetchBtn){
-        fetchBtn.addEventListener('click', async ()=>{
-          fetchBtn.textContent = '⏳ Fetching...';
-          fetchBtn.disabled = true;
-          let updated = 0, failed = 0;
-          for(const h of inv.holdings){
-            if(num(h.qty) <= 0) continue;
-            try{
-              const result = await fetchLivePrice(h.symbol, inv.currency==='INR');
-              h.currentPrice = result.price;
-              h.dayChangePct = result.changePct;
-              h.lastFetched = Date.now();
-              updated++;
-            }catch(e){ failed++; }
-            await new Promise(r => setTimeout(r, 300));
+      
+    }
+  }
+
+    /* ---- Fetch live prices (All Platforms or single platform) ---- */
+  if(!showSold){
+    const fetchBtn = document.getElementById('hFetchPrices');
+    if(fetchBtn){
+      fetchBtn.addEventListener('click', async ()=>{
+        fetchBtn.textContent = '⏳ Fetching...';
+        fetchBtn.disabled = true;
+        let updated = 0, failed = 0;
+
+        if(isAll){
+          for(const inv of investments){
+            for(const h of (inv.holdings || [])){
+              if(num(h.qty) <= 0) continue;
+              try{
+                const result = await fetchLivePrice(h.symbol, inv.currency==='INR');
+                h.currentPrice = result.price;
+                h.dayChangePct = result.changePct;
+                h.lastFetched = Date.now();
+                updated++;
+              }catch(e){ failed++; }
+              await new Promise(r => setTimeout(r, 300));
+            }
           }
-          markDirty(); renderHoldings();
-          showToast(`${updated} prices updated${failed>0 ? ', '+failed+' failed (CORS/manual needed)' : ''}`);
-        });
-      }
+        } else {
+          const inv = investments.find(i => i.id === state.holdingsView);
+          if(inv){
+            for(const h of inv.holdings){
+              if(num(h.qty) <= 0) continue;
+              try{
+                const result = await fetchLivePrice(h.symbol, inv.currency==='INR');
+                h.currentPrice = result.price;
+                h.dayChangePct = result.changePct;
+                h.lastFetched = Date.now();
+                updated++;
+              }catch(e){ failed++; }
+              await new Promise(r => setTimeout(r, 300));
+            }
+          }
+        }
+
+        markDirty(); renderHoldings();
+        showToast(`${updated} prices updated${failed>0 ? ', '+failed+' failed (CORS/manual needed)' : ''}`);
+      });
     }
   }
 
