@@ -374,6 +374,8 @@ function renderHoldings(){
   }
   if(!state.holdingsView) state.holdingsView = 'ALL';
   if(state.holdingsSubView === undefined) state.holdingsSubView = 'open';
+  if(state.holdingsTypeFilter === undefined) state.holdingsTypeFilter = null; // null = All types
+  if(state.holdingsTypeFilterOpen === undefined) state.holdingsTypeFilterOpen = false;
   if(state.holdingsSort === undefined) state.holdingsSort = 'valueDesc';
   if(state.holdingsFilter === undefined) state.holdingsFilter = '';
 
@@ -383,8 +385,13 @@ function renderHoldings(){
   const investments = yearData(y).investments || [];
   const allRows = aggregateAllHoldings(y);
   const isAll = state.holdingsView === 'ALL';
-  const rows = isAll ? allRows : platformHoldings(y, state.holdingsView);
-  const soldGroups = isAll ? allSoldHoldingsByPlatform(y) : [{ platformId: state.holdingsView, platformName: (investments.find(i=>i.id===state.holdingsView)||{}).name || '', rows: platformSoldHoldings(y, state.holdingsView) }].filter(g=>g.rows.length>0);
+  let rows = isAll ? allRows : platformHoldings(y, state.holdingsView);
+  let soldGroups = isAll ? allSoldHoldingsByPlatform(y) : [{ platformId: state.holdingsView, platformName: (investments.find(i=>i.id===state.holdingsView)||{}).name || '', rows: platformSoldHoldings(y, state.holdingsView) }].filter(g=>g.rows.length>0);
+  if(state.holdingsTypeFilter !== null){
+    const activeTypes = state.holdingsTypeFilter;
+    rows = rows.filter(r => activeTypes.includes(r.type));
+    soldGroups = soldGroups.map(g => ({...g, rows: g.rows.filter(r => activeTypes.includes(r.type))})).filter(g => g.rows.length > 0);
+  }
   const showSold = state.holdingsSubView === 'sold';
 
   const filterText = (state.holdingsFilter || '').toLowerCase().trim();
@@ -481,6 +488,21 @@ function renderHoldings(){
     </div>
   `;
 
+  /* ---- Type filter (checkbox dropdown, filters everything on the page) ---- */
+  const activeTypesForUI = state.holdingsTypeFilter === null ? HOLDING_TYPES : state.holdingsTypeFilter;
+  const typeFilterPanelHtml = `
+    <div id="typeFilterPanel" style="display:${state.holdingsTypeFilterOpen?'flex':'none'}; gap:14px; flex-wrap:wrap; align-items:center; background:var(--bg-card); border:1px solid var(--line); border-radius:9px; padding:10px 14px; margin-bottom:12px;">
+      <label style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:11.5px;cursor:pointer;font-weight:600;">
+        <input type="checkbox" id="typeFilterAll" ${activeTypesForUI.length===HOLDING_TYPES.length?'checked':''}> All
+      </label>
+      ${HOLDING_TYPES.map(t=>`
+        <label style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:11.5px;cursor:pointer;">
+          <input type="checkbox" class="typeFilterBox" value="${t}" ${activeTypesForUI.includes(t)?'checked':''}> ${t}
+        </label>
+      `).join('')}
+    </div>
+  `;
+
   /* ---- Toolbar ---- */
   const toolbar = showSold ? '' : `
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap;">
@@ -503,9 +525,10 @@ function renderHoldings(){
   const plColors = plVals.map(v => v >= 0 ? '#7FAE79' : '#C06A46');
 
   /* ---- Table headers ---- */
+  const typeTh = `<th id="typeFilterTh" style="cursor:pointer; white-space:nowrap;" title="Filter by type">Type <span id="typeFilterIcon" style="opacity:.75;">🔽</span></th>`;
   const thead = isAll
-    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th>Type</th><th>Platforms</th></tr>`
-    : `<tr><th>Symbol</th><th>Name</th><th>Type</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>YTD Start</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
+    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th>${typeTh}<th>Platforms</th></tr>`
+    : `<tr><th>Symbol</th><th>Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>YTD Start</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
 
   /* ---- OPEN table body ---- */
   const tbody = filteredRows.map(r => {
@@ -676,6 +699,7 @@ function renderHoldings(){
         </div>
         <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);">Showing ${filteredRows.length} of ${rows.length}</span>
       </div>
+      ${typeFilterPanelHtml}
       <div class="table-scroll">
         <table class="ledger">
           <thead>${thead}</thead>
@@ -691,6 +715,24 @@ function renderHoldings(){
   /* ---- Toggle handler ---- */
   document.querySelectorAll('[data-subview]').forEach(b => b.addEventListener('click', ()=>{
     state.holdingsSubView = b.dataset.subview; renderHoldings();
+  }));
+
+  /* ---- Type filter handlers ---- */
+  const typeFilterTh = document.getElementById('typeFilterTh');
+  if(typeFilterTh) typeFilterTh.addEventListener('click', ()=>{
+    state.holdingsTypeFilterOpen = !state.holdingsTypeFilterOpen; renderHoldings();
+  });
+  const typeFilterAll = document.getElementById('typeFilterAll');
+  if(typeFilterAll) typeFilterAll.addEventListener('change', ()=>{
+    state.holdingsTypeFilter = typeFilterAll.checked ? null : [];
+    renderHoldings();
+  });
+  document.querySelectorAll('.typeFilterBox').forEach(cb => cb.addEventListener('change', ()=>{
+    let sel = (state.holdingsTypeFilter === null ? HOLDING_TYPES.slice() : state.holdingsTypeFilter.slice());
+    if(cb.checked){ if(!sel.includes(cb.value)) sel.push(cb.value); }
+    else { sel = sel.filter(t => t !== cb.value); }
+    state.holdingsTypeFilter = sel;
+    renderHoldings();
   }));
 
   /* ---- Handlers ---- */
