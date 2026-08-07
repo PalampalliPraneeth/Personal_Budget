@@ -17,6 +17,21 @@ function _isIndianPlatform(inv){
          n.includes('coin by');
 }
 
+/* Auto-derives the "start of year" price for YTD math, instead of a manual
+   field: uses the earliest portfolio snapshot recorded this year for that
+   symbol (real historical data), falling back to avg cost if you haven't
+   snapshotted yet. No UI entry needed — it just works off data you're
+   already recording. */
+function _ytdStartPriceFor(h){
+  const sym = (h.symbol || '').toString().toUpperCase();
+  const snaps = getPortfolioSnapshots(state.year);
+  if(snaps.length && sym){
+    const first = snaps.find(s => s.holdings && s.holdings[sym] && s.holdings[sym].price);
+    if(first) return { price: first.holdings[sym].price, date: first.date };
+  }
+  return { price: h.avgPrice || 0, date: null };
+}
+
 function getPortfolioSnapshots(y){
   return yearData(y).portfolioSnapshots || [];
 }
@@ -189,12 +204,13 @@ function aggregateAllHoldings(y){
       if(!map[sym]) map[sym] = {
         symbol: sym, name: h.name || sym, type: h.type || 'stock',
         qty: 0, invested: 0, currentValue: 0, ytdStartValue: 0,
-        platforms: [], prices: [], avgPrices: [], ytdPrices: []
+        platforms: [], prices: [], avgPrices: [], ytdPrices: [],
+        dayPLUSD: 0, dayPLKnown: false
       };
       const q = num(h.qty);
       const avgUSD = _toUsd(h.avgPrice, isINR ? 'INR' : 'USD');
       const curUSD = _toUsd(h.currentPrice, isINR ? 'INR' : 'USD');
-      const ytdUSD = _toUsd(h.ytdStartPrice || h.avgPrice, isINR ? 'INR' : 'USD');
+      const ytdUSD = _toUsd(_ytdStartPriceFor(h).price, isINR ? 'INR' : 'USD');
       map[sym].qty += q;
       map[sym].invested += q * avgUSD;
       map[sym].currentValue += q * curUSD;
@@ -203,6 +219,13 @@ function aggregateAllHoldings(y){
       map[sym].prices.push(curUSD);
       map[sym].avgPrices.push(avgUSD);
       map[sym].ytdPrices.push(ytdUSD);
+      if(h.dayChangePct !== null && h.dayChangePct !== undefined && num(h.currentPrice) > 0){
+        // Derive $/share change from % + current price, then convert to USD.
+        const prevCloseLocal = num(h.currentPrice) / (1 + h.dayChangePct/100);
+        const dayChangePerShareUSD = _toUsd(num(h.currentPrice) - prevCloseLocal, isINR ? 'INR' : 'USD');
+        map[sym].dayPLUSD += q * dayChangePerShareUSD;
+        map[sym].dayPLKnown = true;
+      }
     });
   });
   return Object.values(map).map(h => {
@@ -214,6 +237,9 @@ function aggregateAllHoldings(y){
     h.ytdPl = h.currentValue - h.ytdStartValue;
     h.ytdPct = h.ytdStartValue > 0 ? h.ytdPl / h.ytdStartValue : 0;
     h.platforms = [...new Set(h.platforms)];
+    const prevTotalUSD = h.currentValue - h.dayPLUSD;
+    h.dayChangePct = (h.dayPLKnown && prevTotalUSD > 0) ? (h.dayPLUSD / prevTotalUSD) * 100 : null;
+    h.dayChgPerShareUSD = (h.dayPLKnown && h.qty > 0) ? h.dayPLUSD / h.qty : null;
     return h;
   }).sort((a,b) => b.currentValue - a.currentValue);
 }
@@ -228,7 +254,8 @@ function platformHoldings(y, platformId){
     .filter(h => h.status !== 'closed')
     .map(h => {
       const q = num(h.qty), avg = num(h.avgPrice), cur = num(h.currentPrice);
-      const ytd = num(h.ytdStartPrice) || avg;
+      const ytdInfo = _ytdStartPriceFor(h);
+      const ytd = ytdInfo.price || avg;
       const invested = q * avg, current = q * cur, ytdVal = q * ytd;
       const pl = current - invested, ytdPl = current - ytdVal;
       const investedUSD = isINR ? invested / fx : invested;
@@ -241,13 +268,26 @@ function platformHoldings(y, platformId){
       const dayChgColor = dayChg > 0 ? 'var(--good)' : dayChg < 0 ? 'var(--danger)' : 'var(--text-dim)';
       const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
       const tip = (v) => isINR ? fmtInr(v) : null;
+      let dayPLLocal = null, dayPLUSD = null, dayChgPerShareLocal = null;
+      if(dayChg !== null && cur > 0){
+        const prevClose = cur / (1 + dayChg/100);
+        dayChgPerShareLocal = cur - prevClose; // e.g. Yahoo's "+4.97" in "+4.97 (+2.27%)"
+        dayPLLocal = q * dayChgPerShareLocal; // total $ made/lost today on this position, in the platform's own currency
+        dayPLUSD = isINR ? dayPLLocal / fx : dayPLLocal;
+      }
+      const ytdBaselineNote = ytdInfo.date
+        ? `YTD baseline: ${fmt(ytd)} (from your ${ytdInfo.date} snapshot)`
+        : `YTD baseline: ${fmt(ytd)} (no snapshot yet this year — using avg cost)`;
       return {
         ...h, qty: q, avgPrice: avg, currentPrice: cur, ytdStartPrice: ytd,
         invested, currentValue: current, ytdValue: ytdVal,
         investedUSD, currentValueUSD: currentUSD, ytdValueUSD: ytdUSD,
         plNet: pl, plNetUSD: plUSD, plPct: invested > 0 ? pl / invested : 0,
-        ytdNet: ytdPl, ytdNetUSD: ytdPlUSD, ytdPct: ytdVal > 0 ? ytdPl / ytdVal : 0,
+        ytdNet: ytdPl, ytdNetUSD: ytdPlUSD, ytdPct: ytdVal > 0 ? ytdPl / ytdVal : 0, ytdBaselineNote,
         dayChangePct: dayChg, dayChangeStr: dayChgStr, dayChangeColor: dayChgColor,
+        dayPLUSD, dDayPl: dayPLLocal !== null ? fmt(dayPLLocal) : '—', tDayPl: dayPLLocal !== null ? tip(dayPLLocal) : null,
+        dDayChgAmt: dayChgPerShareLocal !== null ? fmt(dayChgPerShareLocal) : null,
+        tDayChgAmt: dayChgPerShareLocal !== null ? tip(dayChgPerShareLocal) : null,
         dAvg: fmt(avg), dCur: fmt(cur), dYtd: fmt(ytd),
         dInv: fmt(invested), dVal: fmt(current), dPl: fmt(pl), dYtdPl: fmt(ytdPl),
         tAvg: tip(avg), tCur: tip(cur), tYtd: tip(ytd),
@@ -410,6 +450,8 @@ function renderHoldings(){
       case 'plAsc': return a.plNet - b.plNet;
       case 'valueAsc': return a.currentValue - b.currentValue;
       case 'type': return (a.type||'').localeCompare(b.type||'') || b.currentValue - a.currentValue;
+      case 'dayplDesc': return (b.dayPLUSD||0) - (a.dayPLUSD||0);
+      case 'dayplAsc': return (a.dayPLUSD||0) - (b.dayPLUSD||0);
       default: return b.currentValue - a.currentValue;
     }
   });
@@ -527,22 +569,26 @@ function renderHoldings(){
   /* ---- Table headers ---- */
   const typeTh = `<th id="typeFilterTh" style="cursor:pointer; white-space:nowrap;" title="Filter by type">Type <span id="typeFilterIcon" style="opacity:.75;">🔽</span></th>`;
   const thead = isAll
-    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th>${typeTh}<th>Platforms</th></tr>`
-    : `<tr><th>Symbol</th><th>Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>YTD Start</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>YTD P&L</th><th></th></tr>`;
+    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year" class="has-tip">YTD P&L</th>${typeTh}<th>Platforms</th></tr>`
+    : `<tr><th>Symbol</th><th>Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year — hover a row's value to see the exact baseline" class="has-tip">YTD P&L</th><th></th></tr>`;
 
   /* ---- OPEN table body ---- */
   const tbody = filteredRows.map(r => {
     const plColor = (v) => v>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
     if(isAll){
+      const dayColor = r.dayChangePct===null ? 'var(--text-dim)' : (r.dayChangePct>=0 ? 'var(--good)' : 'var(--danger)');
+      const dayPlColor = r.dayChangePct===null ? 'var(--text-dim)' : plColor(r.dayPLUSD||0);
       return `<tr>
         <td>${r.name}</td>
         <td style="font-weight:600;">${r.symbol}</td>
         <td>${r.qty}</td>
         <td>${fmt$(r.avgPrice,2)}</td>
         <td>${fmt$(r.currentPrice,2)}</td>
+        <td style="color:${dayColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;">${r.dayChangePct===null?'—':(r.dayChangePct>=0?'+':'')+fmt$(r.dayChgPerShareUSD,2)+' ('+(r.dayChangePct>=0?'+':'')+r.dayChangePct.toFixed(2)+'%)'}</td>
         <td style="font-weight:600;">${fmt$(r.invested,2)}</td>
         <td style="font-weight:600;color:var(--gold-soft);">${fmt$(r.currentValue,2)}</td>
         <td style="font-weight:600;color:${plColor(r.plNet)}">${r.plNet>=0?'+':''}${fmt$(r.plNet,2)} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
+        <td style="font-weight:600;color:${dayPlColor};">${r.dayChangePct===null?'—':(r.dayPLUSD>=0?'+':'')+fmt$(r.dayPLUSD,2)}</td>
         <td style="color:${plColor(r.ytdPl)}">${r.ytdPl>=0?'+':''}${fmt$(r.ytdPl,2)} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
         <td><span class="debt-tag">${r.type}</span></td>
         <td><span class="debt-tag" style="font-size:10px;">${r.platforms.join(', ')}</span></td>
@@ -558,12 +604,12 @@ function renderHoldings(){
       <td class="editable" contenteditable="true" data-f="qty" data-id="${r.id}" data-raw="${r.qty}">${r.qty||0}</td>
       <td class="editable" contenteditable="true" data-f="avgPrice" data-id="${r.id}" ${tip(r.tAvg)} data-raw="${r.avgPrice}">${r.dAvg}</td>
       <td class="editable" contenteditable="true" data-f="currentPrice" data-id="${r.id}" ${tip(r.tCur)} data-raw="${r.currentPrice}">${r.dCur}</td>
-      <td style="color:${r.dayChangeColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;">${r.dayChangeStr}</td>
-      <td class="editable" contenteditable="true" data-f="ytdStartPrice" data-id="${r.id}" ${tip(r.tYtd)} data-raw="${r.ytdStartPrice}">${r.dYtd}</td>
+      <td style="color:${r.dayChangeColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;" ${r.tDayChgAmt?`data-tip="${r.tDayChgAmt}" class="has-tip"`:''}>${r.dDayChgAmt===null?'—':(r.dayChangePct>=0?'+':'')+r.dDayChgAmt+' ('+r.dayChangeStr+')'}</td>
       <td style="font-weight:600;" ${tip(r.tInv)}>${r.dInv}</td>
       <td style="font-weight:600;color:var(--gold-soft);" ${tip(r.tVal)}>${r.dVal}</td>
       <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
-      <td style="color:${plColor(r.ytdNet)}" ${tip(r.tYtdPl)}>${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
+      <td style="font-weight:600;color:${r.dayChangePct===null?'var(--text-dim)':plColor(r.dayPLUSD||0)};" ${tip(r.tDayPl)}>${r.dayChangePct===null?'—':(r.dayPLUSD>=0?'+':'')+r.dDayPl}</td>
+      <td style="color:${plColor(r.ytdNet)}" title="${r.ytdBaselineNote}">${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
       <td style="white-space:nowrap;"><button class="btn small sell" data-sellh="${r.id}">Sell</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
     </tr>`;
   }).join('');
@@ -695,6 +741,8 @@ function renderHoldings(){
             <option value="plDesc" ${sortMode==='plDesc'?'selected':''}>Sort: P&L (high→low)</option>
             <option value="plAsc" ${sortMode==='plAsc'?'selected':''}>Sort: P&L (low→high)</option>
             <option value="type" ${sortMode==='type'?'selected':''}>Sort: Type</option>
+            <option value="dayplDesc" ${sortMode==='dayplDesc'?'selected':''}>Sort: Day P&L (high→low)</option>
+            <option value="dayplAsc" ${sortMode==='dayplAsc'?'selected':''}>Sort: Day P&L (low→high)</option>
           </select>
         </div>
         <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);">Showing ${filteredRows.length} of ${rows.length}</span>
@@ -782,8 +830,6 @@ function renderHoldings(){
             recalcHolding(h);
           } else if(field === 'currentPrice'){
             h.currentPrice = v || 0;
-          } else if(field === 'ytdStartPrice'){
-            h.ytdStartPrice = v || 0;
           }
           markDirty(); renderHoldings();
         });
