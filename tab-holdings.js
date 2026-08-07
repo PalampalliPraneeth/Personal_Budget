@@ -69,6 +69,23 @@ async function fetchLivePrice(symbol, isIndian){
   if(isIndian && !yahooSym.endsWith('.NS') && !yahooSym.endsWith('.BO')){
     yahooSym = yahooSym + '.NS';
   }
+
+  // Preferred path: your own serverless function does the Yahoo Finance call
+  // server-to-server, so there's no browser CORS involved at all. Set
+  // window.PRICE_PROXY_URL (e.g. in storage-bridge.js) to enable this —
+  // see supabase-functions/fetch-price/README.md for a deployable example.
+  if(typeof window !== 'undefined' && window.PRICE_PROXY_URL){
+    try{
+      const res = await fetch(`${window.PRICE_PROXY_URL}?symbol=${encodeURIComponent(yahooSym)}`);
+      if(res.ok){
+        const data = await res.json();
+        if(typeof data.price === 'number' && data.price > 0){
+          return {price: data.price, changePct: (typeof data.changePct === 'number') ? data.changePct : null};
+        }
+      }
+    }catch(e){ /* fall through to the public proxies below */ }
+  }
+
   const target = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1d&range=1d`;
   const proxies = [
     'https://api.allorigins.win/raw?url=',
@@ -405,10 +422,11 @@ function renderHoldings(){
     const avgLoss = losers.length > 0 ? losers.reduce((a,r)=>a+(r.realizedUSD||0),0)/losers.length : 0;
     const biggestWin = allSold.length ? Math.max(...allSold.map(r=>r.realizedUSD||0)) : 0;
     const biggestLoss = allSold.length ? Math.min(...allSold.map(r=>r.realizedUSD||0)) : 0;
+    const totalRealizedPct = totalCostBasisSold > 0 ? totalRealized / totalCostBasisSold : 0;
 
     kpiHtml = `
       <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
-        <div class="kpi-card ${totalRealized>=0?'c-teal':'c-danger'}"><div class="kpi-label">Total Realized P&L</div><div class="kpi-value">${totalRealized>=0?'+':''}${fmt$(totalRealized)}</div></div>
+        <div class="kpi-card ${totalRealized>=0?'c-teal':'c-danger'}"><div class="kpi-label">Total Realized P&L</div><div class="kpi-value">${totalRealized>=0?'+':''}${fmt$(totalRealized)}</div><div class="kpi-delta ${totalRealized>=0?'up':'down'}">${totalRealized>=0?'+':''}${pct(totalRealizedPct)}</div></div>
         <div class="kpi-card c-gold"><div class="kpi-label">Total Proceeds</div><div class="kpi-value">${fmt$(totalProceeds)}</div></div>
         <div class="kpi-card c-rust"><div class="kpi-label">Cost Basis (sold)</div><div class="kpi-value">${fmt$(totalCostBasisSold)}</div></div>
         <div class="kpi-card c-teal"><div class="kpi-label">Win Rate</div><div class="kpi-value">${winRate.toFixed(1)}%</div><div class="kpi-delta flat">${winners.length}W / ${losers.length}L of ${allSold.length}</div></div>
@@ -427,14 +445,16 @@ function renderHoldings(){
     const totalYtdStart = rows.reduce((a,r)=>a+((r.ytdValueUSD!==undefined?r.ytdValueUSD:r.ytdValue)||(r.investedUSD!==undefined?r.investedUSD:r.invested)),0);
     const totalPl       = totalCurrent - totalInvested;
     const totalYtdPl    = totalCurrent - totalYtdStart;
+    const totalPlPct    = totalInvested > 0 ? totalPl / totalInvested : 0;
+    const totalYtdPlPct = totalYtdStart > 0 ? totalYtdPl / totalYtdStart : 0;
     const fxRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : null;
     const fxSource = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? 'live' : 'updating...';
     kpiHtml = `
       <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
         <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value">${fmt$(totalInvested)}</div></div>
         <div class="kpi-card c-teal"><div class="kpi-label">Current Value</div><div class="kpi-value">${fmt$(totalCurrent)}</div></div>
-        <div class="kpi-card ${totalPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value">${totalPl>=0?'+':''}${fmt$(totalPl)}</div></div>
-        <div class="kpi-card ${totalYtdPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">YTD P&L</div><div class="kpi-value">${totalYtdPl>=0?'+':''}${fmt$(totalYtdPl)}</div></div>
+        <div class="kpi-card ${totalPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value">${totalPl>=0?'+':''}${fmt$(totalPl)}</div><div class="kpi-delta ${totalPl>=0?'up':'down'}">${totalPl>=0?'+':''}${pct(totalPlPct)}</div></div>
+        <div class="kpi-card ${totalYtdPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">YTD P&L</div><div class="kpi-value">${totalYtdPl>=0?'+':''}${fmt$(totalYtdPl)}</div><div class="kpi-delta ${totalYtdPl>=0?'up':'down'}">${totalYtdPl>=0?'+':''}${pct(totalYtdPlPct)}</div></div>
       </div>
       <div class="section-sub" style="margin-top:8px; margin-bottom:0; text-align:right;">
         ${fxRate ? `FX rate: <b style="color:var(--gold-soft);">1 USD = ${fxRate.toFixed(2)} INR</b> <span style="color:var(--text-faint);">(${fxSource})</span>` : '<span style="color:var(--text-faint);">Fetching FX rate...</span>'}

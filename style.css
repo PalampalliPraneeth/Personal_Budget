@@ -69,7 +69,7 @@ a{color:var(--gold-soft);}
   cursor:pointer; min-width:110px;
 }
 .selectbox::after{
-  content:"▾"; position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  content:"â–¾"; position:absolute; right:12px; top:50%; transform:translateY(-50%);
   color:var(--gold); pointer-events:none; font-size:11px;
 }
 .selectbox select:focus{outline:2px solid var(--gold); outline-offset:1px;}
@@ -301,7 +301,7 @@ table.ledger td.zero{color:var(--text-faint);}
 
 td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decoration-color:var(--gold); text-underline-offset:3px; cursor:help; }
 .notes-cell{ min-width:160px; text-align:left !important; color:var(--text-dim); font-family:var(--font-body) !important; font-size:12px !important; font-style:italic; }
-.notes-cell:empty::before{ content:'add a note…'; color:var(--text-faint); font-style:italic; }
+.notes-cell:empty::before{ content:'add a noteâ€¦'; color:var(--text-faint); font-style:italic; }
 .cell-tooltip{
   position:fixed; pointer-events:none; background:var(--bg-card-hi); border:1px solid var(--gold);
   color:var(--gold-soft); font-family:var(--font-mono); font-size:11.5px; padding:6px 10px; border-radius:6px;

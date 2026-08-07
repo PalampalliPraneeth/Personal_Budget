@@ -12,6 +12,8 @@
     cleanUrl = cleanUrl.slice(0, -'/rest/v1'.length).replace(/\/+$/, '');
   }
 
+window.PRICE_PROXY_URL = 'https://dkwdzvwaoxekicycednh.supabase.co/functions/v1/hyper-task';
+
   let sb = null;
   let useSupabase = false;
 

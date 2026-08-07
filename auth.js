@@ -50,9 +50,10 @@ function showPinOverlay(onSuccess){
   let entered = '';
   const dotsEl = ()=>overlay.querySelectorAll('.pin-dot');
   function updateDots(){ dotsEl().forEach((d,i)=> d.classList.toggle('filled', i<entered.length)); }
+  function cleanup(){ document.removeEventListener('keydown', onKeydown); overlay.remove(); }
   function tryPin(){
-    if(entered===ADMIN_PIN){ overlay.remove(); rememberSession('admin'); onSuccess('admin'); }
-    else if(entered===READONLY_PIN){ overlay.remove(); rememberSession('readonly'); onSuccess('readonly'); }
+    if(entered===ADMIN_PIN){ cleanup(); rememberSession('admin'); onSuccess('admin'); }
+    else if(entered===READONLY_PIN){ cleanup(); rememberSession('readonly'); onSuccess('readonly'); }
     else{
       overlay.querySelector('#pinError').textContent = 'Incorrect PIN — try again';
       entered=''; updateDots();
@@ -68,6 +69,26 @@ function showPinOverlay(onSuccess){
   });
   overlay.querySelector('[data-action="clear"]').addEventListener('click', ()=>{ entered=''; updateDots(); overlay.querySelector('#pinError').textContent='\u00a0'; });
   overlay.querySelector('[data-action="back"]').addEventListener('click', ()=>{ entered=entered.slice(0,-1); updateDots(); });
+
+  /* Physical keyboard: digits, Backspace, Escape (clear) */
+  function onKeydown(e){
+    if(e.key >= '0' && e.key <= '9'){
+      e.preventDefault();
+      if(entered.length>=4) return;
+      entered += e.key;
+      updateDots();
+      if(entered.length===4) tryPin();
+    } else if(e.key === 'Backspace'){
+      e.preventDefault();
+      entered = entered.slice(0,-1); updateDots();
+    } else if(e.key === 'Escape'){
+      e.preventDefault();
+      entered=''; updateDots(); overlay.querySelector('#pinError').textContent='\u00a0';
+    }
+  }
+  document.addEventListener('keydown', onKeydown);
+  overlay.tabIndex = -1;
+  overlay.focus();
 }
 
 function applyReadOnlyGuard(){

@@ -235,4 +235,25 @@ function renderExpenses(){
         }
       } }
   });
+
+  /* "All groups over the year" — stacked bar, one series per group across all 12 months */
+  destroyChart('expAll');
+  const allGroupsDatasets = groups.map((g,i) => ({
+    label: g.name,
+    data: groupTotals(g),
+    backgroundColor: PALETTE[i % PALETTE.length],
+    stack: 'expenses'
+  }));
+  charts.expAll = safeChart(document.getElementById('chartExpAll'), {
+    type: 'bar',
+    data: { labels: MONTHS, datasets: allGroupsDatasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 9, boxHeight: 9, font: { size: 10 } } } },
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, grid: { color: '#26332F' }, ticks: { callback: v => '$'+v } }
+      }
+    }
+  });
 }
