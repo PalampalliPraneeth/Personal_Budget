@@ -917,7 +917,13 @@ function renderHoldings(){
   if(filterInput){
     filterInput.addEventListener('input', (e)=>{
       state.holdingsFilter = e.target.value;
+      const selStart = e.target.selectionStart, selEnd = e.target.selectionEnd;
       renderHoldings();
+      const newInput = document.getElementById('hFilter');
+      if(newInput){
+        newInput.focus();
+        newInput.setSelectionRange(selStart, selEnd);
+      }
     });
   }
   const sortSelect = document.getElementById('hSort');
