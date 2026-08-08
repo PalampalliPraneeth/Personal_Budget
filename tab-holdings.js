@@ -50,7 +50,7 @@ function filterSnapshots(snaps, timeframe){
   }
   return snaps.filter(s => new Date(s.date) >= cutoff);
 }
-function recordPortfolioSnapshot(y){
+function recordPortfolioSnapshot(y, silent){
   ensureHoldingsMigration();
   const snaps = yearData(y).portfolioSnapshots || [];
   const today = new Date().toISOString().slice(0,10);
@@ -63,7 +63,7 @@ function recordPortfolioSnapshot(y){
   filtered.push({date: today, totalValue, totalInvested, totalPl: totalValue-totalInvested, holdings});
   yearData(y).portfolioSnapshots = filtered.slice(-365); // keep last year of daily snaps
   markDirty('holdings');
-  showToast('Snapshot recorded: '+today);
+  if(!silent) showToast('Snapshot recorded: '+today);
 }
 
 /* ---------- FX helpers ---------- */
@@ -952,7 +952,7 @@ function renderHoldings(){
         }
 
         markDirty();
-        if(updated > 0) await recordPriceRefreshNow();
+        if(updated > 0){ await recordPriceRefreshNow(); recordPortfolioSnapshot(y, true); }
         renderHoldings();
         showToast(`${updated} prices updated${failed>0 ? ', '+failed+' failed (CORS/manual needed)' : ''}`);
       });
