@@ -50,7 +50,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-Deno.serve(async (_req: Request) => {
+async function runRefresh() {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const sb = createClient(supabaseUrl, serviceKey);
@@ -63,10 +63,8 @@ Deno.serve(async (_req: Request) => {
     .maybeSingle();
 
   if (error || !row) {
-    return new Response(JSON.stringify({ error: 'No ledger data found for this LEDGER_ID' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    console.error('daily-price-refresh: no ledger data found for LEDGER_ID', LEDGER_ID, error);
+    return;
   }
 
   let DATA = row.data_json;
@@ -88,8 +86,9 @@ Deno.serve(async (_req: Request) => {
           h.dayChangePct = changePct;
           h.lastFetched = Date.now();
           updated++;
-        } catch (_e) {
+        } catch (e) {
           failed++;
+          console.error('daily-price-refresh: failed for', h.symbol, String(e));
         }
         await sleep(250); // stay polite to Yahoo's rate limits
       }
@@ -111,7 +110,19 @@ Deno.serve(async (_req: Request) => {
     { onConflict: 'user_id,data_key' },
   );
 
-  return new Response(JSON.stringify({ updated, failed }), {
+  // This is now the only place the final tally is visible — check this
+  // function's Logs tab in the dashboard, since the HTTP response to
+  // pg_cron was already sent before this finished.
+  console.log(`daily-price-refresh: done. updated=${updated} failed=${failed}`);
+}
+
+Deno.serve(async (_req: Request) => {
+  // Acknowledge immediately so pg_net's short timeout never trips, then do
+  // the actual (potentially slow) work in the background.
+  // @ts-ignore — EdgeRuntime is a Supabase-provided global, not a Deno type
+  EdgeRuntime.waitUntil(runRefresh());
+
+  return new Response(JSON.stringify({ status: 'started' }), {
     headers: { 'Content-Type': 'application/json' },
   });
 });
