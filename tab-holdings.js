@@ -73,6 +73,31 @@ async function ensureHoldingsFx(){
     await ensureFxRates();
   }
 }
+
+/* ---------- Last price refresh timestamp ---------- */
+/* Written by both the daily server-side refresh (see
+   supabase-functions/daily-price-refresh) and by a manual "Fetch live
+   prices" click, so the displayed time is accurate either way. */
+const PRICE_TIMESTAMP_KEY = 'ledger:pricesUpdatedAt:v1';
+let _priceRefreshTimestamp = undefined; // undefined = not loaded yet, null = loaded, none recorded
+async function ensurePriceRefreshTimestamp(){
+  if(_priceRefreshTimestamp !== undefined) return;
+  try{
+    const res = await window.storage.get(PRICE_TIMESTAMP_KEY, false);
+    _priceRefreshTimestamp = (res && res.value) ? res.value : null;
+  }catch(e){ _priceRefreshTimestamp = null; }
+}
+async function recordPriceRefreshNow(){
+  const nowIso = new Date().toISOString();
+  try{ await window.storage.set(PRICE_TIMESTAMP_KEY, nowIso, false); }catch(e){}
+  _priceRefreshTimestamp = nowIso;
+}
+function _formatPriceRefreshTimestamp(){
+  if(_priceRefreshTimestamp === undefined) return 'checking…';
+  if(_priceRefreshTimestamp === null) return 'never';
+  try{ return new Date(_priceRefreshTimestamp).toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'}); }
+  catch(e){ return 'unknown'; }
+}
 function _toUsd(val, currency){
   if(currency !== 'INR') return num(val);
   const r = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : 95.0;
@@ -412,6 +437,9 @@ function renderHoldings(){
   if(typeof ensureFxRates === 'function' && (!fxRates || !fxRates.INR)){
     ensureFxRates().then(() => { renderHoldings(); });
   }
+  if(_priceRefreshTimestamp === undefined){
+    ensurePriceRefreshTimestamp().then(() => { renderHoldings(); });
+  }
   if(!state.holdingsView) state.holdingsView = 'ALL';
   if(state.holdingsSubView === undefined) state.holdingsSubView = 'open';
   if(state.holdingsTypeFilter === undefined) state.holdingsTypeFilter = null; // null = All types
@@ -714,6 +742,7 @@ function renderHoldings(){
   const html = `
     <div class="section-title">Holdings · ${y}</div>
     <p class="section-sub">Every stock, mutual fund, ETF, index, and crypto you own. <b>All Platforms</b> shows the consolidated view. Click a platform pill to edit its individual holdings. YTD uses Jan 1 price (defaults to your avg cost if not set).</p>
+    <p class="section-sub" style="margin-top:-8px;">🕒 Prices last refreshed: <b style="color:var(--gold-soft);">${_formatPriceRefreshTimestamp()}</b> <span style="color:var(--text-faint);">(auto-refreshes daily on the server, even if you don't have this open)</span></p>
 
     ${kpiHtml}
 
@@ -922,7 +951,9 @@ function renderHoldings(){
           }
         }
 
-        markDirty(); renderHoldings();
+        markDirty();
+        if(updated > 0) await recordPriceRefreshNow();
+        renderHoldings();
         showToast(`${updated} prices updated${failed>0 ? ', '+failed+' failed (CORS/manual needed)' : ''}`);
       });
     }
