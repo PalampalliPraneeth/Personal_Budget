@@ -3,6 +3,7 @@
    ========================================================================= */
 let collapsedGroups = {};
 let expenseFullYearView = false;
+let editingGroupId = null; // tracks which group name is being edited
 
 function renderExpenses(){
   const y = state.year;
@@ -20,7 +21,7 @@ function renderExpenses(){
   const netAfterCard = incNow - expWithCard;
   const scopeLabel = state.month==='ALL' ? 'full year' : MONTHS[Number(state.month)];
 
-     // Data for the pie chart (current scope only, excludes "counted out" groups)
+  // Data for the pie chart (current scope only, excludes "counted out" groups)
   const pieGroups = groups
     .filter(g => !g.excludeFromTotal)
     .map(g => ({ name: g.name, total: sumRange(groupTotals(g), scopeMonths) }))
@@ -35,10 +36,22 @@ function renderExpenses(){
     const totalsAll = groupTotals(g);
     const totalsShown = monthsToShow.map(i=>totalsAll[i]);
     const collapsed = collapsedGroups[g.id];
+    const isEditing = editingGroupId === g.id;
+
     return `
     <div class="group-block ${collapsed?'collapsed':''}" data-group-id="${g.id}">
       <div class="group-head" data-toggle="${g.id}">
-        <h4><span class="g-caret">▾</span> ${g.name} ${g.excludeFromTotal?'<span class="debt-tag" style="margin-left:8px;">excluded from totals</span>':''}</h4>
+        <h4 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="g-caret">▾</span>
+          ${isEditing ? `
+            <input type="text" class="group-name-input" value="${g.name.replace(/"/g,'&quot;')}" data-group-input="${g.id}" style="background:var(--bg);color:var(--text);border:1px solid var(--gold);border-radius:6px;padding:4px 10px;font-family:var(--font-display);font-size:15px;font-weight:600;min-width:120px;max-width:260px;">
+            <span class="group-save" data-savegroup="${g.id}" title="Save name" style="cursor:pointer;color:var(--good);font-size:16px;user-select:none;">✓</span>
+          ` : `
+            <span class="group-name-text">${g.name}</span>
+            <span class="group-edit" data-editgroup="${g.id}" title="Rename group" style="cursor:pointer;color:var(--text-faint);font-size:13px;opacity:0.55;user-select:none;">✏️</span>
+          `}
+          ${g.excludeFromTotal?'<span class="debt-tag" style="margin-left:8px;">excluded from totals</span>':''}
+        </h4>
         <div class="g-total">
           <label style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); display:inline-flex; gap:6px; align-items:center; cursor:pointer; margin-right:14px;" onclick="event.stopPropagation()">
             <input type="checkbox" data-excltoggle="${g.id}" ${g.excludeFromTotal?'':'checked'}> counts in totals
@@ -179,7 +192,7 @@ function renderExpenses(){
   });
   document.querySelectorAll('[data-toggle]').forEach(el=>{
     el.addEventListener('click', (e)=>{
-      if(e.target.closest('[data-delgroup]')) return;
+      if(e.target.closest('[data-delgroup]') || e.target.closest('.group-edit') || e.target.closest('.group-save') || e.target.closest('.group-name-input')) return;
       const id = el.dataset.toggle;
       collapsedGroups[id] = !collapsedGroups[id];
       renderExpenses();
@@ -195,6 +208,53 @@ function renderExpenses(){
       }
     });
   });
+
+  /* ---- Group name editing: pencil -> input -> tick ---- */
+  document.querySelectorAll('[data-editgroup]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      editingGroupId = el.dataset.editgroup;
+      renderExpenses();
+      requestAnimationFrame(()=>{
+        const inp = document.querySelector(`[data-group-input="${editingGroupId}"]`);
+        if(inp){ inp.focus(); inp.select(); }
+      });
+    });
+  });
+
+  document.querySelectorAll('[data-savegroup]').forEach(el=>{
+    el.addEventListener('mousedown', (e)=>{
+      e.preventDefault(); // prevent input blur from firing so we handle save once
+      e.stopPropagation();
+      const id = el.dataset.savegroup;
+      const inp = document.querySelector(`[data-group-input="${id}"]`);
+      if(!inp) return;
+      const newName = inp.value.trim();
+      if(newName){
+        const g = groups.find(x=>x.id===id);
+        if(g && g.name !== newName){ g.name = newName; markDirty(); }
+      }
+      editingGroupId = null;
+      renderExpenses();
+    });
+  });
+
+  document.querySelectorAll('[data-group-input]').forEach(el=>{
+    el.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter'){ e.preventDefault(); el.blur(); }
+    });
+    el.addEventListener('blur', ()=>{
+      const id = el.dataset.groupInput;
+      const newName = el.value.trim();
+      if(newName){
+        const g = groups.find(x=>x.id===id);
+        if(g && g.name !== newName){ g.name = newName; markDirty(); }
+      }
+      editingGroupId = null;
+      renderExpenses();
+    });
+  });
+
   document.querySelectorAll('[data-addcat]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const gid = btn.dataset.addcat;
@@ -214,8 +274,8 @@ function renderExpenses(){
     markDirty(); renderExpenses();
   });
 
-    destroyChart('expPie');
-  const pieTotal = pieVals.reduce((a,b)=>a+b,0); // ← ADD THIS LINE
+  /* ---- Charts ---- */
+  const pieTotal = pieVals.reduce((a,b)=>a+b,0);
 
   destroyChart('expPie');
   charts.expPie = safeChart(document.getElementById('chartExpPie'), {
@@ -236,7 +296,6 @@ function renderExpenses(){
       } }
   });
 
-  /* "All groups over the year" — stacked bar, one series per group across all 12 months */
   destroyChart('expAll');
   const allGroupsDatasets = groups.map((g,i) => ({
     label: g.name,
