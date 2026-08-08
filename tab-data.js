@@ -89,7 +89,6 @@ function renderDataTab(){
       <div class="card-head"><h3>Housekeeping</h3></div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn" id="exportBtn2">Export current data (.json)</button>
-        <button class="btn danger-outline" id="resetBtn">Reset to empty</button>
       </div>
     </div>
   `;
@@ -104,11 +103,15 @@ function renderDataTab(){
   fi.addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) handleFile(f); });
 
   document.getElementById('exportBtn2').addEventListener('click', ()=>document.getElementById('exportBtn').click());
+  /* "Reset to empty" removed on purpose — it wiped and saved over the
+     entire DATA object (every tab, every year) behind a single confirm(),
+     with no undo beyond a manual export. If you ever want it back:
   document.getElementById('resetBtn').addEventListener('click', async ()=>{
     if(confirm('This wipes everything and resets to empty. Continue?')){
       DATA = buildDefaultData(); DATA.paymentPlan = buildDefaultPaymentPlan(); await persistData(true); showToast('Reset to empty'); refreshMonthOptions(); renderActive();
     }
   });
+  */
 
   function handleFile(file){
     const status = document.getElementById('importStatus');
