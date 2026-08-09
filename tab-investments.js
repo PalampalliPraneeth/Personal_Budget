@@ -87,8 +87,25 @@ function renderInvestments(){
   items.forEach(it => {
     it.m.forEach((v, i) => { totalsUSD[i] += toUsd(it, v); });
   });
-  const currentTotalUSD = items.reduce((a, it) => a + toUsd(it, 'currentValue'), 0);
-  const investedTotalUSD = items.reduce((a, it) => a + toUsd(it, 'invested'), 0);
+  // For any platform that has real holdings tracked in the Holdings tab, pull its
+  // current/invested value FROM there instead of the old manually-typed fields, so
+  // this stays in sync automatically rather than needing separate upkeep.
+  function dynamicValuesFor(it){
+    const platRows = (it.holdings && it.holdings.length) ? platformHoldings(y, it.id) : [];
+    if(!platRows.length) return null;
+    return {
+      currentValue: platRows.reduce((a,r)=>a+r.currentValueUSD,0),
+      invested: platRows.reduce((a,r)=>a+r.investedUSD,0),
+    };
+  }
+  const currentTotalUSD = items.reduce((a, it) => {
+    const dyn = dynamicValuesFor(it);
+    return a + (dyn ? dyn.currentValue : toUsd(it, 'currentValue'));
+  }, 0);
+  const investedTotalUSD = items.reduce((a, it) => {
+    const dyn = dynamicValuesFor(it);
+    return a + (dyn ? dyn.invested : toUsd(it, 'invested'));
+  }, 0);
   const gainUSD = currentTotalUSD - investedTotalUSD;
 
   /* ---- Build rows ---- */
@@ -110,13 +127,28 @@ function renderInvestments(){
     }).join('');
 
     const yearTotal = it.m.reduce((a, v) => a + toUsd(it, v), 0);
-    const cvDisplay = displayCell(it, it.currentValue, rates);
-    const invDisplay = displayCell(it, it.invested, rates);
-    const cvTip = it.currency === 'INR' ? fmtInr(it.currentValue) : null;
-    const invTip = it.currency === 'INR' ? fmtInr(it.invested) : null;
+    const dyn = dynamicValuesFor(it);
+
+    /* Name is clickable if holdings exist; Current/Invested are plain display */
+    const nameLink = dyn
+      ? `<span style="cursor:pointer;color:var(--gold-soft);font-weight:500;" data-golink="${it.id}" data-tip="Click to view/edit ${it.name}'s positions in Holdings" class="has-tip">${it.name}</span>`
+      : it.name;
+
+    let cvCell, invCell;
+    if(dyn){
+      cvCell = `<td style="font-weight:600;">${fmt$(dyn.currentValue,2)}</td>`;
+      invCell = `<td style="font-weight:600;">${fmt$(dyn.invested,2)}</td>`;
+    } else {
+      const cvDisplay = displayCell(it, it.currentValue, rates);
+      const invDisplay = displayCell(it, it.invested, rates);
+      const cvTip = it.currency === 'INR' ? fmtInr(it.currentValue) : null;
+      const invTip = it.currency === 'INR' ? fmtInr(it.invested) : null;
+      cvCell = `<td class="editable ${cvTip?'has-tip':''}" contenteditable="true" data-field="currentValue" data-id="${it.id}" ${cvTip?`data-tip="${cvTip}"`:''} data-raw="${it.currentValue||0}">${cvDisplay}</td>`;
+      invCell = `<td class="editable ${invTip?'has-tip':''}" contenteditable="true" data-field="invested" data-id="${it.id}" ${invTip?`data-tip="${invTip}"`:''} data-raw="${it.invested||0}">${invDisplay}</td>`;
+    }
 
     return catHeaderRow + `<tr data-row-id="${it.id}">
-      <td>${it.name} <span class="row-del" data-del="${it.id}">✕</span></td>
+      <td>${nameLink} <span class="row-del" data-del="${it.id}">✕</span></td>
       <td>
         <select data-catsel="${it.id}" style="background:var(--bg-card-hi); color:var(--gold-soft); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11.5px; padding:3px 4px;">
           ${INVEST_CATS.map(c => `<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}
@@ -130,8 +162,8 @@ function renderInvestments(){
       </td>
       ${cells}
       <td style="font-weight:600;">${fmt$(yearTotal,2)}</td>
-      <td class="editable ${cvTip?'has-tip':''}" contenteditable="true" data-field="currentValue" data-id="${it.id}" ${cvTip?`data-tip="${cvTip}"`:''} data-raw="${it.currentValue||0}">${cvDisplay}</td>
-      <td class="editable ${invTip?'has-tip':''}" contenteditable="true" data-field="invested" data-id="${it.id}" ${invTip?`data-tip="${invTip}"`:''} data-raw="${it.invested||0}">${invDisplay}</td>
+      ${cvCell}
+      ${invCell}
     </tr>`;
   }).join('');
 
@@ -145,7 +177,7 @@ function renderInvestments(){
   /* ---- HTML ---- */
   const html = `
     <div class="section-title">Investments · ${y}</div>
-    <p class="section-sub">Every holding's monthly contribution, plus current value vs. what you've put in. <b style="color:var(--teal-soft)">Indian Stocks marked "INR" are auto-converted to USD.</b> Hover any converted cell to see the original amount. Rates fetched live (cached 1 hr).</p>
+    <p class="section-sub">Every holding's monthly contribution, plus current value vs. what you've put in. <b style="color:var(--teal-soft)">Indian Stocks marked "INR" are auto-converted to USD.</b> Hover any converted cell to see the original amount. Rates fetched live (cached 1 hr). <b style="color:var(--gold-soft)">Click any platform name</b> that has Holdings tracked to jump straight to its positions.</p>
 
     <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
       <div class="kpi-card c-teal"><div class="kpi-label">Current Portfolio Value (USD)</div><div class="kpi-value">${fmt$(currentTotalUSD)}</div></div>
@@ -238,6 +270,16 @@ function renderInvestments(){
       const item = items.find(x=>x.id===sel.dataset.currency);
       item.currency = sel.value;
       markDirty(); renderInvestments();
+    });
+  });
+
+  document.getElementById('investBody').querySelectorAll('[data-golink]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const platformId = el.dataset.golink;
+      state.holdingsView = platformId;
+      state.holdingsSubView = 'open';
+      const holdingsTabBtn = document.querySelector('.tab-btn[data-tab="holdings"]');
+      if(holdingsTabBtn) holdingsTabBtn.click();
     });
   });
 

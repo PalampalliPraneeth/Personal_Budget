@@ -523,7 +523,11 @@ function renderHoldings(){
     const totalPl       = totalCurrent - totalInvested;
     const totalYtdPl    = totalCurrent - totalYtdStart;
     const totalPlPct    = totalInvested > 0 ? totalPl / totalInvested : 0;
-    const totalYtdPlPct = totalYtdStart > 0 ? totalYtdPl / totalYtdStart : 0;
+    // const totalYtdPlPct = totalYtdStart > 0 ? totalYtdPl / totalYtdStart : 0; // superseded by Day Change P&L below
+    const totalDayPl    = rows.reduce((a,r)=>a+(r.dayPLUSD||0),0);
+    const totalDayPrevValue = totalCurrent - totalDayPl; // portfolio value as of yesterday's close
+    const totalDayPlPct = totalDayPrevValue > 0 ? totalDayPl / totalDayPrevValue : 0;
+    const anyDayDataKnown = rows.some(r => r.dayChangePct !== null && r.dayChangePct !== undefined);
     const fxRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : null;
     const fxSource = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? 'live' : 'updating...';
     kpiHtml = `
@@ -531,7 +535,8 @@ function renderHoldings(){
         <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value">${fmt$(totalInvested)}</div></div>
         <div class="kpi-card c-teal"><div class="kpi-label">Current Value</div><div class="kpi-value">${fmt$(totalCurrent)}</div></div>
         <div class="kpi-card ${totalPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value">${totalPl>=0?'+':''}${fmt$(totalPl)}</div><div class="kpi-delta ${totalPl>=0?'up':'down'}">${totalPl>=0?'+':''}${pct(totalPlPct)}</div></div>
-        <div class="kpi-card ${totalYtdPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">YTD P&L</div><div class="kpi-value">${totalYtdPl>=0?'+':''}${fmt$(totalYtdPl)}</div><div class="kpi-delta ${totalYtdPl>=0?'up':'down'}">${totalYtdPl>=0?'+':''}${pct(totalYtdPlPct)}</div></div>
+        <!-- YTD P&L card removed here — replaced by Day Change P&L below -->
+        <div class="kpi-card ${!anyDayDataKnown?'':(totalDayPl>=0?'c-teal':'c-danger')}"><div class="kpi-label">Day Change P&L</div><div class="kpi-value">${anyDayDataKnown ? (totalDayPl>=0?'+':'')+fmt$(totalDayPl) : '—'}</div><div class="kpi-delta ${totalDayPl>=0?'up':'down'}">${anyDayDataKnown ? (totalDayPl>=0?'+':'')+pct(totalDayPlPct) : 'Click Fetch live prices'}</div></div>
       </div>
       <div class="section-sub" style="margin-top:8px; margin-bottom:0; text-align:right;">
         ${fxRate ? `FX rate: <b style="color:var(--gold-soft);">1 USD = ${fxRate.toFixed(2)} INR</b> <span style="color:var(--text-faint);">(${fxSource})</span>` : '<span style="color:var(--text-faint);">Fetching FX rate...</span>'}
