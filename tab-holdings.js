@@ -230,8 +230,9 @@ function aggregateAllHoldings(y){
         symbol: sym, name: h.name || sym, type: h.type || 'stock',
         qty: 0, invested: 0, currentValue: 0, ytdStartValue: 0,
         platforms: [], prices: [], avgPrices: [], ytdPrices: [],
-        dayPLUSD: 0, dayPLKnown: false
+        dayPLUSD: 0, dayPLKnown: false, regions: new Set()
       };
+      map[sym].regions.add(isINR ? 'IN' : 'US');
       const q = num(h.qty);
       const avgUSD = _toUsd(h.avgPrice, isINR ? 'INR' : 'USD');
       const curUSD = _toUsd(h.currentPrice, isINR ? 'INR' : 'USD');
@@ -262,6 +263,7 @@ function aggregateAllHoldings(y){
     h.ytdPl = h.currentValue - h.ytdStartValue;
     h.ytdPct = h.ytdStartValue > 0 ? h.ytdPl / h.ytdStartValue : 0;
     h.platforms = [...new Set(h.platforms)];
+    h.regions = [...h.regions];
     const prevTotalUSD = h.currentValue - h.dayPLUSD;
     h.dayChangePct = (h.dayPLKnown && prevTotalUSD > 0) ? (h.dayPLUSD / prevTotalUSD) * 100 : null;
     h.dayChgPerShareUSD = (h.dayPLKnown && h.qty > 0) ? h.dayPLUSD / h.qty : null;
@@ -460,6 +462,10 @@ function renderHoldings(){
     rows = rows.filter(r => activeTypes.includes(r.type));
     soldGroups = soldGroups.map(g => ({...g, rows: g.rows.filter(r => activeTypes.includes(r.type))})).filter(g => g.rows.length > 0);
   }
+  if(state.holdingsRegion === undefined) state.holdingsRegion = 'all';
+  if(isAll && state.holdingsRegion !== 'all'){
+    rows = rows.filter(r => r.regions && r.regions.includes(state.holdingsRegion));
+  }
   const showSold = state.holdingsSubView === 'sold';
 
   const filterText = (state.holdingsFilter || '').toLowerCase().trim();
@@ -483,6 +489,19 @@ function renderHoldings(){
       default: return b.currentValue - a.currentValue;
     }
   });
+
+  /* ---- Pagination (All Platforms table only, 15 per page) ---- */
+  const HOLDINGS_PAGE_SIZE = 15;
+  let pageRows = filteredRows;
+  let holdingsTotalPages = 1;
+  if(isAll){
+    holdingsTotalPages = Math.max(1, Math.ceil(filteredRows.length / HOLDINGS_PAGE_SIZE));
+    if(state.holdingsPage === undefined) state.holdingsPage = 1;
+    if(state.holdingsPage > holdingsTotalPages) state.holdingsPage = holdingsTotalPages;
+    if(state.holdingsPage < 1) state.holdingsPage = 1;
+    const pageStart = (state.holdingsPage-1) * HOLDINGS_PAGE_SIZE;
+    pageRows = filteredRows.slice(pageStart, pageStart + HOLDINGS_PAGE_SIZE);
+  }
   
   /* ---- KPIs: OPEN vs SOLD view ---- */
   let kpiHtml = '';
@@ -572,6 +591,18 @@ function renderHoldings(){
     </div>
   `;
 
+  /* ---- Region toggle (All Platforms view only — a single platform is already one region) ---- */
+  const regionToggle = !isAll ? '' : (() => {
+    const inCount = allRows.filter(r => r.regions && r.regions.includes('IN')).length;
+    const usCount = allRows.filter(r => r.regions && r.regions.includes('US')).length;
+    return `
+    <div class="seg-toggle">
+      <button class="seg-btn ${state.holdingsRegion==='all'?'active':''}" data-region="all">🌍 All</button>
+      <button class="seg-btn ${state.holdingsRegion==='IN'?'active':''}" data-region="IN">🇮🇳 India <span class="seg-count">${inCount}</span></button>
+      <button class="seg-btn ${state.holdingsRegion==='US'?'active':''}" data-region="US">🇺🇸 USA <span class="seg-count">${usCount}</span></button>
+    </div>`;
+  })();
+
   /* ---- Type filter (checkbox dropdown, filters everything on the page) ---- */
   const activeTypesForUI = state.holdingsTypeFilter === null ? HOLDING_TYPES : state.holdingsTypeFilter;
   const typeFilterPanelHtml = `
@@ -615,7 +646,7 @@ function renderHoldings(){
     : `<tr><th>Symbol</th><th>Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year — hover a row's value to see the exact baseline" class="has-tip">YTD P&L</th><th></th></tr>`;
 
   /* ---- OPEN table body ---- */
-  const tbody = filteredRows.map(r => {
+  const tbody = pageRows.map(r => {
     const plColor = (v) => v>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
     if(isAll){
       const dayColor = r.dayChangePct===null ? 'var(--text-dim)' : (r.dayChangePct>=0 ? 'var(--good)' : 'var(--danger)');
@@ -763,7 +794,10 @@ function renderHoldings(){
     ${chartSection}
 
     ${pillHtml}
-    ${subToggle}
+    <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
+      ${subToggle}
+      ${regionToggle}
+    </div>
 
     ${showSold ? soldSection : `
     ${toolbar}
@@ -788,15 +822,22 @@ function renderHoldings(){
             <option value="dayplAsc" ${sortMode==='dayplAsc'?'selected':''}>Sort: Day P&L (low→high)</option>
           </select>
         </div>
-        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);">Showing ${filteredRows.length} of ${rows.length}</span>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);">${isAll && holdingsTotalPages>1 ? `Showing ${pageRows.length ? (state.holdingsPage-1)*HOLDINGS_PAGE_SIZE+1 : 0}–${(state.holdingsPage-1)*HOLDINGS_PAGE_SIZE+pageRows.length} of ${filteredRows.length}` : `Showing ${filteredRows.length} of ${rows.length}`}</span>
       </div>
       ${typeFilterPanelHtml}
       <div class="table-scroll">
         <table class="ledger">
           <thead>${thead}</thead>
-            <tbody id="holdingsBody">${filteredRows.length ? tbody : '<tr><td colspan="13" style="color:var(--text-faint);text-align:center;padding:20px;">No holdings match your filter.</td></tr>'}</tbody>
+            <tbody id="holdingsBody">${pageRows.length ? tbody : '<tr><td colspan="13" style="color:var(--text-faint);text-align:center;padding:20px;">No holdings match your filter.</td></tr>'}</tbody>
         </table>
       </div>
+      ${isAll && holdingsTotalPages>1 ? `
+      <div style="display:flex; justify-content:center; align-items:center; gap:16px; margin-top:16px; font-family:var(--font-mono); font-size:12.5px;">
+        <button class="btn small" id="holdPagePrev" ${state.holdingsPage<=1?'disabled':''}>‹ Prev</button>
+        <span style="color:var(--text-dim);">Page <b style="color:var(--gold-soft);">${state.holdingsPage}</b> of ${holdingsTotalPages}</span>
+        <button class="btn small" id="holdPageNext" ${state.holdingsPage>=holdingsTotalPages?'disabled':''}>Next ›</button>
+      </div>
+      ` : ''}
       ${addForm}
     </div>
     `}
@@ -807,6 +848,13 @@ function renderHoldings(){
   document.querySelectorAll('[data-subview]').forEach(b => b.addEventListener('click', ()=>{
     state.holdingsSubView = b.dataset.subview; renderHoldings();
   }));
+  document.querySelectorAll('[data-region]').forEach(b => b.addEventListener('click', ()=>{
+    state.holdingsRegion = b.dataset.region; state.holdingsPage = 1; renderHoldings();
+  }));
+  const pagePrevBtn = document.getElementById('holdPagePrev');
+  if(pagePrevBtn) pagePrevBtn.addEventListener('click', ()=>{ state.holdingsPage = Math.max(1, state.holdingsPage-1); renderHoldings(); });
+  const pageNextBtn = document.getElementById('holdPageNext');
+  if(pageNextBtn) pageNextBtn.addEventListener('click', ()=>{ state.holdingsPage = state.holdingsPage+1; renderHoldings(); });
 
   /* ---- Type filter handlers ---- */
   const typeFilterTh = document.getElementById('typeFilterTh');
@@ -816,6 +864,7 @@ function renderHoldings(){
   const typeFilterAll = document.getElementById('typeFilterAll');
   if(typeFilterAll) typeFilterAll.addEventListener('change', ()=>{
     state.holdingsTypeFilter = typeFilterAll.checked ? null : [];
+    state.holdingsPage = 1;
     renderHoldings();
   });
   document.querySelectorAll('.typeFilterBox').forEach(cb => cb.addEventListener('change', ()=>{
@@ -823,6 +872,7 @@ function renderHoldings(){
     if(cb.checked){ if(!sel.includes(cb.value)) sel.push(cb.value); }
     else { sel = sel.filter(t => t !== cb.value); }
     state.holdingsTypeFilter = sel;
+    state.holdingsPage = 1;
     renderHoldings();
   }));
 
@@ -1008,6 +1058,7 @@ function renderHoldings(){
   if(filterInput){
     filterInput.addEventListener('input', (e)=>{
       state.holdingsFilter = e.target.value;
+      state.holdingsPage = 1;
       const selStart = e.target.selectionStart, selEnd = e.target.selectionEnd;
       renderHoldings();
       const newInput = document.getElementById('hFilter');
@@ -1021,6 +1072,7 @@ function renderHoldings(){
   if(sortSelect){
     sortSelect.addEventListener('change', (e)=>{
       state.holdingsSort = e.target.value;
+      state.holdingsPage = 1;
       renderHoldings();
     });
   }
