@@ -80,9 +80,11 @@ async function fetchUsdInrRate(): Promise<number> {
    normalization. */
 function computeYearSnapshot(yd: any, fxRate: number) {
   const map: Record<string, { value: number; invested: number; qty: number; price: number }> = {};
+  const platforms: Record<string, { totalValue: number; totalInvested: number; totalPl: number }> = {};
   let totalValue = 0, totalInvested = 0;
   for (const inv of yd?.investments || []) {
     const isINR = inv.currency === 'INR';
+    let platValue = 0, platInvested = 0;
     for (const h of inv.holdings || []) {
       if (!h.symbol || h.status === 'closed') continue;
       const q = Number(h.qty) || 0;
@@ -92,14 +94,17 @@ function computeYearSnapshot(yd: any, fxRate: number) {
       const value = q * curUSD, invested = q * avgUSD;
       totalValue += value;
       totalInvested += invested;
+      platValue += value;
+      platInvested += invested;
       if (!map[sym]) map[sym] = { value: 0, invested: 0, qty: 0, price: curUSD };
       map[sym].value += value;
       map[sym].invested += invested;
       map[sym].qty += q;
       map[sym].price = curUSD;
     }
+    if (inv.id) platforms[inv.id] = { totalValue: platValue, totalInvested: platInvested, totalPl: platValue - platInvested };
   }
-  return { totalValue, totalInvested, totalPl: totalValue - totalInvested, holdings: map };
+  return { totalValue, totalInvested, totalPl: totalValue - totalInvested, holdings: map, platforms };
 }
 
 function recordSnapshotsForAllYears(DATA: any, fxRate: number) {
