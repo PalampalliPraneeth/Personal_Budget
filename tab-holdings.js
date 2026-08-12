@@ -27,6 +27,52 @@ function nextRecurringDate(daysOfMonth){
   }
   return null;
 }
+const RECUR_FREQ_LABEL = {
+  daily: 'Daily', weekly: 'Weekly', biweekly: 'Every 2 weeks',
+  monthly: 'Monthly', quarterly: 'Quarterly', daysOfMonth: null // built from daysOfMonth instead
+};
+/* Old plans saved before frequency types existed only ever had daysOfMonth —
+   treat those as frequencyType 'daysOfMonth' automatically, no migration needed. */
+function _normalizedRecurring(r){
+  if(!r) return null;
+  return { ...r, frequencyType: r.frequencyType || ((r.daysOfMonth && r.daysOfMonth.length) ? 'daysOfMonth' : 'monthly') };
+}
+function recurringScheduleLabel(r){
+  const norm = _normalizedRecurring(r);
+  if(!norm) return '—';
+  if(norm.frequencyType === 'daysOfMonth') return (norm.daysOfMonth||[]).map(_ordinal).join(', ');
+  return RECUR_FREQ_LABEL[norm.frequencyType] || norm.frequencyType;
+}
+/* Unified "what's the next date this fires" for every frequency type,
+   matching what Robinhood (daily/weekly/biweekly/monthly, anchored to a
+   start date) and AngelOne (daily/weekly/monthly SIPs) actually offer. */
+function nextRecurringDateForPlan(r){
+  const norm = _normalizedRecurring(r);
+  if(!norm) return null;
+  if(norm.frequencyType === 'daysOfMonth') return nextRecurringDate(norm.daysOfMonth);
+  if(!norm.startDate) return null;
+  const start = new Date(norm.startDate+'T00:00:00'); start.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  if(norm.frequencyType === 'monthly' || norm.frequencyType === 'quarterly'){
+    const monthStep = norm.frequencyType === 'quarterly' ? 3 : 1;
+    const anchorDay = start.getDate();
+    for(let k=0; k<1000; k++){
+      const y = start.getFullYear(), m = start.getMonth() + k*monthStep;
+      const day = _clampDayOfMonth(anchorDay, y, m);
+      const candidate = new Date(y, m, day);
+      candidate.setHours(0,0,0,0);
+      if(candidate >= today) return candidate.toISOString().slice(0,10);
+    }
+    return null;
+  }
+  const stepDays = norm.frequencyType === 'weekly' ? 7 : norm.frequencyType === 'biweekly' ? 14 : 1; // 'daily' falls through to 1
+  if(start >= today) return start.toISOString().slice(0,10);
+  const diffDays = Math.floor((today - start) / (1000*60*60*24));
+  const stepsNeeded = Math.ceil(diffDays / stepDays);
+  const next = new Date(start);
+  next.setDate(next.getDate() + stepsNeeded*stepDays);
+  return next.toISOString().slice(0,10);
+}
 function collectRecurringRows(y, platformId){ // platformId falsy = all platforms
   ensureHoldingsMigration();
   const investments = yearData(y).investments || [];
@@ -36,18 +82,21 @@ function collectRecurringRows(y, platformId){ // platformId falsy = all platform
     if(platformId && inv.id !== platformId) return;
     const isINR = inv.currency === 'INR';
     (inv.holdings || []).forEach(h => {
-      if(!h.recurring || !h.recurring.active || !h.recurring.daysOfMonth || !h.recurring.daysOfMonth.length) return;
-      const nextDate = nextRecurringDate(h.recurring.daysOfMonth);
-      const amount = num(h.recurring.amount);
+      if(!h.recurring || !h.recurring.active) return;
+      const norm = _normalizedRecurring(h.recurring);
+      const hasSchedule = norm.frequencyType === 'daysOfMonth' ? (norm.daysOfMonth && norm.daysOfMonth.length) : !!norm.startDate;
+      if(!hasSchedule) return;
+      const nextDate = nextRecurringDateForPlan(norm);
+      const amount = num(norm.amount);
       const estShares = num(h.currentPrice) > 0 ? amount / num(h.currentPrice) : 0;
-      const alreadyConfirmed = !!(nextDate && h.recurring.lastConfirmedFor === nextDate);
+      const alreadyConfirmed = !!(nextDate && norm.lastConfirmedFor === nextDate);
       const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
       const tip = (v) => isINR ? fmtInr(v) : null;
       out.push({
         platformId: inv.id, platformName: inv.name, holdingId: h.id,
         symbol: h.symbol, name: h.name,
         amount, dAmount: fmt(amount), tAmount: tip(amount),
-        daysOfMonth: h.recurring.daysOfMonth.slice().sort((a,b)=>a-b),
+        scheduleLabel: recurringScheduleLabel(norm),
         nextDate, estShares, alreadyConfirmed
       });
     });
@@ -60,8 +109,10 @@ function openRecurringModal(h, onSave, onRemove){
   const old = document.getElementById('recurModalOverlay');
   if(old) old.remove();
 
-  const existing = h.recurring || {};
+  const existing = _normalizedRecurring(h.recurring) || {};
   const selectedDays = new Set(existing.daysOfMonth || []);
+  const todayISO = new Date().toISOString().slice(0,10);
+  const hasExistingPlan = !!(h.recurring && h.recurring.active);
 
   const overlay = document.createElement('div');
   overlay.id = 'recurModalOverlay';
@@ -69,20 +120,34 @@ function openRecurringModal(h, onSave, onRemove){
   const dayGrid = Array.from({length:31}, (_,i)=>i+1).map(d=>
     `<button type="button" class="recur-day-btn ${selectedDays.has(d)?'active':''}" data-day="${d}">${d}</button>`
   ).join('');
+  const freqOptions = [
+    ['daily','Daily'], ['weekly','Weekly'], ['biweekly','Every 2 weeks (biweekly)'],
+    ['monthly','Monthly'], ['quarterly','Quarterly'], ['daysOfMonth','Specific day(s) of month']
+  ];
   overlay.innerHTML = `
     <div class="modal-card" style="width:420px;">
       <h3>🔁 Recurring buy — ${h.symbol}</h3>
-      <p class="modal-sub">Pick the day(s) of the month this recurs on, and the amount each time. This is purely a tracker — nothing places an order automatically.</p>
+      <p class="modal-sub">Same frequency options Robinhood and AngelOne offer for scheduled buys/SIPs, plus specific-day(s) for anything more custom. Purely a tracker — nothing places an order automatically.</p>
       <div class="modal-field">
         <label>Amount per buy</label>
         <input type="number" id="recurAmount" value="${existing.amount||''}" min="0" step="any">
       </div>
       <div class="modal-field">
+        <label>Frequency</label>
+        <select id="recurFreqType" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          ${freqOptions.map(([v,label])=>`<option value="${v}" ${existing.frequencyType===v?'selected':''}>${label}</option>`).join('')}
+        </select>
+      </div>
+      <div class="modal-field" id="recurStartDateWrap" style="display:${existing.frequencyType==='daysOfMonth'?'none':'block'};">
+        <label>Start date</label>
+        <input type="date" id="recurStartDate" value="${existing.startDate||todayISO}">
+      </div>
+      <div class="modal-field" id="recurDaysWrap" style="display:${existing.frequencyType==='daysOfMonth'?'block':'none'};">
         <label>Day(s) of month <span class="hint">tap to toggle, pick as many as you need</span></label>
         <div id="recurDayGrid" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">${dayGrid}</div>
       </div>
       <div class="modal-actions" style="justify-content:space-between;">
-        ${(existing.daysOfMonth && existing.daysOfMonth.length) ? '<button class="btn danger-outline" id="recurRemoveBtn">Remove plan</button>' : '<span></span>'}
+        ${hasExistingPlan ? '<button class="btn danger-outline" id="recurRemoveBtn">Remove plan</button>' : '<span></span>'}
         <div style="display:flex; gap:10px;">
           <button class="btn" id="recurCancelBtn">Cancel</button>
           <button class="btn primary" id="recurSaveBtn">Save</button>
@@ -91,6 +156,15 @@ function openRecurringModal(h, onSave, onRemove){
     </div>
   `;
   document.body.appendChild(overlay);
+
+  const freqSelect = overlay.querySelector('#recurFreqType');
+  const startDateWrap = overlay.querySelector('#recurStartDateWrap');
+  const daysWrap = overlay.querySelector('#recurDaysWrap');
+  freqSelect.addEventListener('change', ()=>{
+    const isDaysOfMonth = freqSelect.value === 'daysOfMonth';
+    startDateWrap.style.display = isDaysOfMonth ? 'none' : 'block';
+    daysWrap.style.display = isDaysOfMonth ? 'block' : 'none';
+  });
 
   overlay.querySelectorAll('.recur-day-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -112,9 +186,17 @@ function openRecurringModal(h, onSave, onRemove){
   overlay.querySelector('#recurSaveBtn').addEventListener('click', ()=>{
     const amount = parseFloat(document.getElementById('recurAmount').value);
     if(!amount || amount<=0){ document.getElementById('recurAmount').focus(); return; }
-    if(!selectedDays.size){ showToast('Pick at least one day of the month'); return; }
-    close();
-    onSave(amount, [...selectedDays].sort((a,b)=>a-b));
+    const frequencyType = freqSelect.value;
+    if(frequencyType === 'daysOfMonth'){
+      if(!selectedDays.size){ showToast('Pick at least one day of the month'); return; }
+      close();
+      onSave({ frequencyType, amount, daysOfMonth: [...selectedDays].sort((a,b)=>a-b) });
+    } else {
+      const startDate = document.getElementById('recurStartDate').value;
+      if(!startDate){ document.getElementById('recurStartDate').focus(); return; }
+      close();
+      onSave({ frequencyType, amount, startDate });
+    }
   });
 
   const firstDayBtn = overlay.querySelector('.recur-day-btn');
@@ -446,6 +528,7 @@ function aggregateAllHoldings(y){
       map[sym].prices.push(curUSD);
       map[sym].avgPrices.push(avgUSD);
       map[sym].ytdPrices.push(ytdUSD);
+      map[sym].anyPriceOk = map[sym].anyPriceOk || !h.priceFetchFailed;
       if(h.dayChangePct !== null && h.dayChangePct !== undefined && num(h.currentPrice) > 0){
         // Derive $/share change from % + current price, then convert to USD.
         const prevCloseLocal = num(h.currentPrice) / (1 + h.dayChangePct/100);
@@ -458,6 +541,7 @@ function aggregateAllHoldings(y){
   return Object.values(map).map(h => {
     h.avgPrice = h.qty > 0 ? h.invested / h.qty : 0;
     h.currentPrice = h.prices.length ? h.prices.reduce((a,b)=>a+b,0)/h.prices.length : 0;
+    h.priceUnknown = !h.anyPriceOk;
     h.ytdStartPrice = h.qty > 0 ? h.ytdStartValue / h.qty : 0;
     h.plNet = h.currentValue - h.invested;
     h.plPct = h.invested > 0 ? h.plNet / h.invested : 0;
@@ -492,8 +576,9 @@ function platformHoldings(y, platformId){
       const plUSD       = isINR ? pl / fx : pl;
       const ytdPlUSD    = isINR ? ytdPl / fx : ytdPl;
       const dayChg = h.dayChangePct !== null && h.dayChangePct !== undefined ? h.dayChangePct : null;
-      const dayChgStr = dayChg !== null ? (dayChg >= 0 ? '+' : '') + dayChg.toFixed(2) + '%' : '—';
-      const dayChgColor = dayChg > 0 ? 'var(--good)' : dayChg < 0 ? 'var(--danger)' : 'var(--text-dim)';
+      const priceFailed = !!h.priceFetchFailed;
+      const dayChgStr = priceFailed ? '—' : (dayChg !== null ? (dayChg >= 0 ? '+' : '') + dayChg.toFixed(2) + '%' : '—');
+      const dayChgColor = priceFailed ? 'var(--text-dim)' : (dayChg > 0 ? 'var(--good)' : dayChg < 0 ? 'var(--danger)' : 'var(--text-dim)');
       const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
       const tip = (v) => isINR ? fmtInr(v) : null;
       let dayPLLocal = null, dayPLUSD = null, dayChgPerShareLocal = null;
@@ -516,9 +601,9 @@ function platformHoldings(y, platformId){
         dayPLUSD, dDayPl: dayPLLocal !== null ? fmt(dayPLLocal) : '—', tDayPl: dayPLLocal !== null ? tip(dayPLLocal) : null,
         dDayChgAmt: dayChgPerShareLocal !== null ? fmt(dayChgPerShareLocal) : null,
         tDayChgAmt: dayChgPerShareLocal !== null ? tip(dayChgPerShareLocal) : null,
-        dAvg: fmt(avg), dCur: fmt(cur), dYtd: fmt(ytd),
+        dAvg: fmt(avg), dCur: priceFailed ? '—' : fmt(cur), dYtd: fmt(ytd),
         dInv: fmt(invested), dVal: fmt(current), dPl: fmt(pl), dYtdPl: fmt(ytdPl),
-        tAvg: tip(avg), tCur: tip(cur), tYtd: tip(ytd),
+        tAvg: tip(avg), tCur: priceFailed ? 'Last fetch failed — showing no price rather than a stale one' : tip(cur), tYtd: tip(ytd),
         tInv: tip(invested), tVal: tip(current), tPl: tip(pl), tYtdPl: tip(ytdPl)
       };
     }).sort((a,b) => b.currentValue - a.currentValue);
@@ -763,8 +848,8 @@ function renderHoldings(){
 
     kpiHtml = `
       <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
-        <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value" ${tipAttr(totalInvested)}>${fmt$(totalInvested)}</div></div>
         <div class="kpi-card c-teal"><div class="kpi-label">Current Value</div><div class="kpi-value" ${tipAttr(totalCurrent)}>${fmt$(totalCurrent)}</div></div>
+        <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value" ${tipAttr(totalInvested)}>${fmt$(totalInvested)}</div></div>
         <div class="kpi-card ${totalPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value" ${tipAttr(totalPl)}>${totalPl>=0?'+':''}${fmt$(totalPl)}</div><div class="kpi-delta ${totalPl>=0?'up':'down'}">${totalPl>=0?'+':''}${pct(totalPlPct)}</div></div>
         <!-- YTD P&L card removed here — replaced by Day Change P&L below -->
         <div class="kpi-card ${!anyDayDataKnown?'':(totalDayPl>=0?'c-teal':'c-danger')}"><div class="kpi-label">Day Change P&L</div><div class="kpi-value" ${anyDayDataKnown?tipAttr(totalDayPl):''}>${anyDayDataKnown ? (totalDayPl>=0?'+':'')+fmt$(totalDayPl) : '—'}</div><div class="kpi-delta ${totalDayPl>=0?'up':'down'}">${anyDayDataKnown ? (totalDayPl>=0?'+':'')+pct(totalDayPlPct) : 'Click Fetch live prices'}</div></div>
@@ -832,21 +917,31 @@ function renderHoldings(){
 
   /* ---- Charts (only for open view) ---- */
   const allocRows = rows.filter(r => (r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue) > 0.01).slice(0, 12);
-  const allocLabels = allocRows.map(r => r.symbol || r.name);
+  function _shortLabel(r){
+    if(r.name){
+      const words = r.name.trim().split(/\s+/).slice(0,2).join(' ');
+      if(words) return words;
+    }
+    return r.symbol || '';
+  }
+  const allocLabels = allocRows.map(_shortLabel);
   const allocVals   = allocRows.map(r => r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue);
   const allocTotal = allocVals.reduce((a,b)=>a+b,0);
 
   const plRows = rows.filter(r => Math.abs(r.plNetUSD !== undefined ? r.plNetUSD : r.plNet) > 0.01)
                      .sort((a,b) => ((b.plNetUSD !== undefined ? b.plNetUSD : b.plNet) || 0) - ((a.plNetUSD !== undefined ? a.plNetUSD : a.plNet) || 0))
                      .slice(0, 15);
-  const plLabels = plRows.map(r => r.symbol || r.name);
+  const plLabels = plRows.map(_shortLabel);
   const plVals   = plRows.map(r => r.plNetUSD !== undefined ? r.plNetUSD : r.plNet);
   const plColors = plVals.map(v => v >= 0 ? '#7FAE79' : '#C06A46');
 
-  /* ---- Table headers ---- */
+  /* ---- Table headers ----
+     All-Platforms table intentionally omits Symbol and YTD P&L (kept below
+     in the per-platform table instead) to stay less cluttered, and groups
+     Day Chg right next to Unrealized P&L rather than up by LTP. */
   const typeTh = `<th id="typeFilterTh" style="cursor:pointer; white-space:nowrap;" title="Filter by type">Type <span id="typeFilterIcon" style="opacity:.75;">🔽</span></th>`;
   const thead = isAll
-    ? `<tr><th>Name</th><th>Symbol</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year" class="has-tip">YTD P&L</th>${typeTh}<th>Platforms</th></tr>`
+    ? `<tr><th>Name</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th style="min-width:70px;">Day Chg</th><th>Day P&L</th>${typeTh}<th>Platforms</th></tr>`
     : `<tr><th>Symbol</th><th>Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year — hover a row's value to see the exact baseline" class="has-tip">YTD P&L</th><th></th></tr>`;
 
   /* ---- OPEN table body ---- */
@@ -857,16 +952,15 @@ function renderHoldings(){
       const dayPlColor = r.dayChangePct===null ? 'var(--text-dim)' : plColor(r.dayPLUSD||0);
       return `<tr>
         <td>${r.name}</td>
-        <td style="font-weight:600;">${r.symbol}</td>
-        <td>${r.qty}</td>
+        <td data-tip="${r.qty}" class="has-tip">${(r.qty||0).toFixed(2)}</td>
         <td>${fmt$(r.avgPrice,2)}</td>
-        <td>${fmt$(r.currentPrice,2)}</td>
-        <td style="color:${dayColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;">${r.dayChangePct===null?'—':(r.dayChangePct>=0?'+':'')+fmt$(r.dayChgPerShareUSD,2)+' ('+(r.dayChangePct>=0?'+':'')+r.dayChangePct.toFixed(2)+'%)'}</td>
+        <td>${r.priceUnknown ? '—' : fmt$(r.currentPrice,2)}</td>
         <td style="font-weight:600;">${fmt$(r.invested,2)}</td>
         <td style="font-weight:600;color:var(--gold-soft);">${fmt$(r.currentValue,2)}</td>
         <td style="font-weight:600;color:${plColor(r.plNet)}">${r.plNet>=0?'+':''}${fmt$(r.plNet,2)} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
+        <td style="color:${dayColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;">${r.dayChangePct===null?'—':(r.dayChangePct>=0?'+':'')+fmt$(r.dayChgPerShareUSD,2)+' ('+(r.dayChangePct>=0?'+':'')+r.dayChangePct.toFixed(2)+'%)'}</td>
         <td style="font-weight:600;color:${dayPlColor};">${r.dayChangePct===null?'—':(r.dayPLUSD>=0?'+':'')+fmt$(r.dayPLUSD,2)}</td>
-        <td style="color:${plColor(r.ytdPl)}">${r.ytdPl>=0?'+':''}${fmt$(r.ytdPl,2)} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
+        <!-- Symbol and YTD P&L columns intentionally omitted from All Platforms — see per-platform table below -->
         <td><span class="debt-tag">${r.type}</span></td>
         <td><span class="debt-tag" style="font-size:10px;">${r.platforms.join(', ')}</span></td>
       </tr>`;
@@ -878,7 +972,7 @@ function renderHoldings(){
       <td><select data-htype="${r.id}" style="background:var(--bg-card-hi);color:var(--gold-soft);border:1px solid var(--line);border-radius:5px;font-family:var(--font-mono);font-size:11.5px;padding:3px 4px;">
         ${HOLDING_TYPES.map(t=>`<option value="${t}" ${r.type===t?'selected':''}>${t}</option>`).join('')}
       </select></td>
-      <td class="editable" contenteditable="true" data-f="qty" data-id="${r.id}" data-raw="${r.qty}">${r.qty||0}</td>
+      <td class="editable has-tip" contenteditable="true" data-f="qty" data-id="${r.id}" data-raw="${r.qty}" data-tip="${r.qty}">${(r.qty||0).toFixed(2)}</td>
       <td class="editable" contenteditable="true" data-f="avgPrice" data-id="${r.id}" ${tip(r.tAvg)} data-raw="${r.avgPrice}">${r.dAvg}</td>
       <td class="editable" contenteditable="true" data-f="currentPrice" data-id="${r.id}" ${tip(r.tCur)} data-raw="${r.currentPrice}">${r.dCur}</td>
       <td style="color:${r.dayChangeColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;" ${r.tDayChgAmt?`data-tip="${r.tDayChgAmt}" class="has-tip"`:''}>${r.dDayChgAmt===null?'—':(r.dayChangePct>=0?'+':'')+r.dDayChgAmt+' ('+r.dayChangeStr+')'}</td>
@@ -956,6 +1050,43 @@ function renderHoldings(){
   `;
 
   /* ---- Portfolio history chart ---- */
+  const platformSnaps = isAll ? snaps : snaps.filter(s => s.platforms && s.platforms[state.holdingsView]);
+
+  /* ---- Today's Top Gainers / Losers ---- */
+  /* ---- Today's Top Gainers / Losers ---- */
+  const moversSection = (showSold || showRecurring) ? '' : (() => {
+    const moversRows = rows.filter(r => r.dayChangePct !== null && r.dayChangePct !== undefined);
+    const topGainers = [...moversRows].sort((a,b)=>b.dayChangePct-a.dayChangePct).slice(0,5);
+    const topLosers = [...moversRows].sort((a,b)=>a.dayChangePct-b.dayChangePct).filter(r=>r.dayChangePct<0).slice(0,5);
+    const moversHead = `<thead><tr><th>Symbol</th><th style="text-align:right;">Day Change</th><th style="text-align:right;">Day P&L</th></tr></thead>`;
+    const moversRow = (r, positive) => `
+      <tr>
+        <td style="font-weight:600;">${r.symbol}</td>
+        <td style="text-align:right; color:${positive?'var(--good)':'var(--danger)'}; font-family:var(--font-mono); font-weight:600;">${r.dayChangePct>=0?'+':''}${r.dayChangePct.toFixed(2)}%</td>
+        <td style="text-align:right; color:${positive?'var(--good)':'var(--danger)'}; font-family:var(--font-mono); font-size:11.5px;">${(r.dayPLUSD||0)>=0?'+':''}${fmt$(r.dayPLUSD||0,2)}</td>
+      </tr>`;
+    if(!moversRows.length) return '';
+    return `
+    <div class="grid-2" style="margin-bottom:20px; grid-template-columns:1fr 1fr;">
+      <div class="card" style="min-width:0;">
+        <div class="card-head"><h3>🚀 Today's Top Gainers</h3></div>
+        ${!topGainers.length ? '<div class="section-sub" style="padding:12px 0; text-align:center;">Nothing up today.</div>' : `
+        <div class="table-scroll">
+          <table class="ledger" style="min-width:0; width:100%;">${moversHead}<tbody>${topGainers.map(r=>moversRow(r,true)).join('')}</tbody></table>
+        </div>
+        `}
+      </div>
+      <div class="card" style="min-width:0;">
+        <div class="card-head"><h3>📉 Today's Top Losers</h3></div>
+        ${!topLosers.length ? '<div class="section-sub" style="padding:12px 0; text-align:center;">Nothing down today.</div>' : `
+        <div class="table-scroll">
+          <table class="ledger" style="min-width:0; width:100%;">${moversHead}<tbody>${topLosers.map(r=>moversRow(r,false)).join('')}</tbody></table>
+        </div>
+        `}
+      </div>
+    </div>`;
+  })();
+
   const chartSection = (showSold || showRecurring) ? '' : `
     <div class="card" style="margin-bottom:20px;">
       <div class="card-head" style="flex-wrap:wrap; gap:10px;">
@@ -969,7 +1100,7 @@ function renderHoldings(){
       </div>
       <div class="chart-box tall"><canvas id="chartPortfolioHistory"></canvas></div>
       <div class="section-sub" style="margin-top:8px; margin-bottom:0;">
-        ${snaps.length ? 'Snapshots: ' + snaps.length + ' · Last: ' + snaps[snaps.length-1].date : 'No snapshots yet. Click 📸 to record today\'s portfolio value.'}
+        ${platformSnaps.length ? 'Snapshots: ' + platformSnaps.length + ' · Last: ' + platformSnaps[platformSnaps.length-1].date : (isAll ? 'No snapshots yet. Click 📸 to record today\'s portfolio value.' : 'No snapshots yet for this platform specifically. Click 📸 to record one.')}
       </div>
     </div>
   `;
@@ -1006,7 +1137,7 @@ function renderHoldings(){
               ${isAll?`<td><span class="debt-tag" style="font-size:10px;">${r.platformName}</span></td>`:''}
               <td style="font-weight:600;">${r.symbol} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${r.name}</span>` : ''}</td>
               <td ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</td>
-              <td><span class="debt-tag">${r.daysOfMonth.map(d=>_ordinal(d)).join(', ')}</span></td>
+              <td><span class="debt-tag">${r.scheduleLabel}</span></td>
               <td style="font-family:var(--font-mono); font-size:12px; color:var(--gold-soft); font-weight:600;">${r.nextDate||'—'}</td>
               <td style="font-family:var(--font-mono); font-size:12px;">${r.estShares.toFixed(4)}</td>
               <td style="white-space:nowrap;">${r.alreadyConfirmed
@@ -1027,6 +1158,8 @@ function renderHoldings(){
     <p class="section-sub" style="margin-top:-8px;">🕒 Prices last refreshed: <b style="color:var(--gold-soft);">${_formatPriceRefreshTimestamp()}</b> <span style="color:var(--text-faint);">(auto-refreshes daily on the server, even if you don't have this open)</span></p>
 
     ${kpiHtml}
+
+    ${moversSection}
 
     ${chartSection}
 
@@ -1065,7 +1198,7 @@ function renderHoldings(){
       <div class="table-scroll">
         <table class="ledger">
           <thead>${thead}</thead>
-            <tbody id="holdingsBody">${pageRows.length ? tbody : '<tr><td colspan="13" style="color:var(--text-faint);text-align:center;padding:20px;">No holdings match your filter.</td></tr>'}</tbody>
+            <tbody id="holdingsBody">${pageRows.length ? tbody : `<tr><td colspan="${isAll?11:13}" style="color:var(--text-faint);text-align:center;padding:20px;">No holdings match your filter.</td></tr>`}</tbody>
         </table>
       </div>
       ${isAll && holdingsTotalPages>1 ? `
@@ -1130,8 +1263,8 @@ function renderHoldings(){
     const h = _findRecurHolding(el.dataset.editrecur);
     if(!h) return;
     openRecurringModal(h,
-      (amount, daysOfMonth) => {
-        h.recurring = { active: true, amount, daysOfMonth };
+      (config) => {
+        h.recurring = { active: true, ...config };
         markDirty(); renderHoldings();
         showToast(`Recurring buy updated for ${h.symbol}`);
       },
@@ -1206,6 +1339,7 @@ function renderHoldings(){
             recalcHolding(h);
           } else if(field === 'currentPrice'){
             h.currentPrice = v || 0;
+            h.priceFetchFailed = false;
           }
           markDirty(); renderHoldings();
         });
@@ -1258,8 +1392,8 @@ function renderHoldings(){
         const h = inv.holdings.find(x => x.id === el.dataset.recurh);
         if(!h) return;
         openRecurringModal(h,
-          (amount, daysOfMonth) => {
-            h.recurring = { active: true, amount, daysOfMonth };
+          (config) => {
+            h.recurring = { active: true, ...config };
             markDirty(); renderHoldings();
             showToast(`Recurring buy saved for ${h.symbol}`);
           },
@@ -1293,8 +1427,9 @@ function renderHoldings(){
                 h.currentPrice = result.price;
                 h.dayChangePct = result.changePct;
                 h.lastFetched = Date.now();
+                h.priceFetchFailed = false;
                 updated++;
-              }catch(e){ failed++; }
+              }catch(e){ h.priceFetchFailed = true; failed++; }
               await new Promise(r => setTimeout(r, 300));
             }
           }
@@ -1308,8 +1443,9 @@ function renderHoldings(){
                 h.currentPrice = result.price;
                 h.dayChangePct = result.changePct;
                 h.lastFetched = Date.now();
+                h.priceFetchFailed = false;
                 updated++;
-              }catch(e){ failed++; }
+              }catch(e){ h.priceFetchFailed = true; failed++; }
               await new Promise(r => setTimeout(r, 300));
             }
           }
