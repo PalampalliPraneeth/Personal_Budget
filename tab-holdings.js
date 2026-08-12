@@ -3,6 +3,198 @@
    ========================================================================= */
 const HOLDING_TYPES = ['stock','mf','etf','index','crypto','other'];
 
+/* ---------- Recurring buy schedule helpers ---------- */
+function _ordinal(n){
+  const s = ['th','st','nd','rd'], v = n % 100;
+  return n + (s[(v-20)%10] || s[v] || s[0]);
+}
+function _clampDayOfMonth(day, year, month){ // month is 0-indexed, may be >11 (Date() normalizes)
+  const lastDay = new Date(year, month+1, 0).getDate();
+  return Math.min(day, lastDay);
+}
+function nextRecurringDate(daysOfMonth){
+  if(!daysOfMonth || !daysOfMonth.length) return null;
+  const sorted = [...daysOfMonth].sort((a,b)=>a-b);
+  const today = new Date(); today.setHours(0,0,0,0);
+  for(let i=0;i<25;i++){ // scan up to ~2 years ahead as a safety bound
+    const y = today.getFullYear(), m = today.getMonth()+i;
+    for(const d of sorted){
+      const day = _clampDayOfMonth(d, y, m);
+      const candidate = new Date(y, m, day);
+      candidate.setHours(0,0,0,0);
+      if(candidate >= today) return candidate.toISOString().slice(0,10);
+    }
+  }
+  return null;
+}
+function collectRecurringRows(y, platformId){ // platformId falsy = all platforms
+  ensureHoldingsMigration();
+  const investments = yearData(y).investments || [];
+  const fx = _ensureFx().INR || 95.0;
+  const out = [];
+  investments.forEach(inv => {
+    if(platformId && inv.id !== platformId) return;
+    const isINR = inv.currency === 'INR';
+    (inv.holdings || []).forEach(h => {
+      if(!h.recurring || !h.recurring.active || !h.recurring.daysOfMonth || !h.recurring.daysOfMonth.length) return;
+      const nextDate = nextRecurringDate(h.recurring.daysOfMonth);
+      const amount = num(h.recurring.amount);
+      const estShares = num(h.currentPrice) > 0 ? amount / num(h.currentPrice) : 0;
+      const alreadyConfirmed = !!(nextDate && h.recurring.lastConfirmedFor === nextDate);
+      const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
+      const tip = (v) => isINR ? fmtInr(v) : null;
+      out.push({
+        platformId: inv.id, platformName: inv.name, holdingId: h.id,
+        symbol: h.symbol, name: h.name,
+        amount, dAmount: fmt(amount), tAmount: tip(amount),
+        daysOfMonth: h.recurring.daysOfMonth.slice().sort((a,b)=>a-b),
+        nextDate, estShares, alreadyConfirmed
+      });
+    });
+  });
+  return out.sort((a,b) => (a.nextDate||'9999') < (b.nextDate||'9999') ? -1 : (a.nextDate||'9999') > (b.nextDate||'9999') ? 1 : 0);
+}
+
+/* ---------- Recurring buy modal ---------- */
+function openRecurringModal(h, onSave, onRemove){
+  const old = document.getElementById('recurModalOverlay');
+  if(old) old.remove();
+
+  const existing = h.recurring || {};
+  const selectedDays = new Set(existing.daysOfMonth || []);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'recurModalOverlay';
+  overlay.className = 'modal-overlay';
+  const dayGrid = Array.from({length:31}, (_,i)=>i+1).map(d=>
+    `<button type="button" class="recur-day-btn ${selectedDays.has(d)?'active':''}" data-day="${d}">${d}</button>`
+  ).join('');
+  overlay.innerHTML = `
+    <div class="modal-card" style="width:420px;">
+      <h3>🔁 Recurring buy — ${h.symbol}</h3>
+      <p class="modal-sub">Pick the day(s) of the month this recurs on, and the amount each time. This is purely a tracker — nothing places an order automatically.</p>
+      <div class="modal-field">
+        <label>Amount per buy</label>
+        <input type="number" id="recurAmount" value="${existing.amount||''}" min="0" step="any">
+      </div>
+      <div class="modal-field">
+        <label>Day(s) of month <span class="hint">tap to toggle, pick as many as you need</span></label>
+        <div id="recurDayGrid" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">${dayGrid}</div>
+      </div>
+      <div class="modal-actions" style="justify-content:space-between;">
+        ${(existing.daysOfMonth && existing.daysOfMonth.length) ? '<button class="btn danger-outline" id="recurRemoveBtn">Remove plan</button>' : '<span></span>'}
+        <div style="display:flex; gap:10px;">
+          <button class="btn" id="recurCancelBtn">Cancel</button>
+          <button class="btn primary" id="recurSaveBtn">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelectorAll('.recur-day-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const d = parseInt(btn.dataset.day);
+      if(selectedDays.has(d)){ selectedDays.delete(d); btn.classList.remove('active'); }
+      else { selectedDays.add(d); btn.classList.add('active'); }
+    });
+  });
+
+  function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if(e.key==='Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  overlay.querySelector('#recurCancelBtn').addEventListener('click', close);
+
+  const removeBtn = overlay.querySelector('#recurRemoveBtn');
+  if(removeBtn) removeBtn.addEventListener('click', ()=>{ close(); onRemove(); });
+
+  overlay.querySelector('#recurSaveBtn').addEventListener('click', ()=>{
+    const amount = parseFloat(document.getElementById('recurAmount').value);
+    if(!amount || amount<=0){ document.getElementById('recurAmount').focus(); return; }
+    if(!selectedDays.size){ showToast('Pick at least one day of the month'); return; }
+    close();
+    onSave(amount, [...selectedDays].sort((a,b)=>a-b));
+  });
+
+  const firstDayBtn = overlay.querySelector('.recur-day-btn');
+  if(firstDayBtn && !existing.amount) document.getElementById('recurAmount').focus();
+}
+
+/* ---------- Confirm-buy modal (turns a scheduled recurring occurrence into a real lot) ---------- */
+function openConfirmBuyModal(h, scheduledDate, onConfirm){
+  const old = document.getElementById('confirmBuyOverlay');
+  if(old) old.remove();
+
+  const defaultAmount = (h.recurring && h.recurring.amount) || 0;
+  const defaultPrice = h.currentPrice || h.avgPrice || 0;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'confirmBuyOverlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <h3>✓ Confirm buy — ${h.symbol}</h3>
+      <p class="modal-sub">Scheduled for ${scheduledDate}. Adjust below if the actual fill differed, then confirm to add it to your real position.</p>
+      <div class="modal-field">
+        <label>Amount</label>
+        <input type="number" id="confirmAmount" value="${defaultAmount||''}" min="0" step="any">
+      </div>
+      <div class="modal-field">
+        <label>Price / share</label>
+        <input type="number" id="confirmPrice" value="${defaultPrice||''}" min="0" step="any">
+      </div>
+      <div class="modal-field">
+        <label>Date</label>
+        <input type="date" id="confirmDate" value="${scheduledDate}">
+      </div>
+      <div class="modal-preview">
+        <span class="label">≈ Shares this adds</span>
+        <span class="value" id="confirmSharesVal">—</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="confirmCancelBtn">Cancel</button>
+        <button class="btn primary" id="confirmSaveBtn">Confirm buy</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const amountEl = overlay.querySelector('#confirmAmount');
+  const priceEl = overlay.querySelector('#confirmPrice');
+  const dateEl = overlay.querySelector('#confirmDate');
+  const sharesEl = overlay.querySelector('#confirmSharesVal');
+
+  function updatePreview(){
+    const amt = parseFloat(amountEl.value)||0;
+    const price = parseFloat(priceEl.value)||0;
+    sharesEl.textContent = price > 0 ? (amt/price).toFixed(4) : '—';
+  }
+  updatePreview();
+  amountEl.addEventListener('input', updatePreview);
+  priceEl.addEventListener('input', updatePreview);
+
+  function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if(e.key==='Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  overlay.querySelector('#confirmCancelBtn').addEventListener('click', close);
+
+  overlay.querySelector('#confirmSaveBtn').addEventListener('click', ()=>{
+    const amount = parseFloat(amountEl.value);
+    const price = parseFloat(priceEl.value);
+    const date = dateEl.value || scheduledDate;
+    if(!amount || amount<=0){ amountEl.focus(); return; }
+    if(!price || price<=0){ priceEl.focus(); return; }
+    const qty = amount / price;
+    close();
+    onConfirm(qty, price, date);
+  });
+
+  amountEl.focus(); amountEl.select();
+}
+
+
 function _ensureFx(){
   if(typeof fxRates !== 'undefined' && fxRates && fxRates.INR) return fxRates;
   return { INR: 95.0 };
@@ -59,8 +251,17 @@ function recordPortfolioSnapshot(y, silent){
   const totalInvested = all.reduce((a,r)=>a+r.invested,0);
   const holdings = {};
   all.forEach(h => { holdings[h.symbol] = { value: h.currentValue, invested: h.invested, qty: h.qty, price: h.currentPrice }; });
+  // Per-platform breakdown too, so an individual platform pill can show its
+  // own history instead of always falling back to the consolidated total.
+  const platforms = {};
+  (yearData(y).investments || []).forEach(inv => {
+    const platRows = platformHoldings(y, inv.id);
+    const pValue = platRows.reduce((a,r)=>a+r.currentValueUSD,0);
+    const pInvested = platRows.reduce((a,r)=>a+r.investedUSD,0);
+    platforms[inv.id] = { totalValue: pValue, totalInvested: pInvested, totalPl: pValue-pInvested };
+  });
   const filtered = snaps.filter(s => s.date !== today);
-  filtered.push({date: today, totalValue, totalInvested, totalPl: totalValue-totalInvested, holdings});
+  filtered.push({date: today, totalValue, totalInvested, totalPl: totalValue-totalInvested, holdings, platforms});
   yearData(y).portfolioSnapshots = filtered.slice(-365); // keep last year of daily snaps
   markDirty('holdings');
   if(!silent) showToast('Snapshot recorded: '+today);
@@ -467,6 +668,8 @@ function renderHoldings(){
     rows = rows.filter(r => r.regions && r.regions.includes(state.holdingsRegion));
   }
   const showSold = state.holdingsSubView === 'sold';
+  const showRecurring = state.holdingsSubView === 'recurring';
+  const recurringRows = collectRecurringRows(y, isAll ? null : state.holdingsView);
 
   const filterText = (state.holdingsFilter || '').toLowerCase().trim();
   let filteredRows = filterText 
@@ -583,10 +786,11 @@ function renderHoldings(){
     </button>
   `).join('')}</div>`;
 
-  /* ---- Holdings / Sold toggle ---- */
+  /* ---- Holdings / Recurring / Sold toggle ---- */
   const subToggle = `
     <div class="seg-toggle">
-      <button class="seg-btn ${!showSold?'active':''}" data-subview="open">📈 Holdings <span class="seg-count">${rows.length}</span></button>
+      <button class="seg-btn ${state.holdingsSubView==='open'?'active':''}" data-subview="open">📈 Holdings <span class="seg-count">${rows.length}</span></button>
+      <button class="seg-btn ${showRecurring?'active':''}" data-subview="recurring">🔁 Recurring <span class="seg-count">${recurringRows.length}</span></button>
       <button class="seg-btn ${showSold?'active':''}" data-subview="sold">💰 Sold <span class="seg-count">${soldGroups.reduce((a,g)=>a+g.rows.length,0)}</span></button>
     </div>
   `;
@@ -619,7 +823,7 @@ function renderHoldings(){
   `;
 
   /* ---- Toolbar ---- */
-  const toolbar = showSold ? '' : `
+  const toolbar = (showSold || showRecurring) ? '' : `
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap;">
       <button class="btn small" id="hFetchPrices">🔄 Fetch live prices</button>
       <span class="section-sub" style="margin:0;">Fetching uses Yahoo Finance. Browsers may block it (CORS) — if so, enter prices manually.</span>
@@ -683,7 +887,7 @@ function renderHoldings(){
       <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
       <td style="font-weight:600;color:${r.dayChangePct===null?'var(--text-dim)':plColor(r.dayPLUSD||0)};" ${tip(r.tDayPl)}>${r.dayChangePct===null?'—':(r.dayPLUSD>=0?'+':'')+r.dDayPl}</td>
       <td style="color:${plColor(r.ytdNet)}" title="${r.ytdBaselineNote}">${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
-      <td style="white-space:nowrap;"><button class="btn small sell" data-sellh="${r.id}">Sell</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
+      <td style="white-space:nowrap;"><button class="btn small sell" data-sellh="${r.id}">Sell</button> <button class="btn small" data-recurh="${r.id}" title="Set up a recurring buy" style="margin-left:4px;">🔁</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
     </tr>`;
   }).join('');
 
@@ -737,7 +941,7 @@ function renderHoldings(){
   `;
 
   /* ---- Add form ---- */
-  const addForm = (isAll || showSold) ? '' : `
+  const addForm = (isAll || showSold || showRecurring) ? '' : `
     <div class="addcat-row" style="margin-top:14px;">
       <input type="text" id="hNewSym" placeholder="Symbol" style="min-width:80px;">
       <input type="text" id="hNewName" placeholder="Name" style="min-width:120px;">
@@ -752,10 +956,10 @@ function renderHoldings(){
   `;
 
   /* ---- Portfolio history chart ---- */
-  const chartSection = showSold ? '' : `
+  const chartSection = (showSold || showRecurring) ? '' : `
     <div class="card" style="margin-bottom:20px;">
       <div class="card-head" style="flex-wrap:wrap; gap:10px;">
-        <h3>Portfolio history</h3>
+        <h3>Portfolio history${isAll ? '' : ' · ' + ((investments.find(i=>i.id===state.holdingsView)||{}).name || '')}</h3>
         <div class="pill-row" style="margin:0;">
           ${['ALL','YTD','1Y','6M','3M','1M','1W'].map(tf=>`
             <button class="pill ${state.holdingsTimeframe===tf?'active':''}" data-timeframe="${tf}">${tf}</button>
@@ -771,7 +975,7 @@ function renderHoldings(){
   `;
 
   /* ---- Allocation + P&L charts (only open view) ---- */
-  const openCharts = showSold ? '' : `
+  const openCharts = (showSold || showRecurring) ? '' : `
     <div class="grid-2">
       <div class="card">
         <div class="card-head"><h3>Portfolio allocation</h3></div>
@@ -781,6 +985,39 @@ function renderHoldings(){
         <div class="card-head"><h3>P&L by holding</h3></div>
         <div class="chart-box"><canvas id="chartHoldingPl"></canvas></div>
       </div>
+    </div>
+  `;
+
+  /* ---- Recurring buys section ---- */
+  const nextUpcoming = recurringRows.filter(r=>r.nextDate).sort((a,b)=> a.nextDate<b.nextDate?-1:1)[0];
+  const recurringSection = `
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap; gap:10px;">
+        <h3>Recurring ${isAll ? '· all platforms' : '· ' + (investments.find(i=>i.id===state.holdingsView)||{}).name}</h3>
+        ${nextUpcoming ? `<span style="font-family:var(--font-mono); font-size:12px; color:var(--gold-soft); font-weight:600;">Next: ${nextUpcoming.symbol} on ${nextUpcoming.nextDate}</span>` : ''}
+      </div>
+      <p class="section-sub">Scheduled recurring buys you've set up on individual holdings — a tracker, not an auto-trader. Switch to Holdings and click 🔁 on a position to add one.</p>
+      ${!recurringRows.length ? '<div class="section-sub" style="padding:16px 0; text-align:center;">No recurring plans yet.</div>' : `
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr>${isAll?'<th>Platform</th>':''}<th>Holding</th><th>Amount / buy</th><th>Schedule</th><th>Next date</th><th>Est. shares</th><th></th></tr></thead>
+          <tbody>${recurringRows.map(r => `
+            <tr>
+              ${isAll?`<td><span class="debt-tag" style="font-size:10px;">${r.platformName}</span></td>`:''}
+              <td style="font-weight:600;">${r.symbol} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${r.name}</span>` : ''}</td>
+              <td ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</td>
+              <td><span class="debt-tag">${r.daysOfMonth.map(d=>_ordinal(d)).join(', ')}</span></td>
+              <td style="font-family:var(--font-mono); font-size:12px; color:var(--gold-soft); font-weight:600;">${r.nextDate||'—'}</td>
+              <td style="font-family:var(--font-mono); font-size:12px;">${r.estShares.toFixed(4)}</td>
+              <td style="white-space:nowrap;">${r.alreadyConfirmed
+                ? `<span style="color:var(--teal-soft); font-family:var(--font-mono); font-size:11px; margin-right:8px;" title="Already confirmed for ${r.nextDate}">✓ Confirmed</span>`
+                : `<span class="row-del" data-confirmbuy="${r.platformId}|${r.holdingId}|${r.nextDate}" title="Confirm this buy happened" style="margin-right:8px; cursor:pointer; color:var(--teal-soft);">✓ Confirm</span>`
+              }<span class="row-del" data-editrecur="${r.platformId}|${r.holdingId}" title="Edit" style="margin-right:8px; cursor:pointer;">✏️</span><span class="row-del" data-removerecur="${r.platformId}|${r.holdingId}" title="Remove">✕</span></td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+      `}
     </div>
   `;
 
@@ -799,7 +1036,7 @@ function renderHoldings(){
       ${regionToggle}
     </div>
 
-    ${showSold ? soldSection : `
+    ${showSold ? soldSection : showRecurring ? recurringSection : `
     ${toolbar}
 
     ${openCharts}
@@ -881,7 +1118,53 @@ function renderHoldings(){
     state.holdingsView = b.dataset.hpill; renderHoldings();
   }));
 
-  if(!isAll && !showSold){
+  /* Recurring view edit/remove — these can point at a holding on any
+     platform (All Platforms view included), so they live outside the
+     single-platform guard below. */
+  function _findRecurHolding(key){
+    const [platformId, holdingId] = key.split('|');
+    const inv2 = investments.find(i => i.id === platformId);
+    return inv2 ? inv2.holdings.find(x => x.id === holdingId) : null;
+  }
+  document.querySelectorAll('[data-editrecur]').forEach(el => el.addEventListener('click', ()=>{
+    const h = _findRecurHolding(el.dataset.editrecur);
+    if(!h) return;
+    openRecurringModal(h,
+      (amount, daysOfMonth) => {
+        h.recurring = { active: true, amount, daysOfMonth };
+        markDirty(); renderHoldings();
+        showToast(`Recurring buy updated for ${h.symbol}`);
+      },
+      () => {
+        h.recurring = null;
+        markDirty(); renderHoldings();
+        showToast(`Recurring buy removed for ${h.symbol}`);
+      }
+    );
+  }));
+  document.querySelectorAll('[data-removerecur]').forEach(el => el.addEventListener('click', ()=>{
+    const h = _findRecurHolding(el.dataset.removerecur);
+    if(!h) return;
+    if(confirm(`Remove the recurring plan for ${h.symbol}?`)){
+      h.recurring = null; markDirty(); renderHoldings();
+    }
+  }));
+  document.querySelectorAll('[data-confirmbuy]').forEach(el => el.addEventListener('click', ()=>{
+    const [platformId, holdingId, scheduledDate] = el.dataset.confirmbuy.split('|');
+    const inv2 = investments.find(i => i.id === platformId);
+    const h = inv2 && inv2.holdings.find(x => x.id === holdingId);
+    if(!h) return;
+    openConfirmBuyModal(h, scheduledDate, (qty, price, date) => {
+      h.lots.push({id: uid(), type:'buy', qty, price, date});
+      recalcHolding(h);
+      if(h.recurring) h.recurring.lastConfirmedFor = scheduledDate;
+      markDirty('holdings');
+      renderHoldings();
+      showToast(`Added ${qty.toFixed(4)} ${h.symbol} @ ${fmt$(price,2)} from recurring buy`);
+    });
+  }));
+
+  if(!isAll && !showSold && !showRecurring){
     const inv = investments.find(i => i.id === state.holdingsView);
     if(inv){
       document.getElementById('holdingsBody').querySelectorAll('td.editable').forEach(td => {
@@ -971,12 +1254,29 @@ function renderHoldings(){
         });
       }));
 
+      document.querySelectorAll('[data-recurh]').forEach(el => el.addEventListener('click', ()=>{
+        const h = inv.holdings.find(x => x.id === el.dataset.recurh);
+        if(!h) return;
+        openRecurringModal(h,
+          (amount, daysOfMonth) => {
+            h.recurring = { active: true, amount, daysOfMonth };
+            markDirty(); renderHoldings();
+            showToast(`Recurring buy saved for ${h.symbol}`);
+          },
+          () => {
+            h.recurring = null;
+            markDirty(); renderHoldings();
+            showToast(`Recurring buy removed for ${h.symbol}`);
+          }
+        );
+      }));
+
       
     }
   }
 
     /* ---- Fetch live prices (All Platforms or single platform) ---- */
-  if(!showSold){
+  if(!showSold && !showRecurring){
     const fetchBtn = document.getElementById('hFetchPrices');
     if(fetchBtn){
       fetchBtn.addEventListener('click', async ()=>{
@@ -1033,22 +1333,29 @@ function renderHoldings(){
 
   /* ---- Portfolio history chart ---- */
   destroyChart('portfolioHistory');
-  if(!showSold && snaps.length > 1){
+  if(!showSold && !showRecurring && snaps.length > 1){
     const labels = snaps.map(s => s.date.slice(5));
+    const chartValueFor = (s) => isAll ? s.totalValue : (s.platforms && s.platforms[state.holdingsView] ? s.platforms[state.holdingsView].totalValue : null);
+    const chartInvestedFor = (s) => isAll ? s.totalInvested : (s.platforms && s.platforms[state.holdingsView] ? s.platforms[state.holdingsView].totalInvested : null);
+    const hasAnyPlatformData = isAll || snaps.some(s => s.platforms && s.platforms[state.holdingsView]);
     charts.portfolioHistory = safeChart(document.getElementById('chartPortfolioHistory'), {
       type: 'line',
       data: { 
         labels, 
         datasets: [
-          {label:'Portfolio value', data: snaps.map(s=>s.totalValue), borderColor:'#C9A961', backgroundColor:'rgba(201,169,97,0.08)', fill:true, tension:0.3, pointRadius:3},
-          {label:'Invested', data: snaps.map(s=>s.totalInvested), borderColor:'#6FA491', borderDash:[4,3], tension:0.3, pointRadius:0}
+          {label:'Portfolio value', data: snaps.map(chartValueFor), borderColor:'#C9A961', backgroundColor:'rgba(201,169,97,0.08)', fill:true, tension:0.3, pointRadius:3, spanGaps:true},
+          {label:'Invested', data: snaps.map(chartInvestedFor), borderColor:'#6FA491', borderDash:[4,3], tension:0.3, pointRadius:0, spanGaps:true}
         ] 
       },
       options: { responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
         plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
         scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
     });
-  } else if(!showSold && document.getElementById('chartPortfolioHistory')){
+    if(!hasAnyPlatformData){
+      document.getElementById('chartPortfolioHistory').parentElement.insertAdjacentHTML('beforeend',
+        '<div class="section-sub" style="margin-top:8px; margin-bottom:0;">No per-platform history yet for this platform — snapshots taken before this feature only stored the combined total. New snapshots from here on will track it.</div>');
+    }
+  } else if(!showSold && !showRecurring && document.getElementById('chartPortfolioHistory')){
     document.getElementById('chartPortfolioHistory').parentElement.innerHTML = 
       '<div class="section-sub" style="padding:40px 0; text-align:center;">Need at least 2 snapshots to draw a chart.<br>Click 📸 Record snapshot on different days.</div>';
   }
@@ -1081,7 +1388,7 @@ function renderHoldings(){
   destroyChart('holdingAlloc');
   destroyChart('holdingPl');
 
-  if(!showSold && allocLabels.length > 0){
+  if(!showSold && !showRecurring && allocLabels.length > 0){
     charts.holdingAlloc = safeChart(document.getElementById('chartHoldingAlloc'), {
       type: 'doughnut',
       data: { labels: allocLabels, datasets: [{ data: allocVals, backgroundColor: allocLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor: '#1C2726', borderWidth: 2 }] },

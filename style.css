@@ -168,6 +168,9 @@ a{color:var(--gold-soft);}
 .modal-preview .label{font-family:var(--font-mono); font-size:11px; color:var(--text-dim);}
 .modal-preview .value{font-family:var(--font-mono); font-size:15px; font-weight:600;}
 .modal-actions{display:flex; gap:10px; justify-content:flex-end;}
+.recur-day-btn{width:34px; height:34px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--text-dim); font-family:var(--font-mono); font-size:11.5px; cursor:pointer; transition:background .15s ease, color .15s ease, border-color .15s ease;}
+.recur-day-btn:hover{border-color:var(--gold); color:var(--text);}
+.recur-day-btn.active{background:var(--gold); border-color:var(--gold); color:#151d1c; font-weight:600;}
 
 /* ---------- Tables (the ledger look) ---------- */
 .table-scroll{overflow-x:auto;}

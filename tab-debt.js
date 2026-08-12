@@ -67,7 +67,11 @@ function renderDebt(){
   const totalOriginal = sumArr(debts.map(d=>d.total));
   const totalCleared = sumArr(debts.map(d=>d.cleared));
 
-  const cards = debts.map(d=>{
+  if(state.debtShowPaid === undefined) state.debtShowPaid = false;
+  const activeDebts = debts.filter(d => !(d.total>0 && debtPendingCalc(d)<=0));
+  const paidDebts = debts.filter(d => d.total>0 && debtPendingCalc(d)<=0);
+
+  function debtCardHtml(d){
     const clearedToDate = debtClearedToDate(d);
     const pct2 = d.total>0 ? Math.min(100, (clearedToDate/d.total)*100) : 0;
     const isPaid = d.total>0 && debtPendingCalc(d)<=0;
@@ -92,7 +96,16 @@ function renderDebt(){
       </div>
       ${d.note?`<div class="section-sub" style="margin-top:8px;">⚑ ${d.note}</div>`:''}
     </div>`;
-  }).join('');
+  }
+
+  const activeCardsHtml = activeDebts.map(debtCardHtml).join('');
+  const paidCardsHtml = paidDebts.map(debtCardHtml).join('');
+  const showPaidToggleHtml = !paidDebts.length ? '' : `
+    <div style="text-align:center; margin:14px 0 ${state.debtShowPaid?'0':'6px'} 0;">
+      <button class="btn small" id="debtShowPaidToggle">${state.debtShowPaid ? '▲ Hide paid off' : `▼ Show ${paidDebts.length} paid off`}</button>
+    </div>
+    ${state.debtShowPaid ? `<div style="margin-top:14px; display:flex; flex-direction:column; gap:14px;">${paidCardsHtml}</div>` : ''}
+  `;
 
   const sim = simulatePayoffWithPlan(debts, plan);
   
@@ -172,7 +185,8 @@ function renderDebt(){
 
     <div class="card">
       <div class="card-head"><h3>Loans</h3></div>
-      ${cards || '<div class="section-sub" style="padding:20px 0; text-align:center;">No debts yet. Add one below.</div>'}
+      ${activeCardsHtml || (paidDebts.length ? '' : '<div class="section-sub" style="padding:20px 0; text-align:center;">No debts yet. Add one below.</div>')}
+      ${showPaidToggleHtml}
       <div class="addcat-row">
         <input type="text" id="newDebtName" placeholder="New loan / debt name…">
         <input type="number" id="newDebtTotal" placeholder="Total owed" style="width:110px;">
@@ -215,6 +229,12 @@ function renderDebt(){
       renderDebt();
     });
     el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){e.preventDefault(); el.blur();}});
+  });
+
+  /* ---- Show/hide paid-off debts ---- */
+  const showPaidBtn = document.getElementById('debtShowPaidToggle');
+  if(showPaidBtn) showPaidBtn.addEventListener('click', ()=>{
+    state.debtShowPaid = !state.debtShowPaid; renderDebt();
   });
 
   /* ---- Add debt ---- */
