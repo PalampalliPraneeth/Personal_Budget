@@ -17,16 +17,23 @@ function renderExpenses(){
   const incNow = sumRange(incomeTotals(y), scopeMonths);
   const expNoCard = sumRange(expenseTotalsCounted(y), scopeMonths);
   const cardNow = sumRange(expenseTotalsExcluded(y), scopeMonths);
+  const debtNow = sumRange(debtPaymentTotals(y), scopeMonths);
   const expWithCard = expNoCard + cardNow;
-  const netAfterCard = incNow - expWithCard;
+  const expWithAll = expWithCard + debtNow;
+  const netAfterCard = incNow - expWithAll;
   const scopeLabel = state.month==='ALL' ? 'full year' : MONTHS[Number(state.month)];
 
   // Data for the pie chart (current scope only, excludes "counted out" groups)
-  const pieGroups = groups
+  let pieGroups = groups
     .filter(g => !g.excludeFromTotal)
     .map(g => ({ name: g.name, total: sumRange(groupTotals(g), scopeMonths) }))
     .filter(g => g.total > 0)
     .sort((a,b) => b.total - a.total);
+  // Add debt payments as a category in pie chart if any
+  if(debtNow > 0){
+    pieGroups.push({ name: 'Debt Paid Off', total: debtNow });
+    pieGroups.sort((a,b) => b.total - a.total);
+  }
   const pieLabels = pieGroups.map(g => g.name);
   const pieVals   = pieGroups.map(g => g.total);
 
@@ -83,11 +90,13 @@ function renderExpenses(){
       const val = v===null||v===undefined ? '' : v;
       return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}">${val===''?'–':val}</td>`;
     }).join('');
-    return `<tr>
+    return `<tr data-debt-id="${d.id}">
       <td>${d.name}</td>
       ${cells}
       <td style="font-weight:600;">${fmt$(sumArr(d.m),2)}</td>
-      <td style="color:var(--text-dim);">${fmt$(debtPendingCalc(d),2)} left</td>
+      <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}" style="cursor:pointer;">${d.interest}</b>%</td>
+      <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="emi" data-id="${d.id}" style="cursor:pointer;">${d.emi||0}</b></td>
+      <td><span class="row-del" data-deldebt="${d.id}" title="remove debt" style="cursor:pointer;">✕</span></td>
     </tr>`;
   }).join('');
 
@@ -104,8 +113,8 @@ function renderExpenses(){
     <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px,1fr));">
       <div class="kpi-card c-gold"><div class="kpi-label">Total Income (${scopeLabel})</div><div class="kpi-value">${fmt$(incNow)}</div></div>
       <div class="kpi-card c-rust"><div class="kpi-label">Total Expense (${scopeLabel})</div><div class="kpi-value">${fmt$(expNoCard)}</div></div>
-      <div class="kpi-card c-danger"><div class="kpi-label">Actual Expenses incl. card (${scopeLabel})</div><div class="kpi-value">${fmt$(expWithCard)}</div></div>
-      <div class="kpi-card ${netAfterCard>=0?'c-teal':'c-danger'}"><div class="kpi-label">Net after card (${scopeLabel})</div><div class="kpi-value">${fmt$(netAfterCard)}</div></div>
+      <div class="kpi-card c-danger"><div class="kpi-label">Incl. card & debt (${scopeLabel})</div><div class="kpi-value">${fmt$(expWithAll)}</div></div>
+      <div class="kpi-card ${netAfterCard>=0?'c-teal':'c-danger'}"><div class="kpi-label">Net after all (${scopeLabel})</div><div class="kpi-value">${fmt$(netAfterCard)}</div></div>
     </div>
 
     <div class="view-toggle">
@@ -137,9 +146,15 @@ function renderExpenses(){
       <div class="card-head"><h3>Debt Paid Off</h3><span class="section-sub" style="margin:0;">Editable here or on the Debt Payoff tab — both stay in sync automatically.</span></div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Loan</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Remaining</th></tr></thead>
+          <thead><tr><th>Loan</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Interest</th><th>EMI</th><th></th></tr></thead>
           <tbody id="debtPayBody">${debtRowsHtml}</tbody>
         </table>
+      </div>
+      <div class="addcat-row">
+        <input type="text" id="newDebtNameExp" placeholder="New loan / debt name…">
+        <input type="number" id="newDebtTotalExp" placeholder="Total owed" style="width:110px;">
+        <input type="number" id="newDebtInterestExp" placeholder="Interest %" step="0.1" style="width:90px;">
+        <button class="btn primary small" id="addDebtExpBtn">+ Add debt</button>
       </div>
     </div>
   `;
@@ -180,6 +195,55 @@ function renderExpenses(){
       markDirty(); renderExpenses();
     });
     td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
+  });
+
+  /* ---- Debt inline edits (interest & EMI) ---- */
+  document.querySelectorAll('.editable-inline').forEach(el=>{
+    el.addEventListener('focus', ()=>{ el.dataset.origRaw = el.textContent; });
+    el.addEventListener('blur', ()=>{
+      if(el.textContent === el.dataset.origRaw) return;
+      const id = el.dataset.id, field = el.dataset.debtfield;
+      const d = debts.find(x=>x.id===id);
+      if(!d) return;
+      const v = parseFloat(el.textContent.replace(/[^0-9.\-]/g,''));
+      const safeV = isNaN(v) ? 0 : v;
+      if(d[field]===safeV) return;
+      d[field] = safeV;
+      markDirty(); renderExpenses();
+    });
+    el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
+  });
+
+  /* ---- Delete debt ---- */
+  document.querySelectorAll('[data-deldebt]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const id = el.dataset.deldebt;
+      const idx = debts.findIndex(d=>d.id===id);
+      if(idx>-1 && confirm('Remove the "'+debts[idx].name+'" debt?')){
+        yearData(y).debts.splice(idx,1); markDirty(); renderExpenses();
+      }
+    });
+  });
+
+  /* ---- Add debt (from Expenses tab) ---- */
+  document.getElementById('addDebtExpBtn').addEventListener('click', ()=>{
+    const nameInp = document.getElementById('newDebtNameExp');
+    const totalInp = document.getElementById('newDebtTotalExp');
+    const intInp = document.getElementById('newDebtInterestExp');
+    const name = nameInp.value.trim();
+    if(!name){ nameInp.focus(); return; }
+    
+    yearData(y).debts.push({
+      id:uid(), name,
+      total: parseFloat(totalInp.value)||0,
+      cleared:0,
+      interest: parseFloat(intInp.value)||0,
+      emi:0,
+      m:n12()
+    });
+    
+    markDirty(); renderExpenses();
   });
 
   document.querySelectorAll('[data-excltoggle]').forEach(cb=>{

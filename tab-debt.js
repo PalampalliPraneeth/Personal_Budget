@@ -91,7 +91,7 @@ function renderDebt(){
       <div class="runway ${isPaid?'zero':''}"><div class="runway-fill" style="width:${pct2}%"></div></div>
       <div class="debt-foot">
         <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedToDate.toFixed(2)}</b> <span style="opacity:.55">(incl. ${fmt$(sumArr(d.m),2)} from monthly payments this year)</span></span>
-        <span>Pending: <b style="color:var(--rust-soft)">${fmt$(debtPendingCalc(d),2)}</b></span>
+        <span>Pending: <b class="editable-inline" style="color:var(--rust-soft)" contenteditable="true" data-debtfield="pending" data-id="${d.id}">${fmt$(debtPendingCalc(d),2)}</b></span>
         <span>Original: <b class="editable-inline" contenteditable="true" data-debtfield="total" data-id="${d.id}">${d.total}</b></span>
       </div>
       ${d.note?`<div class="section-sub" style="margin-top:8px;">⚑ ${d.note}</div>`:''}
@@ -221,6 +221,11 @@ function renderDebt(){
         const beforeDisplay = debtClearedToDate(d);
         if(beforeDisplay===safeV) return;
         d.cleared = safeV - sumArr(d.m);
+      } else if(field==='pending'){
+        const clearedAmount = debtClearedToDate(d);
+        const newTotal = safeV + clearedAmount;
+        if(d.total===newTotal) return;
+        d.total = newTotal;
       } else {
         if(d[field]===safeV) return;
         d[field] = safeV;
