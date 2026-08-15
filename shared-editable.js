@@ -28,8 +28,9 @@ function makeEditableRow(item, monthsToShow){
   const cells = monthsToShow.map(i=>{
     const v = item.m[i];
     const val = v===null||v===undefined ? '' : v;
+    const displayVal = val==='' ? '' : Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
     const tip = formatTip(item.raw[i]);
-    return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-field="m" data-idx="${i}" data-id="${item.id}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${val===''?'–':val}</td>`;
+    return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-field="m" data-idx="${i}" data-id="${item.id}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
   }).join('');
   const total = sumArr(item.m);
   return `<tr data-row-id="${item.id}">

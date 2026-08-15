@@ -88,7 +88,8 @@ function renderExpenses(){
     const cells = monthsToShow.map(i=>{
       const v = d.m[i];
       const val = v===null||v===undefined ? '' : v;
-      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}">${val===''?'–':val}</td>`;
+      const displayVal = val==='' ? '' : Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}">${displayVal===''?'–':displayVal}</td>`;
     }).join('');
     return `<tr data-debt-id="${d.id}">
       <td>${d.name}</td>

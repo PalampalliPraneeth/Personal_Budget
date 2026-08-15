@@ -51,7 +51,7 @@ function toUsd(item, fieldOrValue){
 function displayCell(item, v, rates){
   if (v === null || v === undefined) return '–';
   if (item.currency === 'INR') return fmt$(inrToUsd(v, rates), 2);
-  return String(v);
+  return Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
 /* ---------- Render ---------- */
