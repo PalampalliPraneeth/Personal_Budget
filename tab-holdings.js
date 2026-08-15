@@ -1044,7 +1044,7 @@ function renderHoldings(){
       </select>
       <input type="number" id="hNewQty" placeholder="Qty" step="any" style="width:70px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
       <input type="number" id="hNewAvg" placeholder="Avg price" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
-      <input type="number" id="hNewCur" placeholder="Current" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
+      <input type="number" id="hNewCur" placeholder="LTP(Last Trade Price)" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
       <button class="btn primary small" id="hAddBtn">+ Add</button>
     </div>
   `;
