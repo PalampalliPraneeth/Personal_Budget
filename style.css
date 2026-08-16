@@ -39,6 +39,10 @@ a{color:var(--gold-soft);}
 ::-webkit-scrollbar-thumb{background:var(--line); border-radius:8px;}
 ::-webkit-scrollbar-track{background:transparent;}
 
+#debtPayBody .paid-off-row{ display:none; }
+#debtPayBody.show-paidoff .paid-off-row{ display:table-row; }
+#debtPayBody.show-paidoff .g-caret{ transform:rotate(-90deg); }
+
 /* ---------- Layout shell ---------- */
 .wrap{max-width:1240px; margin:0 auto; padding:28px 24px 80px;}
 

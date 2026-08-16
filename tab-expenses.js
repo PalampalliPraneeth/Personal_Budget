@@ -84,7 +84,10 @@ function renderExpenses(){
     </div>`;
   }).join('');
 
-  const debtRowsHtml = debts.map(d=>{
+  const activeDebts = debts.filter(d => debtPendingCalc(d) > 0);
+  const paidOffDebts = debts.filter(d => debtPendingCalc(d) <= 0);
+
+  function debtRowHtml(d){
     const cells = monthsToShow.map(i=>{
       const v = d.m[i];
       const val = v===null||v===undefined ? '' : v;
@@ -92,14 +95,30 @@ function renderExpenses(){
       return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}">${displayVal===''?'–':displayVal}</td>`;
     }).join('');
     return `<tr data-debt-id="${d.id}">
-      <td>${d.name}</td>
+      <td>${d.name} ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
       ${cells}
       <td style="font-weight:600;">${fmt$(sumArr(d.m),2)}</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}" style="cursor:pointer;">${d.interest}</b>%</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="emi" data-id="${d.id}" style="cursor:pointer;">${d.emi||0}</b></td>
       <td><span class="row-del" data-deldebt="${d.id}" title="remove debt" style="cursor:pointer;">✕</span></td>
     </tr>`;
-  }).join('');
+  }
+
+  const activeDebtRows = activeDebts.map(debtRowHtml).join('');
+  const paidOffRows = paidOffDebts.map(debtRowHtml).join('');
+
+  const debtRowsHtml = activeDebtRows + (paidOffDebts.length ? `
+    <tr><td colspan="${monthsToShow.length + 5}" style="background:var(--bg-card-hi);color:var(--gold-soft);font-family:var(--font-mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;padding:8px 10px;cursor:pointer;" onclick="this.closest('tbody').classList.toggle('show-paidoff')">
+      <span style="display:inline-flex;align-items:center;gap:8px;">
+        <span class="g-caret" style="transition:transform .18s ease;">▾</span> Paid Off (${paidOffDebts.length} loan${paidOffDebts.length===1?'':'s'})
+      </span>
+    </td></tr>
+    <tr class="paid-off-row"><td colspan="${monthsToShow.length + 5}" style="padding:0;border:none;">
+      <table class="ledger" style="width:100%;border-collapse:collapse;">
+        <tbody>${paidOffRows}</tbody>
+      </table>
+    </td></tr>
+  ` : '');
 
   const html = `
     <div class="section-title">Expenses · ${y}</div>
