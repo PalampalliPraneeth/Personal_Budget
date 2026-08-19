@@ -120,7 +120,7 @@ function renderOverview(){
   </div>
 
   <div class="card">
-    <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>d.total)))} originally owed · click a bar to open that loan</span></div>
+    <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>debtOriginalUsd(d))))} originally owed · click a bar to open that loan</span></div>
     <div class="chart-box short"><canvas id="chartDebtMini"></canvas></div>
   </div>
   `;
@@ -147,17 +147,37 @@ function renderOverview(){
 
   const groupsSorted = yearData(y).expenseGroups
     .filter(g=>!g.excludeFromTotal)
-    .map(g=>({g, total: sumArr(groupTotals(g))}))
+    .map(g=>({g, total: sumArr(groupTotals(g)), kind:'group'}))
     .sort((a,b)=> b.total-a.total);
-  const labels = groupsSorted.map(x=>x.g.name);
-  const vals = groupsSorted.map(x=>x.total);
-  const breakdownTotal = vals.reduce((a,b)=>a+b,0); // ← ADD THIS LINE
+
+  // Investment contributions and debt payments are real money leaving your
+  // pocket too, so they get their own slices (all normalized to USD first,
+  // so an INR investment/debt never gets added straight into a USD total).
+  const investYearTotalUSD = sumArr(investContribTotals(y));
+  const debtYearTotalUSD = sumArr(debtPaymentTotals(y));
+  const extraSlices = [];
+  if(investYearTotalUSD > 0) extraSlices.push({ name:'Investments', total: investYearTotalUSD, kind:'investments' });
+  if(debtYearTotalUSD > 0) extraSlices.push({ name:'Debt Paid Off', total: debtYearTotalUSD, kind:'debt' });
+
+  const allSlices = groupsSorted.map(x=>({ name:x.g.name, total:x.total, kind:'group', g:x.g }))
+    .concat(extraSlices)
+    .sort((a,b)=> b.total-a.total);
+
+  const labels = allSlices.map(x=>x.name);
+  const vals = allSlices.map(x=>x.total);
+  const breakdownTotal = vals.reduce((a,b)=>a+b,0);
 
   charts.breakdown = safeChart(document.getElementById('chartBreakdown'), {
     type:'doughnut',
     data:{ labels, datasets:[{ data:vals, backgroundColor:labels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2 }] },
     options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
-      onClick:(evt,els)=>{ if(els.length){ const g=groupsSorted[els[0].index].g; goToTab('expenses', `[data-group-id="${g.id}"]`); } },
+      onClick:(evt,els)=>{
+        if(!els.length) return;
+        const slice = allSlices[els[0].index];
+        if(slice.kind==='investments') goToTab('investments');
+        else if(slice.kind==='debt') goToTab('debt');
+        else goToTab('expenses', `[data-group-id="${slice.g.id}"]`);
+      },
       onHover:(evt,els)=>{ evt.native.target.style.cursor = els.length?'pointer':'default'; },
       plugins:{
         legend:{position:'right', labels:{boxWidth:9, boxHeight:9, padding:10, font:{size:10.5}}},

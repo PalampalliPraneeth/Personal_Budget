@@ -64,8 +64,8 @@ function renderDebt(){
     return pb - pa;
   });
   const totalPending = sumArr(debts.map(d=>debtPendingCalc(d)));
-  const totalOriginal = sumArr(debts.map(d=>d.total));
-  const totalCleared = sumArr(debts.map(d=>d.cleared));
+  const totalOriginal = sumArr(debts.map(d=>debtOriginalUsd(d)));
+  const totalCleared = sumArr(debts.map(d=>debtToUsd(d.cleared, d)));
 
   if(state.debtShowPaid === undefined) state.debtShowPaid = false;
   const activeDebts = debts.filter(d => !(d.total>0 && debtPendingCalc(d)<=0));
@@ -76,6 +76,8 @@ function renderDebt(){
     const pct2 = d.total>0 ? Math.min(100, (clearedToDate/d.total)*100) : 0;
     const isPaid = d.total>0 && debtPendingCalc(d)<=0;
     const needsTotal = num(d.total)===0;
+    const isINR = d.currency === 'INR';
+    const nativeTotalDisplay = isINR ? fmtInr(num(d.total)) : fmt$(num(d.total),2);
     return `
     <div class="debt-card" data-debt-id="${d.id}">
       <div class="debt-card-head">
@@ -86,13 +88,17 @@ function renderDebt(){
         <div class="debt-figs">
           <span>Interest <b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}">${d.interest}</b>%/yr</span>
           <span>EMI/min <b class="editable-inline" contenteditable="true" data-debtfield="emi" data-id="${d.id}">${d.emi||0}</b></span>
+          <select data-debtcurrency="${d.id}" style="background:var(--bg-card-hi); color:var(--teal-soft); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11px; padding:2px 4px;">
+            <option value="USD" ${!isINR?'selected':''}>USD</option>
+            <option value="INR" ${isINR?'selected':''}>INR</option>
+          </select>
         </div>
       </div>
       <div class="runway ${isPaid?'zero':''}"><div class="runway-fill" style="width:${pct2}%"></div></div>
       <div class="debt-foot">
-        <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedToDate.toFixed(2)}</b> <span style="opacity:.55">(incl. ${fmt$(sumArr(d.m),2)} from monthly payments this year)</span></span>
-        <span>Pending: <b class="editable-inline" style="color:var(--rust-soft)" contenteditable="true" data-debtfield="pending" data-id="${d.id}">${fmt$(debtPendingCalc(d),2)}</b></span>
-        <span>Original: <b class="editable-inline" contenteditable="true" data-debtfield="total" data-id="${d.id}">${d.total}</b></span>
+        <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedToDate.toFixed(2)}</b> USD <span style="opacity:.55">(incl. ${fmt$(debtToUsd(sumArr(d.m),d),2)} from monthly payments this year${isINR?', converted from INR':''})</span></span>
+        <span>Pending: <b class="editable-inline" style="color:var(--rust-soft)" contenteditable="true" data-debtfield="pending" data-id="${d.id}">${fmt$(debtPendingCalc(d),2)}</b> USD</span>
+        <span>Original: <b class="editable-inline" contenteditable="true" data-debtfield="total" data-id="${d.id}">${d.total}</b> ${d.currency||'USD'} ${isINR?`<span style="opacity:.55">(${fmt$(debtOriginalUsd(d),2)})</span>`:''}</span>
       </div>
       ${d.note?`<div class="section-sub" style="margin-top:8px;">⚑ ${d.note}</div>`:''}
     </div>`;
@@ -215,17 +221,27 @@ function renderDebt(){
       if(el.textContent === el.dataset.origRaw) return;
       const id = el.dataset.id, field = el.dataset.debtfield;
       const d = debts.find(x=>x.id===id);
-      const v = parseFloat(el.textContent.replace(/[^0-9.\-]/g,''));
-      const safeV = isNaN(v) ? 0 : v;
+      const isINR = d.currency === 'INR';
+      const evaluated = evalExpr(el.textContent.replace(/[$₹,]/g,''));
+      const safeV = evaluated===null ? 0 : evaluated;
+      // "Cleared" and "Pending" are shown/edited in USD; convert back to the
+      // debt's native currency before storing (d.cleared / d.total are always
+      // native currency).
+      const usdToNative = (usd)=> isINR ? usd * ((typeof fxRates!=='undefined' && fxRates && fxRates.INR) ? fxRates.INR : FX_FALLBACK_INR) : usd;
       if(field==='clearedDisplay'){
         const beforeDisplay = debtClearedToDate(d);
         if(beforeDisplay===safeV) return;
-        d.cleared = safeV - sumArr(d.m);
+        const clearedNativeTotal = usdToNative(safeV);
+        d.cleared = clearedNativeTotal - sumArr(d.m);
       } else if(field==='pending'){
-        const clearedAmount = debtClearedToDate(d);
-        const newTotal = safeV + clearedAmount;
-        if(d.total===newTotal) return;
-        d.total = newTotal;
+        const clearedAmountUsd = debtClearedToDate(d);
+        const newTotalUsd = safeV + clearedAmountUsd;
+        const newTotalNative = usdToNative(newTotalUsd);
+        if(d.total===newTotalNative) return;
+        d.total = newTotalNative;
+      } else if(field==='total'){
+        if(d.total===safeV) return;
+        d.total = safeV; // native currency, entered directly
       } else {
         if(d[field]===safeV) return;
         d[field] = safeV;
@@ -234,6 +250,17 @@ function renderDebt(){
       renderDebt();
     });
     el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){e.preventDefault(); el.blur();}});
+  });
+
+  /* ---- Debt currency select ---- */
+  document.querySelectorAll('[data-debtcurrency]').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const d = debts.find(x=>x.id===sel.dataset.debtcurrency);
+      if(!d || d.currency===sel.value) return;
+      d.currency = sel.value;
+      markDirty('debt', {tab:'debt', action:'edit', target:d.name, field:'currency', oldVal:d.currency, newVal:sel.value});
+      renderDebt();
+    });
   });
 
   /* ---- Show/hide paid-off debts ---- */
@@ -257,6 +284,7 @@ function renderDebt(){
       cleared:0,
       interest: parseFloat(intInp.value)||0,
       emi:0,
+      currency:'USD',
       m:n12()
     });
     
@@ -276,8 +304,7 @@ function renderDebt(){
         const rowId = td.dataset.plancell, colId = td.dataset.col;
         const row = plan.rows.find(r=>r.id===rowId);
         const raw = td.textContent.trim().replace(/[$,]/g,'');
-        let v = raw===''? null : parseFloat(raw);
-        if(isNaN(v)) v = null;
+        let v = raw===''? null : evalExpr(raw);
         const before = row.values[colId]===undefined ? null : row.values[colId];
         if(before===v) return;
         row.values[colId] = v;

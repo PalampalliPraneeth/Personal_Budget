@@ -107,7 +107,17 @@ function renderExpenses(){
   const activeDebtRows = activeDebts.map(debtRowHtml).join('');
   const paidOffRows = paidOffDebts.map(debtRowHtml).join('');
 
-  const debtRowsHtml = activeDebtRows + (paidOffDebts.length ? `
+  // Total row — sums every loan's payments in USD (converting any INR-currency
+  // debts first) so the row is never a mix of currencies.
+  const debtMonthTotalsUSD = monthsToShow.map(i =>
+    sumArr(debts.map(d => debtToUsd(d.m[i], d)))
+  );
+  const debtYearTotalUSD = sumArr(debts.map(d => debtToUsd(sumArr(d.m), d)));
+  const debtTotalRowHtml = debts.length ? `
+    <tr class="total-row"><td>Total</td>${debtMonthTotalsUSD.map(t=>`<td>${fmt$(t,2)}</td>`).join('')}<td style="font-weight:600;">${fmt$(debtYearTotalUSD,2)}</td><td></td><td></td><td></td></tr>
+  ` : '';
+
+  const debtRowsHtml = activeDebtRows + debtTotalRowHtml + (paidOffDebts.length ? `
     <tr><td colspan="${monthsToShow.length + 5}" style="background:var(--bg-card-hi);color:var(--gold-soft);font-family:var(--font-mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;padding:8px 10px;cursor:pointer;" onclick="this.closest('tbody').classList.toggle('show-paidoff')">
       <span style="display:inline-flex;align-items:center;gap:8px;">
         <span class="g-caret" style="transition:transform .18s ease;">▾</span> Paid Off (${paidOffDebts.length} loan${paidOffDebts.length===1?'':'s'})
@@ -204,9 +214,8 @@ function renderExpenses(){
       if(td.textContent === td.dataset.origRaw) return;
       const d = debts.find(x=>x.id===td.dataset.debtpay);
       const idx = Number(td.dataset.idx);
-      const raw = td.textContent.trim().replace(/[$,]/g,'');
-      let v = raw===''? null : parseFloat(raw);
-      if(isNaN(v)) v = null;
+      const raw = td.textContent.trim().replace(/[$₹,]/g,'');
+      let v = raw===''? null : evalExpr(raw);
       const before = d.m[idx]===undefined ? null : d.m[idx];
       if(before===v) return;
       d.m[idx] = v;
@@ -260,6 +269,7 @@ function renderExpenses(){
       cleared:0,
       interest: parseFloat(intInp.value)||0,
       emi:0,
+      currency:'USD',
       m:n12()
     });
     

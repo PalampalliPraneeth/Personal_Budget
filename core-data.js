@@ -72,6 +72,13 @@ async function loadData(){
             if(!inv.holdings) inv.holdings = [];
           });
         }
+        // Migrate debts to have an explicit currency (defaults to USD so
+        // existing data's math/formatting doesn't change).
+        if(DATA[y].debts){
+          DATA[y].debts.forEach(d=>{
+            if(!d.currency) d.currency = 'USD';
+          });
+        }
       });
       if(!DATA.paymentPlan) DATA.paymentPlan = buildDefaultPaymentPlan();
       lastSavedSnapshot = JSON.stringify(DATA);
@@ -261,8 +268,21 @@ async function logAccess(role){
    ========================================================================= */
 function num(v){ return (typeof v === 'number' && !isNaN(v)) ? v : 0; }
 function sumArr(arr){ return arr.reduce((a,b)=>a+num(b),0); }
-function debtClearedToDate(d){ return num(d.cleared) + sumArr(d.m); }
-function debtPendingCalc(d){ return Math.max(num(d.total) - debtClearedToDate(d), 0); }
+/* Debts (like investments) can be entered in native currency (USD/INR).
+   d.total / d.cleared / d.emi / d.m[] are always stored in that native
+   currency — this converts to USD wherever a figure is combined with USD
+   totals (Overview, KPIs, charts), so an INR debt is never added straight
+   into a USD sum. */
+function debtToUsd(v, d){
+  const n = num(v);
+  return (d && d.currency === 'INR') ? inrToUsd(n) : n;
+}
+function debtClearedToDate(d){
+  const clearedNative = num(d.cleared) + sumArr(d.m);
+  return debtToUsd(clearedNative, d);
+}
+function debtPendingCalc(d){ return Math.max(debtToUsd(d.total, d) - debtClearedToDate(d), 0); }
+function debtOriginalUsd(d){ return debtToUsd(d.total, d); }
 function fmt$(v, decimals){
   decimals = decimals===undefined? 0 : decimals;
   const neg = v<0;
@@ -313,7 +333,10 @@ function expenseTotalsExcluded(y){
 }
 function investContribTotals(y){
   const out = n12().map(()=>0);
-  yearData(y).investments.forEach(inv=> inv.m.forEach((v,i)=> out[i]+=num(v)));
+  yearData(y).investments.forEach(inv=> inv.m.forEach((v,i)=> {
+    const raw = num(v);
+    out[i] += (inv.currency === 'INR') ? inrToUsd(raw) : raw;
+  }));
   return out;
 }
 function sumRange(arr, months){ return months.reduce((a,i)=>a+num(arr[i]),0); }
@@ -332,7 +355,7 @@ function findLatestMonthWithData(y){
    ========================================================================= */
 function debtPaymentTotals(y){
   const out = n12().map(()=>0);
-  yearData(y).debts.forEach(d=> d.m.forEach((v,i)=> out[i]+=num(v)));
+  yearData(y).debts.forEach(d=> d.m.forEach((v,i)=> out[i]+=debtToUsd(v, d)));
   return out;
 }
 function cfOverride(y, i, field){

@@ -47,6 +47,35 @@ function toUsd(item, fieldOrValue){
   return v;
 }
 
+/* Build a tooltip that can carry TWO kinds of info at once:
+   1) a math breakdown, if the person typed "5000+2000"
+   2) a currency conversion note, if the item is in INR
+   Rather than fighting over one hover slot, stack them as two short lines —
+   breakdown (in the currency you typed) on top, USD equivalent underneath.
+   Returns null if there's nothing worth showing. */
+function investCellTip(item, rawExpr, nativeValue){
+  const isInr = item.currency === 'INR';
+  const hasBreakdown = rawExpr && /\+/.test(rawExpr);
+
+  let line1 = null;
+  if (hasBreakdown) {
+    const parts = rawExpr.replace(/\s+/g,'').split('+').filter(Boolean);
+    const total = parts.reduce((a,b)=>a+(parseFloat(b)||0),0);
+    const fmtPart = (n)=> isInr ? fmtInr(parseFloat(n)) : fmt$(parseFloat(n),2);
+    line1 = parts.map(fmtPart).join(' + ') + ' = ' + (isInr ? fmtInr(total) : fmt$(total,2));
+  } else if (isInr && nativeValue !== null && nativeValue !== undefined) {
+    line1 = fmtInr(nativeValue);
+  }
+
+  let line2 = null;
+  if (isInr && nativeValue !== null && nativeValue !== undefined) {
+    line2 = '≈ ' + fmt$(inrToUsd(nativeValue), 2) + ' at current rate';
+  }
+
+  if (!line1) return null;
+  return line2 ? (line1 + '&#10;' + line2) : line1; // &#10; = newline in a title/data-tip
+}
+
 /* What to paint inside a cell */
 function displayCell(item, v, rates){
   if (v === null || v === undefined) return '–';
@@ -75,6 +104,7 @@ function renderInvestments(){
     // Force-correct: if it looks Indian, make it INR regardless of old saved value
     if (isIndian) it.currency = 'INR';
     else if (!it.currency) it.currency = 'USD';
+    if (!it.raw) it.raw = n12(); // remembers "5000+2000"-style typed expressions per month
   });
 
   const items = [...yearData(y).investments].sort((a,b)=>{
@@ -118,11 +148,12 @@ function renderInvestments(){
 
     const cells = it.m.map((v, i) => {
       const display = displayCell(it, v, rates);
-      const tip = (it.currency === 'INR' && v !== null && v !== undefined) ? fmtInr(v) : null;
+      const rawExpr = it.raw && it.raw[i];
+      const tip = investCellTip(it, rawExpr, v);
       return `<td class="editable ${!v ? 'zero' : ''} ${tip ? 'has-tip' : ''}"
                   contenteditable="true"
                   data-field="m" data-idx="${i}" data-id="${it.id}"
-                  ${tip ? `data-tip="${tip}"` : ''}
+                  ${tip ? `data-tip="${tip.replace(/"/g,'&quot;')}"` : ''}
                   data-raw="${v === null || v === undefined ? '' : v}">${display}</td>`;
     }).join('');
 
@@ -141,10 +172,10 @@ function renderInvestments(){
     } else {
       const cvDisplay = displayCell(it, it.currentValue, rates);
       const invDisplay = displayCell(it, it.invested, rates);
-      const cvTip = it.currency === 'INR' ? fmtInr(it.currentValue) : null;
-      const invTip = it.currency === 'INR' ? fmtInr(it.invested) : null;
-      cvCell = `<td class="editable ${cvTip?'has-tip':''}" contenteditable="true" data-field="currentValue" data-id="${it.id}" ${cvTip?`data-tip="${cvTip}"`:''} data-raw="${it.currentValue||0}">${cvDisplay}</td>`;
-      invCell = `<td class="editable ${invTip?'has-tip':''}" contenteditable="true" data-field="invested" data-id="${it.id}" ${invTip?`data-tip="${invTip}"`:''} data-raw="${it.invested||0}">${invDisplay}</td>`;
+      const cvTip = investCellTip(it, it.currentValueRaw, it.currentValue);
+      const invTip = investCellTip(it, it.investedRaw, it.invested);
+      cvCell = `<td class="editable ${cvTip?'has-tip':''}" contenteditable="true" data-field="currentValue" data-id="${it.id}" ${cvTip?`data-tip="${cvTip.replace(/"/g,'&quot;')}"`:''} data-raw="${it.currentValue||0}">${cvDisplay}</td>`;
+      invCell = `<td class="editable ${invTip?'has-tip':''}" contenteditable="true" data-field="invested" data-id="${it.id}" ${invTip?`data-tip="${invTip.replace(/"/g,'&quot;')}"`:''} data-raw="${it.invested||0}">${invDisplay}</td>`;
     }
 
     return catHeaderRow + `<tr data-row-id="${it.id}">
@@ -218,6 +249,15 @@ function renderInvestments(){
   document.getElementById('investBody').querySelectorAll('td.editable').forEach(td=>{
     td.addEventListener('focus', ()=>{
       td.dataset.origRaw = td.textContent;
+      const id = td.dataset.id, field = td.dataset.field;
+      const item = items.find(x=>x.id===id);
+      // If this cell was last entered as "5000+2000", bring that expression
+      // back for editing instead of just the computed total.
+      let rawExpr = null;
+      if(field==='m') rawExpr = item.raw && item.raw[Number(td.dataset.idx)];
+      else if(field==='currentValue') rawExpr = item.currentValueRaw;
+      else if(field==='invested') rawExpr = item.investedRaw;
+      if(rawExpr){ td.textContent = rawExpr; return; }
       const raw = td.dataset.raw;
       if (raw !== undefined && raw !== '') td.textContent = raw;
       else if (td.textContent==='–') td.textContent = '';
@@ -227,20 +267,24 @@ function renderInvestments(){
       if (td.textContent === td.dataset.origRaw) return;
       const id = td.dataset.id, field = td.dataset.field;
       const item = items.find(x=>x.id===id);
-      // Strip $, ₹, commas, spaces
+      // Strip $, ₹, commas, spaces — then evaluate (supports "77+10" style entries)
       const raw = td.textContent.trim().replace(/[$₹,]/g,'').replace(/\s+/g,'');
-      let v = raw===''? null : parseFloat(raw);
-      if (isNaN(v)) v = null;
+      let v = raw===''? null : evalExpr(raw);
+      const hasBreakdown = /\+/.test(raw);
 
       if (field==='m'){
         const idx = Number(td.dataset.idx);
         const before = item.m[idx]===undefined ? null : item.m[idx];
-        if (before===v) return;
+        if (before===v && !hasBreakdown) return;
         item.m[idx] = v;
+        if(!item.raw) item.raw = n12();
+        item.raw[idx] = hasBreakdown ? raw : null;
       } else {
         const before = item[field]||0;
-        if (before===(v||0)) return;
+        if (before===(v||0) && !hasBreakdown) return;
         item[field] = v||0;
+        if(field==='currentValue') item.currentValueRaw = hasBreakdown ? raw : null;
+        if(field==='invested') item.investedRaw = hasBreakdown ? raw : null;
       }
       markDirty(); renderInvestments();
     });
