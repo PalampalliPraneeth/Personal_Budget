@@ -3,6 +3,7 @@ const TABS = [
   {id:'cashflow', label:'Cash Flow'},
   {id:'income', label:'Income'},
   {id:'expenses', label:'Expenses'},
+  {id:'savings', label:'Savings'},    
   {id:'investments', label:'Investments'},
   {id:'holdings', label:'Holdings'},
   {id:'debt', label:'Debt Payoff'},
@@ -204,6 +205,7 @@ function renderActive(){
   if(active==='cashflow') renderCashFlow();
   if(active==='income') renderIncome();
   if(active==='expenses') renderExpenses();
+  if(active==='savings') renderSavings(); 
   if(active==='investments') renderInvestments();
   if(active==='holdings') renderHoldings();
   if(active==='debt') renderDebt();

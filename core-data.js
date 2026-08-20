@@ -43,8 +43,8 @@ const PALETTE = ['#C9A961','#6FA491','#C06A46','#8FC0AC','#D98C64','#7FAE79','#9
 
 function buildDefaultData(){
   return {
-    2026: { income: [], expenseGroups: [], investments: [], debts: [] },
-    2025: { income: [], expenseGroups: [], investments: [], debts: [] }
+    2026: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [] },
+    2025: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [] }
   };
 }
 
@@ -343,9 +343,13 @@ function sumRange(arr, months){ return months.reduce((a,i)=>a+num(arr[i]),0); }
 
 function findLatestMonthWithData(y){
   const inc = incomeTotals(y), exp = expenseTotalsAllGroups(y);
-  let last = 0;
-  for(let i=0;i<12;i++){ if(inc[i]>0 || exp[i]>0) last=i; }
-  return last;
+  const savings = (yearData(y).savingsAccounts || []);
+  let last = -1;
+  for(let i=0;i<12;i++){
+    if(inc[i]>0 || exp[i]>0) last = i;
+    if(savings.some(acc => num((acc.m||[])[i]) > 0)) last = i;
+  }
+  return last >= 0 ? last : 0;
 }
 
 /* =========================================================================
