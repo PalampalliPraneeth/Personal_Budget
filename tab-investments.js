@@ -3,6 +3,8 @@
    ========================================================================= */
 const INVEST_CATS = ['Indian Stocks','US Stocks','Crypto','Angel Investing','Other'];
 
+let lastFailedSectorSymbols = [];
+
 /* ---------- FX helpers ---------- */
 let fxRates = null;
 let fxLastFetch = 0;
@@ -45,6 +47,34 @@ function toUsd(item, fieldOrValue){
   if (v === null || v === undefined || isNaN(v)) return 0;
   if (item.currency === 'INR') return inrToUsd(v);
   return v;
+}
+
+/* ---------- Sector lookup (for the sector allocation pie chart) ---------- */
+async function fetchSector(symbol, isIndian){
+  let sym = symbol.toUpperCase().trim();
+  if(isIndian && !sym.endsWith('.NS') && !sym.endsWith('.BO')){
+    sym = sym + '.NS';
+  }
+  if(typeof window !== 'undefined' && window.PRICE_PROXY_URL){
+    try{
+      const res = await fetch(`${window.PRICE_PROXY_URL}?symbol=${encodeURIComponent(sym)}&mode=sector`);
+      if(res.ok){
+        const data = await res.json();
+        return { sector: data.sector || null, industry: data.industry || null };
+      }
+    }catch(e){ /* fall through to public proxies below */ }
+  }
+  const target = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${sym}?modules=assetProfile`;
+  const proxies = ['https://api.allorigins.win/raw?url=', 'https://corsproxy.io/?'];
+  for(const proxy of proxies){
+    try{
+      const res = await fetch(proxy + encodeURIComponent(target));
+      const data = await res.json();
+      const profile = data?.quoteSummary?.result?.[0]?.assetProfile;
+      if(profile) return { sector: profile.sector || null, industry: profile.industry || null };
+    }catch(e){}
+  }
+  return { sector: null, industry: null };
 }
 
 /* What to paint inside a cell */
@@ -128,16 +158,10 @@ function renderInvestments(){
 
     const yearTotal = it.m.reduce((a, v) => a + toUsd(it, v), 0);
     const dyn = dynamicValuesFor(it);
-
-    /* Name is clickable if holdings exist; Current/Invested are plain display */
-    const nameLink = dyn
-      ? `<span style="cursor:pointer;color:var(--gold-soft);font-weight:500;" data-golink="${it.id}" data-tip="Click to view/edit ${it.name}'s positions in Holdings" class="has-tip">${it.name}</span>`
-      : it.name;
-
     let cvCell, invCell;
     if(dyn){
-      cvCell = `<td style="font-weight:600;">${fmt$(dyn.currentValue,2)}</td>`;
-      invCell = `<td style="font-weight:600;">${fmt$(dyn.invested,2)}</td>`;
+      cvCell = `<td class="has-tip" data-tip="From your Holdings tab" style="color:var(--gold-soft);font-weight:600;">🔗 ${fmt$(dyn.currentValue,2)}</td>`;
+      invCell = `<td class="has-tip" data-tip="From your Holdings tab" style="color:var(--gold-soft);font-weight:600;">🔗 ${fmt$(dyn.invested,2)}</td>`;
     } else {
       const cvDisplay = displayCell(it, it.currentValue, rates);
       const invDisplay = displayCell(it, it.invested, rates);
@@ -147,8 +171,12 @@ function renderInvestments(){
       invCell = `<td class="editable ${invTip?'has-tip':''}" contenteditable="true" data-field="invested" data-id="${it.id}" ${invTip?`data-tip="${invTip}"`:''} data-raw="${it.invested||0}">${invDisplay}</td>`;
     }
 
+    const nameCell = dyn
+      ? `<td><span class="has-tip" data-golink="${it.id}" data-tip="Click to view/edit ${it.name}'s holdings" style="cursor:pointer;color:var(--gold-soft);text-decoration:underline dotted;">${it.name}</span> <span class="row-del" data-del="${it.id}">✕</span></td>`
+      : `<td>${it.name} <span class="row-del" data-del="${it.id}">✕</span></td>`;
+
     return catHeaderRow + `<tr data-row-id="${it.id}">
-      <td>${nameLink} <span class="row-del" data-del="${it.id}">✕</span></td>
+      ${nameCell}
       <td>
         <select data-catsel="${it.id}" style="background:var(--bg-card-hi); color:var(--gold-soft); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11.5px; padding:3px 4px;">
           ${INVEST_CATS.map(c => `<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}
@@ -174,10 +202,29 @@ function renderInvestments(){
   const allocLabels = allocSorted.map(e=>e[0]);
   const allocVals   = allocSorted.map(e=>e[1]);
 
+  /* ---- Sector allocation (from individual holdings' h.sector, fetched from Yahoo) ---- */
+  const sectorMap = {};
+  let sectorsMissingCount = 0;
+  items.forEach(it => {
+    const platRows = (it.holdings && it.holdings.length) ? platformHoldings(y, it.id) : [];
+    platRows.forEach(r => {
+      if(!r.sector){
+        sectorsMissingCount++;
+        sectorMap['Unclassified'] = (sectorMap['Unclassified']||0) + (r.currentValueUSD||0);
+      } else {
+        sectorMap[r.sector] = (sectorMap[r.sector]||0) + (r.currentValueUSD||0);
+      }
+    });
+  });
+  const sectorSorted = Object.entries(sectorMap).sort((a,b)=>b[1]-a[1]);
+  const sectorLabels = sectorSorted.map(e=>e[0]);
+  const sectorVals = sectorSorted.map(e=>e[1]);
+  const sectorTotal = sectorVals.reduce((a,b)=>a+b,0);
+
   /* ---- HTML ---- */
   const html = `
     <div class="section-title">Investments · ${y}</div>
-    <p class="section-sub">Every holding's monthly contribution, plus current value vs. what you've put in. <b style="color:var(--teal-soft)">Indian Stocks marked "INR" are auto-converted to USD.</b> Hover any converted cell to see the original amount. Rates fetched live (cached 1 hr). <b style="color:var(--gold-soft)">Click any platform name</b> that has Holdings tracked to jump straight to its positions.</p>
+    <p class="section-sub">Every holding's monthly contribution, plus current value vs. what you've put in. <b style="color:var(--teal-soft)">Indian Stocks marked "INR" are auto-converted to USD.</b> Hover any converted cell to see the original amount. Rates fetched live (cached 1 hr). <b style="color:var(--gold-soft)">🔗 Current Value / Invested</b> for any platform with holdings tracked in the Holdings tab are pulled from there automatically — click either to jump straight to that platform's holdings.</p>
 
     <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
       <div class="kpi-card c-teal"><div class="kpi-label">Current Portfolio Value (USD)</div><div class="kpi-value">${fmt$(currentTotalUSD)}</div></div>
@@ -194,6 +241,21 @@ function renderInvestments(){
         <div class="card-head"><h3>Portfolio allocation (USD)</h3></div>
         <div class="chart-box"><canvas id="chartAlloc"></canvas></div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap; gap:10px;">
+        <h3>Sector allocation</h3>
+        <button class="btn small" id="fetchSectorsBtn">🔄 Fetch sectors${sectorsMissingCount?` (${sectorsMissingCount} unclassified)`:''}</button>
+      </div>
+      <p class="section-sub">Pulled from Yahoo Finance per holding, cached once fetched. Mutual funds often don't have a single sector (they hold many) — those group under "Unclassified" rather than erroring.</p>
+      ${!sectorLabels.length ? '<div class="section-sub" style="padding:20px 0; text-align:center;">No holdings with a current value yet — add some in the Holdings tab first.</div>' : `
+      <div class="chart-box"><canvas id="chartSector"></canvas></div>
+      `}
+      ${lastFailedSectorSymbols.length ? `
+      <div class="notice" style="margin-top:12px;">
+        <b style="color:var(--danger);">Could not classify:</b> ${lastFailedSectorSymbols.join(', ')} — click a holding in the Holdings tab to set its sector manually.
+      </div>` : ''}
     </div>
 
     <div class="card">
@@ -321,4 +383,51 @@ function renderInvestments(){
         }
       } }
   });
+
+  destroyChart('sector');
+  if(sectorLabels.length){
+    charts.sector = safeChart(document.getElementById('chartSector'), {
+      type:'doughnut',
+      data:{ labels:sectorLabels, datasets:[{data:sectorVals, backgroundColor:sectorLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2}] },
+      options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
+        plugins:{
+          legend:{position:'right', labels:{boxWidth:9,boxHeight:9, font:{size:10.5}}},
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const val = context.raw;
+                const pct = sectorTotal > 0 ? ((val / sectorTotal) * 100).toFixed(1) : 0;
+                return ` ${context.label}: ${fmt$(val)} (${pct}%)`;
+              }
+            }
+          }
+        } }
+    });
+  }
+
+  const fetchSectorsBtn = document.getElementById('fetchSectorsBtn');
+  if(fetchSectorsBtn){
+    fetchSectorsBtn.addEventListener('click', async ()=>{
+      fetchSectorsBtn.textContent = '⏳ Fetching...';
+      fetchSectorsBtn.disabled = true;
+      let updated = 0, failed = 0;
+      const failedSymbols = [];
+      for(const it of yearData(y).investments){
+        for(const h of (it.holdings || [])){
+          if(h.status === 'closed' || h.sector) continue;
+          try{
+            const result = await fetchSector(h.symbol, it.currency === 'INR');
+                        h.sector = result.sector || 'Unclassified';
+            h.industry = result.industry || null;
+            updated++;
+          }catch(e){ failed++; failedSymbols.push(h.symbol || h.name || 'unknown'); }
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
+      lastFailedSectorSymbols = failedSymbols;
+      markDirty();
+      renderInvestments();
+      showToast(`${updated} sectors fetched${failed>0 ? ', '+failed+' failed' : ''}`);
+    });
+  }
 }

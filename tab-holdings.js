@@ -942,7 +942,7 @@ function renderHoldings(){
   const typeTh = `<th id="typeFilterTh" style="cursor:pointer; white-space:nowrap;" title="Filter by type">Type <span id="typeFilterIcon" style="opacity:.75;">🔽</span></th>`;
   const thead = isAll
     ? `<tr><th>Name</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th style="min-width:70px;">Day Chg</th><th>Day P&L</th>${typeTh}<th>Platforms</th></tr>`
-    : `<tr><th>Symbol</th><th>Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year — hover a row's value to see the exact baseline" class="has-tip">YTD P&L</th><th></th></tr>`;
+    : `<tr><th>Symbol</th><th>Name</th><th>Sector</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><!-- <th data-tip="Calculated automatically from your earliest snapshot this year — hover a row's value to see the exact baseline" class="has-tip">YTD P&L</th> --><th></th></tr>`;
 
   /* ---- OPEN table body ---- */
   const tbody = pageRows.map(r => {
@@ -969,6 +969,7 @@ function renderHoldings(){
     return `<tr data-hid="${r.id}">
       <td style="font-weight:600;" class="editable" contenteditable="true" data-f="symbol" data-id="${r.id}">${r.symbol||''}</td>
       <td class="editable" contenteditable="true" data-f="name" data-id="${r.id}">${r.name||''}</td>
+      <td class="editable" contenteditable="true" data-f="sector" data-id="${r.id}">${r.sector||'–'}</td>
       <td><select data-htype="${r.id}" style="background:var(--bg-card-hi);color:var(--gold-soft);border:1px solid var(--line);border-radius:5px;font-family:var(--font-mono);font-size:11.5px;padding:3px 4px;">
         ${HOLDING_TYPES.map(t=>`<option value="${t}" ${r.type===t?'selected':''}>${t}</option>`).join('')}
       </select></td>
@@ -980,8 +981,7 @@ function renderHoldings(){
       <td style="font-weight:600;color:var(--gold-soft);" ${tip(r.tVal)}>${r.dVal}</td>
       <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
       <td style="font-weight:600;color:${r.dayChangePct===null?'var(--text-dim)':plColor(r.dayPLUSD||0)};" ${tip(r.tDayPl)}>${r.dayChangePct===null?'—':(r.dayPLUSD>=0?'+':'')+r.dDayPl}</td>
-      <td style="color:${plColor(r.ytdNet)}" title="${r.ytdBaselineNote}">${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
-      <td style="white-space:nowrap;"><button class="btn small sell" data-sellh="${r.id}">Sell</button> <button class="btn small" data-recurh="${r.id}" title="Set up a recurring buy" style="margin-left:4px;">🔁</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
+      <!-- <td style="color:${plColor(r.ytdNet)}" title="${r.ytdBaselineNote}">${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td> -->      <td style="white-space:nowrap;"><button class="btn small sell" data-sellh="${r.id}">Sell</button> <button class="btn small" data-recurh="${r.id}" title="Set up a recurring buy" style="margin-left:4px;">🔁</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
     </tr>`;
   }).join('');
 
@@ -1044,7 +1044,7 @@ function renderHoldings(){
       </select>
       <input type="number" id="hNewQty" placeholder="Qty" step="any" style="width:70px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
       <input type="number" id="hNewAvg" placeholder="Avg price" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
-      <input type="number" id="hNewCur" placeholder="Current" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
+      <input type="number" id="hNewCur" placeholder="LTP(Last Traded Price)" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
       <button class="btn primary small" id="hAddBtn">+ Add</button>
     </div>
   `;
@@ -1311,7 +1311,7 @@ function renderHoldings(){
           const id = td.dataset.id, field = td.dataset.f;
           const h = inv.holdings.find(x => x.id === id);
           if(!h) return;
-          if(field === 'symbol' || field === 'name'){
+          if(field === 'symbol' || field === 'name' || field === 'sector'){
             const v = td.textContent.trim();
             if(h[field] !== v){ h[field] = v; markDirty(); renderHoldings(); }
             return;
@@ -1429,6 +1429,16 @@ function renderHoldings(){
                 h.lastFetched = Date.now();
                 h.priceFetchFailed = false;
                 updated++;
+                // Also fetch sector if missing (uses same Edge Function with mode=sector)
+                if(!h.sector && typeof fetchSector === 'function'){
+                  console.log('[SECTOR FETCH] Trying', h.symbol, 'isIndian:', inv.currency==='INR');
+                  try{
+                    const sec = await fetchSector(h.symbol, inv.currency === 'INR');
+                    console.log('[SECTOR FETCH] Result for', h.symbol, ':', sec);
+                    h.sector = sec.sector || 'Unclassified';
+                    h.industry = sec.industry || null;
+                  }catch(e){ /* sector non-critical — don't fail the whole price fetch */ }
+                }
               }catch(e){ h.priceFetchFailed = true; failed++; }
               await new Promise(r => setTimeout(r, 300));
             }
@@ -1445,6 +1455,14 @@ function renderHoldings(){
                 h.lastFetched = Date.now();
                 h.priceFetchFailed = false;
                 updated++;
+                // Also fetch sector if missing (uses same Edge Function with mode=sector)
+                if(!h.sector && typeof fetchSector === 'function'){
+                  try{
+                    const sec = await fetchSector(h.symbol);
+                    h.sector = sec.sector || 'Unclassified';
+                    h.industry = sec.industry || null;
+                  }catch(e){ /* sector non-critical — don't fail the whole price fetch */ }
+                }
               }catch(e){ h.priceFetchFailed = true; failed++; }
               await new Promise(r => setTimeout(r, 300));
             }
