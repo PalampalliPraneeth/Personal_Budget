@@ -135,6 +135,89 @@ a{color:var(--gold-soft);}
 .chart-box.tall{height:340px;}
 .chart-box.short{height:220px;}
 
+/* ---------- Money-flow Sankey (Overview tab) ---------- */
+.sankey-scroll{ overflow-x:auto; overflow-y:visible; margin:0 -4px; padding:0 4px; }
+.sankey-scroll::-webkit-scrollbar{ height:8px; }
+.sankey-svg{ width:100%; min-width:760px; display:block; height:auto; }
+.sk-node{ cursor:default; transition:filter .12s ease, opacity .12s ease; }
+.sk-node[data-sankey-toggle], .sk-node[data-sankey-goto]{ cursor:pointer; }
+.sk-node:hover{ filter:brightness(1.18); }
+.sk-node-hub{ cursor:default !important; }
+.sk-node-expanded{ filter:brightness(1.08); }
+.sk-link{ transition:opacity .15s ease; }
+.sankey-svg:hover .sk-link{ opacity:.7; }
+.sk-label-name{
+  font-family:var(--font-body); font-size:12px; font-weight:600; fill:var(--text);
+  paint-order:stroke; stroke:var(--bg-card); stroke-width:3px; stroke-linejoin:round;
+}
+.sk-label-val{ font-family:var(--font-mono); font-size:11px; fill:var(--text-dim);
+  paint-order:stroke; stroke:var(--bg-card); stroke-width:3px; stroke-linejoin:round; }
+.sk-label-pct{ fill:var(--text-faint); }
+.sk-hub-label{ font-size:12.5px; fill:var(--gold-soft); font-family:var(--font-display); font-weight:600; }
+
+/* ---------- Upcoming recurring investments (Overview tab) ---------- */
+.recur-chips{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.recur-chip{
+  display:flex; align-items:center; gap:7px; background:var(--bg-card-hi);
+  border:1px solid var(--line-soft); border-radius:999px; padding:6px 12px 6px 10px;
+  font-size:12px;
+}
+.recur-chip-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.recur-chip-name{ color:var(--text); font-weight:600; }
+.recur-chip-amt{ color:var(--gold-soft); font-family:var(--font-mono); font-weight:600; }
+.recur-chip-count{ color:var(--text-faint); font-size:10.5px; }
+
+.recur-list{
+  max-height:400px; overflow-y:auto; overflow-x:hidden;
+  display:flex; flex-direction:column; gap:14px;
+  margin:0 -6px; padding:2px 6px;
+  scrollbar-width:thin; scrollbar-color:var(--line) transparent;
+}
+.recur-list::-webkit-scrollbar{ width:7px; }
+.recur-list::-webkit-scrollbar-track{ background:transparent; }
+.recur-list::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+.recur-list::-webkit-scrollbar-thumb:hover{ background:var(--teal-soft); }
+
+.recur-date-group{ display:flex; flex-direction:column; gap:6px; }
+.recur-date-head{
+  display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+  padding:0 2px 5px; border-bottom:1px solid var(--line-soft);
+}
+.recur-date-label{ font-family:var(--font-display); font-size:13.5px; font-weight:600; color:var(--gold-soft); }
+.recur-date-total{ font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--text); }
+.recur-date-count{ font-family:var(--font-body); font-size:10.5px; font-weight:400; color:var(--text-faint); }
+
+.recur-date-split{
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px;
+  padding:1px 2px 3px;
+}
+.recur-date-split-label{ font-size:10.5px; color:var(--text-faint); margin-right:2px; }
+.recur-split-chip{
+  display:inline-flex; align-items:center; gap:5px;
+  background:var(--bg-card); border:1px solid var(--line-soft); border-radius:999px;
+  padding:3px 10px 3px 8px; font-size:11.5px; color:var(--text-dim);
+}
+.recur-split-chip b{ color:var(--gold-soft); font-family:var(--font-mono); font-weight:600; }
+
+.recur-row{
+  display:flex; align-items:center; gap:12px;
+  background:var(--bg-card-hi); border:1px solid var(--line-soft); border-radius:8px;
+  padding:10px 12px; cursor:pointer; transition:border-color .12s ease, transform .12s ease;
+}
+.recur-row:hover{ border-color:var(--teal-soft); transform:translateX(2px); }
+.recur-row-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.recur-row-main{ flex:1; min-width:0; }
+.recur-row-name{ font-weight:600; color:var(--text); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.recur-row-sub{ color:var(--text-dim); font-weight:400; }
+.recur-row-confirmed{ color:var(--teal-soft); font-size:10.5px; font-weight:600; margin-left:4px; }
+.recur-row-platform{ font-size:11px; color:var(--text-faint); margin-top:2px; }
+.recur-row-schedule{ color:var(--text-dim); }
+.recur-row-amt{ font-family:var(--font-mono); font-weight:600; color:var(--gold-soft); font-size:13px; white-space:nowrap; }
+@media(max-width:640px){
+  .recur-row{ flex-wrap:wrap; }
+  .recur-date-head{ flex-direction:column; align-items:flex-start; gap:2px; }
+}
+
 /* ---------- Buttons ---------- */
 .btn{
   font-family:var(--font-mono); font-size:12px; color:var(--text); background:var(--bg-card-hi);
