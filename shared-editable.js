@@ -7,7 +7,10 @@ function evalExpr(s){
   if(/^[0-9.+\-\s]+$/.test(cleaned) && /\+/.test(cleaned)){
     try{
       const v = Function('"use strict";return ('+cleaned.replace(/\s+/g,'')+')')();
-      return (typeof v==='number' && isFinite(v)) ? v : null;
+      if(typeof v!=='number' || !isFinite(v)) return null;
+      // Guard against binary floating-point artifacts (e.g. 590+69.82 ->
+      // 659.8199999999999) — these are currency amounts, so round to cents.
+      return Math.round((v + Number.EPSILON) * 100) / 100;
     }catch(e){ return null; }
   }
   const f = parseFloat(cleaned);
@@ -74,9 +77,9 @@ function attachEditableHandlers(container, items, onChange, tabName){
       }
       const v = evalExpr(entered);
       const hasBreakdown = /\+/.test(entered);
-      item.m[idx] = v;
+      item.m[idx] = v===null ? null : roundCents(v);
       item.raw[idx] = hasBreakdown ? entered : null;
-      td.textContent = v===null ? '–' : v;
+      td.textContent = v===null ? '–' : roundCents(v);
       td.classList.toggle('zero', !v);
       const tip = formatTip(item.raw[idx]);
       if(tip){ td.dataset.tip = tip; td.classList.add('has-tip'); }

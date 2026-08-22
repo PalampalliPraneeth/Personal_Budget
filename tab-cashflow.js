@@ -188,7 +188,7 @@ function renderCashFlow(){
       const before = b.m[idx];
       if(before===v) return;
       b.m[idx] = v;
-      td.textContent = v===null?'–':v;
+      td.textContent = v===null?'–':roundCents(v);
       td.classList.toggle('zero', !v);
       markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Bank '+b.name, field:MONTHS[idx], oldVal:before===null?'empty':before, newVal:v===null?'empty':v});
       renderCashFlow();

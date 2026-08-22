@@ -218,8 +218,8 @@ function renderExpenses(){
       let v = raw===''? null : evalExpr(raw);
       const before = d.m[idx]===undefined ? null : d.m[idx];
       if(before===v) return;
-      d.m[idx] = v;
-      td.textContent = v===null?'–':v;
+      d.m[idx] = v===null ? null : roundCents(v);
+      td.textContent = v===null?'–':roundCents(v);
       td.classList.toggle('zero', !v);
       markDirty(); renderExpenses();
     });

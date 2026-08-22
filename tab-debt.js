@@ -307,8 +307,8 @@ function renderDebt(){
         let v = raw===''? null : evalExpr(raw);
         const before = row.values[colId]===undefined ? null : row.values[colId];
         if(before===v) return;
-        row.values[colId] = v;
-        td.textContent = v===null ? '–' : v;
+        row.values[colId] = v===null ? null : roundCents(v);
+        td.textContent = v===null ? '–' : roundCents(v);
         td.classList.toggle('zero', !v);
         markDirty('debt', {tab:'debt', action:'edit', target:'plan '+row.label, field:plan.columns.find(c=>c.id===colId)?.name, oldVal:before, newVal:v});
         renderDebt();

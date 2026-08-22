@@ -43,8 +43,8 @@ const PALETTE = ['#C9A961','#6FA491','#C06A46','#8FC0AC','#D98C64','#7FAE79','#9
 
 function buildDefaultData(){
   return {
-    2026: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [] },
-    2025: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [] }
+    2026: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [] },
+    2025: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [] }
   };
 }
 
@@ -79,6 +79,10 @@ async function loadData(){
             if(!d.currency) d.currency = 'USD';
           });
         }
+        // Older saved data won't have these arrays yet at all.
+        if(!DATA[y].savingsAccounts) DATA[y].savingsAccounts = [];
+        if(!DATA[y].retirementAccounts) DATA[y].retirementAccounts = [];
+        if(!DATA[y].savingsGoals) DATA[y].savingsGoals = [];
       });
       if(!DATA.paymentPlan) DATA.paymentPlan = buildDefaultPaymentPlan();
       lastSavedSnapshot = JSON.stringify(DATA);
@@ -267,6 +271,15 @@ async function logAccess(role){
    HELPERS: numbers, sums, formatting
    ========================================================================= */
 function num(v){ return (typeof v === 'number' && !isNaN(v)) ? v : 0; }
+/* Display-time safety net for binary floating-point artifacts (590+69.82
+   style additions can land on 659.8199999999999) — these are always
+   currency amounts, so round to the cent before showing raw values in
+   editable cells that don't go through fmt$. */
+function roundCents(v){
+  if(v===null || v===undefined || v==='') return v;
+  const n = Number(v);
+  return isNaN(n) ? v : Math.round((n + Number.EPSILON) * 100) / 100;
+}
 function sumArr(arr){ return arr.reduce((a,b)=>a+num(b),0); }
 /* Debts (like investments) can be entered in native currency (USD/INR).
    d.total / d.cleared / d.emi / d.m[] are always stored in that native
@@ -339,17 +352,102 @@ function investContribTotals(y){
   }));
   return out;
 }
+
+/* =========================================================================
+   RETIREMENT ACCOUNTS (401k / IRA / etc.) — lives inside the Savings tab.
+   Two parallel monthly streams per account: what YOU put in (mSelf) and what
+   your employer matched (mEmployer) — kept separate everywhere since the
+   employer portion never passed through your income/cash flow, so it must
+   never get counted as "your money" in Sankey/cash-flow math, only as an
+   asset once it's actually in the account.
+   priorSelf/priorEmployer hold everything contributed before you started
+   tracking here (same pattern as a debt's `cleared` field), so switching
+   years or starting mid-year doesn't lose your real total.
+   ========================================================================= */
+function ensureRetirementMigration(){
+  const y = state.year;
+  if(!yearData(y).retirementAccounts) yearData(y).retirementAccounts = [];
+  yearData(y).retirementAccounts.forEach(r=>{
+    if(!r.mSelf) r.mSelf = n12();
+    if(!r.mEmployer) r.mEmployer = n12();
+    if(r.priorSelf===undefined || r.priorSelf===null) r.priorSelf = 0;
+    if(r.priorEmployer===undefined || r.priorEmployer===null) r.priorEmployer = 0;
+    if(!r.currency) r.currency = 'USD';
+    if(r.returnRate===undefined || r.returnRate===null) r.returnRate = 0;
+  });
+}
+function retirementToUsd(v, r){
+  const n = num(v);
+  return (r && r.currency === 'INR') ? inrToUsd(n) : n;
+}
+/* Simple estimate: this year's expected growth if the current balance
+   compounds at the account's stated annual return/interest rate — same
+   "estimate off today's balance" approach the Savings tab uses for its
+   interest column. */
+function retirementProjectedAnnualGrowth(r){
+  return retirementAccountTotalBalance(r) * (num(r.returnRate)/100);
+}
+/* This YEAR's self-contribution only, per month, in USD — used by the
+   Overview Sankey ("where money went") and matches how investContribTotals
+   already works. Employer match is intentionally excluded here. */
+function retirementSelfContribTotals(y){
+  const out = n12().map(()=>0);
+  (yearData(y).retirementAccounts||[]).forEach(r=> (r.mSelf||[]).forEach((v,i)=> out[i]+=retirementToUsd(v,r)));
+  return out;
+}
+function retirementAccountTotalSelf(r){ return retirementToUsd(num(r.priorSelf) + sumArr(r.mSelf||[]), r); }
+function retirementAccountTotalEmployer(r){ return retirementToUsd(num(r.priorEmployer) + sumArr(r.mEmployer||[]), r); }
+function retirementAccountTotalBalance(r){ return retirementAccountTotalSelf(r) + retirementAccountTotalEmployer(r); }
+
+/* =========================================================================
+   SAVINGS GOALS — a goal can either LINK to an existing savings account
+   (progress auto-tracks that account's balance) or track contributions on
+   its own monthly grid when it isn't tied to one real account.
+   ========================================================================= */
+function ensureGoalsMigration(){
+  const y = state.year;
+  if(!yearData(y).savingsGoals) yearData(y).savingsGoals = [];
+  yearData(y).savingsGoals.forEach(g=>{
+    if(!g.m) g.m = n12();
+    if(g.targetAmount===undefined || g.targetAmount===null) g.targetAmount = 0;
+    if(!g.currency) g.currency = 'USD';
+    if(g.linkedAccountId===undefined) g.linkedAccountId = null;
+    if(!g.icon) g.icon = '🎯';
+  });
+}
+function goalLinkedAccount(goal, accounts){
+  return goal.linkedAccountId ? (accounts||[]).find(a=>a.id===goal.linkedAccountId) || null : null;
+}
+// A linked goal is denominated in whatever currency the linked account uses
+// (it IS that account's balance) — only an unlinked goal uses its own field.
+function goalEffectiveCurrency(goal, accounts){
+  const acc = goalLinkedAccount(goal, accounts);
+  return acc ? (acc.currency||'USD') : (goal.currency||'USD');
+}
+function goalTargetUsd(goal, accounts){
+  const cur = goalEffectiveCurrency(goal, accounts);
+  return cur==='INR' ? inrToUsd(num(goal.targetAmount)) : num(goal.targetAmount);
+}
+function goalContributedUsd(goal, accounts, monthIdx){
+  const cur = goalEffectiveCurrency(goal, accounts);
+  const acc = goalLinkedAccount(goal, accounts);
+  let native;
+  if(acc){
+    const i = monthIdx>=0 ? monthIdx : 0;
+    native = num((acc.m||[])[i]);
+  } else {
+    native = sumArr(goal.m||[]);
+  }
+  return cur==='INR' ? inrToUsd(native) : native;
+}
+
 function sumRange(arr, months){ return months.reduce((a,i)=>a+num(arr[i]),0); }
 
 function findLatestMonthWithData(y){
   const inc = incomeTotals(y), exp = expenseTotalsAllGroups(y);
-  const savings = (yearData(y).savingsAccounts || []);
-  let last = -1;
-  for(let i=0;i<12;i++){
-    if(inc[i]>0 || exp[i]>0) last = i;
-    if(savings.some(acc => num((acc.m||[])[i]) > 0)) last = i;
-  }
-  return last >= 0 ? last : 0;
+  let last = 0;
+  for(let i=0;i<12;i++){ if(inc[i]>0 || exp[i]>0) last=i; }
+  return last;
 }
 
 /* =========================================================================

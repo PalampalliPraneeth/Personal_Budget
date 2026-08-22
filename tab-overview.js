@@ -25,9 +25,14 @@ function goToTab(tabId, highlightSelector){
    Income sources → Total Income → where it went. Any node with more than
    one item underneath it (a group's categories, an investment's holdings,
    a debt's loans) can be clicked to fan out into its own column on the
-   right — collapsed by default so the chart stays calm at a glance.
+   right — expanded by default so the full breakdown is visible at a glance;
+   click a node to collapse it if you want a calmer view.
    ========================================================================= */
-let sankeyExpanded = {}; // { nodeId: true } — survives re-renders in this session
+let sankeyExpanded = {}; // { nodeId: true|false } — explicit overrides. Everything expands by default except Income (its individual pay sources stay collapsed until clicked), and this survives re-renders in this session.
+function isSankeyNodeExpanded(id){
+  if(id==='grp:income') return sankeyExpanded[id] === true;
+  return sankeyExpanded[id] !== false;
+}
 
 /* Combine every item below `pct` of grandTotal into one "Other" node, so a
    long tail of tiny slivers doesn't clutter (or, worse, visually collide
@@ -82,7 +87,16 @@ function buildSankeyData(y){
   }).filter(x=>x.value>0.005).sort((a,b)=>b.value-a.value);
   const debtTotal = sumArr(debtItems.map(x=>x.value));
 
-  const totalOut = sumArr(groupNodes.map(n=>n.value)) + investTotal + debtTotal;
+  // Retirement: only YOUR contribution counts as money leaving your pocket —
+  // employer match never passed through your income, so it can't be an
+  // outflow here without breaking the diagram's inflow=outflow balance.
+  let retirementItems = (yearData(y).retirementAccounts||[]).map(r=>{
+    const usd = retirementToUsd(sumArr(r.mSelf||[]), r);
+    return { id:'retitem:'+r.id, name:r.name, value: usd, kind:'retirementItem' };
+  }).filter(x=>x.value>0.005).sort((a,b)=>b.value-a.value);
+  const retirementTotal = sumArr(retirementItems.map(x=>x.value));
+
+  const totalOut = sumArr(groupNodes.map(n=>n.value)) + investTotal + debtTotal + retirementTotal;
   const leftover = totalIncome - totalOut;
   const grandTotal = Math.max(
     leftover < -0.005 ? totalOut : totalIncome,
@@ -91,8 +105,8 @@ function buildSankeyData(y){
   );
 
   // Now that grandTotal is known, bucket every small tail — inside each
-  // group's categories, inside Investments/Debt, inside Income sources —
-  // using ONE consistent "under 2% of the whole diagram" rule.
+  // group's categories, inside Investments/Debt/Retirement, inside Income
+  // sources — using ONE consistent "under 2% of the whole diagram" rule.
   groupNodes.forEach(n=>{
     const bucketed = bucketSmallSlices(n._rawChildren, grandTotal, n.id);
     n.children = bucketed.length > 1 ? bucketed : [];
@@ -100,14 +114,17 @@ function buildSankeyData(y){
   });
   investItems = bucketSmallSlices(investItems, grandTotal, 'investments');
   debtItems = bucketSmallSlices(debtItems, grandTotal, 'debt');
+  retirementItems = bucketSmallSlices(retirementItems, grandTotal, 'retirement');
   incomeItems = bucketSmallSlices(incomeItems, grandTotal, 'income');
 
   const investNode = investTotal>0.005 ? { id:'grp:investments', name:'Investments', value:investTotal, kind:'investments', children: investItems.length>1 ? investItems : [] } : null;
   const debtNode = debtTotal>0.005 ? { id:'grp:debt', name:'Debt Paid Off', value:debtTotal, kind:'debt', children: debtItems.length>1 ? debtItems : [] } : null;
+  const retirementNode = retirementTotal>0.005 ? { id:'grp:retirement', name:'Retirement', value:retirementTotal, kind:'retirement', children: retirementItems.length>1 ? retirementItems : [] } : null;
 
   let outNodes = [...groupNodes];
   if(investNode) outNodes.push(investNode);
   if(debtNode) outNodes.push(debtNode);
+  if(retirementNode) outNodes.push(retirementNode);
 
   // Income is ONE bar by default ("Income") — click it to fan out into
   // individual paychecks/sources, same interaction as every outflow bar.
@@ -140,6 +157,7 @@ const SANKEY_KIND_COLOR = {
   incomeItem:'#C9A961', income:'#C9A961', shortfall:'#C6584C',
   investments:'#6FA491', investmentItem:'#8FC0AC',
   debt:'#C6584C', debtItem:'#D98C64',
+  retirement:'#9BB6C9', retirementItem:'#B9CBDA',
   savings:'#7FAE79', category:null, other:'#8A9490' // group/category colored via PALETTE below
 };
 
@@ -193,8 +211,8 @@ function sankeyFlows(sources, targets, scale){
 
 function renderSankeySVG(data, y){
   const NODE_W = 16, GAP = 11, TOP = 26, LABEL_MIN_H = 24;
-  const incomeExpanded = data.inNodes.some(n=>n.id==='grp:income' && n.children.length && sankeyExpanded[n.id]);
-  const expandedOut = data.outNodes.filter(n=>n.children && n.children.length && sankeyExpanded[n.id]);
+  const incomeExpanded = data.inNodes.some(n=>n.id==='grp:income' && n.children.length && isSankeyNodeExpanded(n.id));
+  const expandedOut = data.outNodes.filter(n=>n.children && n.children.length && isSankeyNodeExpanded(n.id));
   const hasOutExpansion = expandedOut.length > 0;
 
   const colHeight = (nodes, scale) => nodes.length
@@ -211,7 +229,7 @@ function renderSankeySVG(data, y){
   // its own $-driven height — reserve that extra room in the column layout
   // itself, so the next sibling gets pushed down instead of the expanded
   // children spilling over and colliding with whatever comes next.
-  const reserveOut = (n) => (n.children && n.children.length && sankeyExpanded[n.id]) ? colHeight(n.children, scale) : 0;
+  const reserveOut = (n) => (n.children && n.children.length && isSankeyNodeExpanded(n.id)) ? colHeight(n.children, scale) : 0;
   const reserveIn = (n) => (n.id==='grp:income' && incomeExpanded) ? colHeight(n.children, scale) : 0;
 
   const inLayout = sankeyLayoutColumn(data.inNodes, scale, TOP, GAP, reserveIn);
@@ -317,7 +335,7 @@ function renderSankeySVG(data, y){
     const tx = align==='right' ? x+NODE_W+9 : x-9;
     const anchor = align==='right' ? 'start' : 'end';
     const canExpand = expandable!==false && n.children && n.children.length;
-    const caret = canExpand ? (sankeyExpanded[n.id] ? '▾ ' : '▸ ') : '';
+    const caret = canExpand ? (isSankeyNodeExpanded(n.id) ? '▾ ' : '▸ ') : '';
     const label = shortName(n.name);
     // Always show at least a compact one-line label, WITH percentage — a
     // thin bar (a small dollar amount) is exactly the case where a hidden
@@ -367,6 +385,8 @@ function renderSankeySVG(data, y){
       clickAttr = `data-sankey-goto="investments"`;
     } else if(n.kind==='debt'){
       clickAttr = `data-sankey-goto="debt"`;
+    } else if(n.kind==='retirement'){
+      clickAttr = `data-sankey-goto="savings"`;
     } else if(n.kind==='savings'){
       clickAttr = `data-sankey-goto="cashflow"`;
     }
@@ -382,6 +402,7 @@ function renderSankeySVG(data, y){
         if(k.kind==='category') kAttr = `data-sankey-goto="expenses" data-sankey-highlight="[data-group-id=&quot;${k.parentGroupId}&quot;]"`;
         else if(k.kind==='investmentItem') kAttr = `data-sankey-goto="investments"`;
         else if(k.kind==='debtItem') kAttr = `data-sankey-goto="debt" data-sankey-highlight="[data-debt-id=&quot;${k.debtId}&quot;]"`;
+        else if(k.kind==='retirementItem') kAttr = `data-sankey-goto="savings"`;
         // k.kind==='other' at this depth intentionally gets no click — there's
         // no 5th column to expand into, so its tooltip lists the contents instead.
         nodesHtml += nodeRect(col4X, k, k._color, kAttr, nodeTitle(k));
@@ -407,7 +428,7 @@ function attachSankeyHandlers(){
     el.style.cursor = 'pointer';
     el.addEventListener('click', ()=>{
       const key = el.getAttribute('data-sankey-toggle');
-      sankeyExpanded[key] = !sankeyExpanded[key];
+      sankeyExpanded[key] = !isSankeyNodeExpanded(key);
       refreshSankey();
     });
   });
@@ -550,19 +571,18 @@ function renderUpcomingRecurringCard(y){
       </div>`;
     }).join('');
     const multi = g.rows.length > 1;
-    const multiPlatform = g.platformBreakdown.length > 1;
-    // When more than one platform is due the same day, spell out exactly how
-    // much goes into each one — the whole point of grouping by date is
-    // knowing what to transfer where, not just a single lump sum.
-    const platformSplitHtml = multiPlatform ? `
+    // Spell out exactly how much goes into each platform due that day —
+    // shown whether there's one platform or several, so "Fidelity: $200" is
+    // always visible, not just when there's a split to explain.
+    const platformSplitHtml = `
       <div class="recur-date-split">
-        <span class="recur-date-split-label">Split by account:</span>
+        <span class="recur-date-split-label">${g.platformBreakdown.length>1?'Split by account:':'Account:'}</span>
         ${g.platformBreakdown.map(p=>`
           <span class="recur-split-chip" style="border-color:${data.colorOf[p.platformId]}55;">
             <span class="recur-chip-dot" style="background:${data.colorOf[p.platformId]};"></span>
             ${p.name} <b>${fmt$(p.totalUsd,2)}</b>
           </span>`).join('')}
-      </div>` : '';
+      </div>`;
     return `
     <div class="recur-date-group">
       <div class="recur-date-head">
@@ -580,6 +600,48 @@ function renderUpcomingRecurringCard(y){
     <div class="recur-chips">${chips}</div>
     <div class="recur-list">${rowsHtml}</div>
     <div class="section-sub" style="margin:10px 0 0;">Click any plan to open it in Holdings.</div>
+  </div>`;
+}
+
+/* =========================================================================
+   SAVINGS GOALS — small side card next to Debt runway. Reuses the same
+   goal helpers as the Savings tab so progress here always matches there.
+   ========================================================================= */
+function renderSavingsGoalsMiniCard(y){
+  if(typeof ensureGoalsMigration === 'function') ensureGoalsMigration();
+  const goals = yearData(y).savingsGoals || [];
+  const accounts = yearData(y).savingsAccounts || [];
+  const latest = findLatestMonthWithData(y);
+  const monthIdx = latest>=0 ? latest : 0;
+
+  if(!goals.length){
+    return `
+    <div class="card mini-goals-card">
+      <div class="card-head"><h3>Saving goals</h3></div>
+      <div class="section-sub" style="padding:14px 0; text-align:center; margin:0;">No goals yet — add one on the Savings tab.</div>
+    </div>`;
+  }
+
+  const items = goals.slice(0,4).map((g,i)=>{
+    const target = goalTargetUsd(g, accounts);
+    const contributed = goalContributedUsd(g, accounts, monthIdx);
+    const pct = target>0 ? Math.min(100, (contributed/target)*100) : 0;
+    const color = PALETTE[i % PALETTE.length];
+    return `
+    <div class="mini-goal-row" data-goto="savings" data-savings-goto-sub="goals">
+      <div class="mini-goal-icon" style="background:${color}22; color:${color};">${g.icon||'🎯'}</div>
+      <div class="mini-goal-main">
+        <div class="mini-goal-name">${g.name}</div>
+        <div class="mini-goal-amt">${fmt$(contributed,2)} of ${fmt$(target,2)}</div>
+        <div class="runway"><div class="runway-fill" style="width:${pct}%; background:${color};"></div></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="card mini-goals-card">
+    <div class="card-head"><h3>Saving goals</h3><span class="mini-card-link" data-goto="savings" data-savings-goto-sub="goals">Show more ›</span></div>
+    <div class="mini-goal-list">${items}</div>
   </div>`;
 }
 
@@ -606,9 +668,16 @@ function renderOverview(){
     return num(i.currentValue);
   }));
 
+  const savingsCurrent = sumArr((yearData(y).savingsAccounts||[]).map(acc=>{
+    const latest = findLatestMonthWithData(y);
+    const bal = num((acc.m||[])[latest>=0?latest:0]);
+    return acc.currency==='INR' ? bal/fx : bal;
+  }));
+  const retirementCurrent = sumArr((yearData(y).retirementAccounts||[]).map(r=>retirementAccountTotalBalance(r)));
+
   const debts = yearData(y).debts;
   const debtPending = sumArr(debts.map(d=>debtPendingCalc(d)));
-  const netWorth = cashOnHand + invCurrent - debtPending;
+  const netWorth = cashOnHand + invCurrent + savingsCurrent + retirementCurrent - debtPending;
 
   const deltaHtml = (curr,prev,inverse)=>{
     if(!hasPrevYear) return `<div class="kpi-delta flat">no ${prevY} data to compare</div>`;
@@ -628,7 +697,7 @@ function renderOverview(){
     <div class="kpi-card ${netWorth>=0?'c-gold':'c-danger'}">
       <div class="kpi-label">Net Worth</div>
       <div class="kpi-value">${fmt$(netWorth)}</div>
-      <div class="kpi-delta flat">cash + investments − debt</div>
+      <div class="kpi-delta flat">cash + investments + savings + retirement − debt</div>
     </div>
 
     <div class="kpi-card c-gold clickable" data-goto="income">
@@ -683,15 +752,22 @@ function renderOverview(){
 
   ${renderUpcomingRecurringCard(y)}
 
-  <div class="card">
-    <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>debtOriginalUsd(d))))} originally owed · click a bar to open that loan</span></div>
-    <div class="chart-box short"><canvas id="chartDebtMini"></canvas></div>
+  <div class="overview-split-row">
+    <div class="card">
+      <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>debtOriginalUsd(d))))} originally owed · click a bar to open that loan</span></div>
+      <div class="chart-box short"><canvas id="chartDebtMini"></canvas></div>
+    </div>
+    ${renderSavingsGoalsMiniCard(y)}
   </div>
   `;
   document.getElementById('panel-overview').innerHTML = html;
 
   document.querySelectorAll('#panel-overview [data-goto]').forEach(el=>{
-    el.addEventListener('click', ()=> goToTab(el.dataset.goto));
+    el.addEventListener('click', ()=>{
+      const sub = el.dataset.savingsGotoSub;
+      if(sub && el.dataset.goto==='savings') state.savingsSubTab = sub;
+      goToTab(el.dataset.goto);
+    });
   });
   document.querySelectorAll('#panel-overview [data-recur-goto]').forEach(el=>{
     el.addEventListener('click', ()=> goToTab('holdings'));
@@ -700,15 +776,19 @@ function renderOverview(){
 
   destroyChart('trend'); destroyChart('debtmini');
 
+  const netT = MONTHS.map((_,i)=> num(incT[i]) - num(expT[i]));
   charts.trend = safeChart(document.getElementById('chartTrend'), {
     type:'bar',
     data:{ labels:MONTHS, datasets:[
-      {label:'Income', data:incT, backgroundColor:'#C9A961', borderRadius:4, barPercentage:0.6},
-      {label:'Expenses', data:expT, backgroundColor:'#C06A46', borderRadius:4, barPercentage:0.6},
+      {type:'bar', label:'Income', data:incT, backgroundColor:'#C9A961', borderRadius:4, barPercentage:0.6, order:2},
+      {type:'bar', label:'Expenses', data:expT, backgroundColor:'#C06A46', borderRadius:4, barPercentage:0.6, order:2},
+      {type:'line', label:'Net', data:netT, borderColor:'#EEE7D8', backgroundColor:'#EEE7D8', borderWidth:2,
+        tension:0.4, cubicInterpolationMode:'monotone', fill:false, pointRadius:3, pointBackgroundColor:'#EEE7D8',
+        pointBorderColor:'#0F1719', pointBorderWidth:1, order:1},
     ]},
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{legend:{labels:{boxWidth:10, boxHeight:10}}},
-      onClick:(evt,els)=>{ if(els.length) goToTab(els[0].datasetIndex===0?'income':'expenses'); },
+      onClick:(evt,els)=>{ if(els.length && els[0].datasetIndex!==2) goToTab(els[0].datasetIndex===0?'income':'expenses'); },
       onHover:(evt,els)=>{ evt.native.target.style.cursor = els.length?'pointer':'default'; },
       scales:{ y:{ grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
   });
