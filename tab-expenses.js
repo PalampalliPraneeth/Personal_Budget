@@ -92,7 +92,8 @@ function renderExpenses(){
       const v = d.m[i];
       const val = v===null||v===undefined ? '' : v;
       const displayVal = val==='' ? '' : Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}">${displayVal===''?'–':displayVal}</td>`;
+      const tip = monthCellFxTip(v, d.currency, y, i);
+      return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
     }).join('');
     return `<tr data-debt-id="${d.id}">
       <td>${d.name} ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
@@ -110,9 +111,9 @@ function renderExpenses(){
   // Total row — sums every loan's payments in USD (converting any INR-currency
   // debts first) so the row is never a mix of currencies.
   const debtMonthTotalsUSD = monthsToShow.map(i =>
-    sumArr(debts.map(d => debtToUsd(d.m[i], d)))
+    sumArr(debts.map(d => nativeMonthToUsd(d.m[i], d.currency, y, i)))
   );
-  const debtYearTotalUSD = sumArr(debts.map(d => debtToUsd(sumArr(d.m), d)));
+  const debtYearTotalUSD = sumArr(debts.map(d => monthlyArrToUsd(d.m, d.currency, y)));
   const debtTotalRowHtml = debts.length ? `
     <tr class="total-row"><td>Total</td>${debtMonthTotalsUSD.map(t=>`<td>${fmt$(t,2)}</td>`).join('')}<td style="font-weight:600;">${fmt$(debtYearTotalUSD,2)}</td><td></td><td></td><td></td></tr>
   ` : '';

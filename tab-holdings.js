@@ -386,7 +386,47 @@ function _toUsd(val, currency){
   const r = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : 95.0;
   return num(val) / r;
 }
+/* ---------- Watchlist ---------- */
+/* A personal, platform-agnostic list of tickers you don't own (yet) but
+   want to track. Lives at DATA.watchlist (global, not per-year — a
+   watchlist isn't tied to any one tax/tracking year). */
+function ensureWatchlistMigration(){
+  if(!DATA.watchlist) DATA.watchlist = [];
+  DATA.watchlist.forEach(w=>{
+    if(w.region===undefined) w.region = 'US';
+    if(w.targetPrice===undefined) w.targetPrice = null;
+    if(w.notes===undefined) w.notes = '';
+    if(w.currentPrice===undefined) w.currentPrice = null;
+    if(w.dayChangePct===undefined) w.dayChangePct = null;
+    if(w.fiftyTwoWeekHigh===undefined) w.fiftyTwoWeekHigh = null;
+    if(w.fiftyTwoWeekLow===undefined) w.fiftyTwoWeekLow = null;
+    if(w.prevClose===undefined) w.prevClose = null;
+    if(w.volume===undefined) w.volume = null;
+    if(w.lastFetched===undefined) w.lastFetched = null;
+    if(w.priceFetchFailed===undefined) w.priceFetchFailed = false;
+    if(!w.addedDate) w.addedDate = new Date().toISOString().slice(0,10);
+  });
+}
 /* ---------- Live price fetch (best effort) ---------- */
+function _extractPriceMeta(meta){
+  const price = meta?.regularMarketPrice;
+  const prevClose = meta?.previousClose || meta?.chartPreviousClose;
+  let changePct = null;
+  if(prevClose && prevClose > 0 && typeof price === 'number'){
+    changePct = ((price - prevClose) / prevClose) * 100;
+  }
+  return {
+    price, changePct,
+    prevClose: prevClose ?? null,
+    // Same Yahoo response already carries the 52-week range and day range —
+    // no extra API call needed to get these.
+    fiftyTwoWeekHigh: (typeof meta?.fiftyTwoWeekHigh === 'number') ? meta.fiftyTwoWeekHigh : null,
+    fiftyTwoWeekLow: (typeof meta?.fiftyTwoWeekLow === 'number') ? meta.fiftyTwoWeekLow : null,
+    dayHigh: (typeof meta?.regularMarketDayHigh === 'number') ? meta.regularMarketDayHigh : null,
+    dayLow: (typeof meta?.regularMarketDayLow === 'number') ? meta.regularMarketDayLow : null,
+    volume: (typeof meta?.regularMarketVolume === 'number') ? meta.regularMarketVolume : null,
+  };
+}
 async function fetchLivePrice(symbol, isIndian){
   let yahooSym = symbol.toUpperCase().trim();
   if(isIndian && !yahooSym.endsWith('.NS') && !yahooSym.endsWith('.BO')){
@@ -403,7 +443,16 @@ async function fetchLivePrice(symbol, isIndian){
       if(res.ok){
         const data = await res.json();
         if(typeof data.price === 'number' && data.price > 0){
-          return {price: data.price, changePct: (typeof data.changePct === 'number') ? data.changePct : null};
+          return {
+            price: data.price,
+            changePct: (typeof data.changePct === 'number') ? data.changePct : null,
+            prevClose: (typeof data.prevClose === 'number') ? data.prevClose : null,
+            fiftyTwoWeekHigh: (typeof data.fiftyTwoWeekHigh === 'number') ? data.fiftyTwoWeekHigh : null,
+            fiftyTwoWeekLow: (typeof data.fiftyTwoWeekLow === 'number') ? data.fiftyTwoWeekLow : null,
+            dayHigh: (typeof data.dayHigh === 'number') ? data.dayHigh : null,
+            dayLow: (typeof data.dayLow === 'number') ? data.dayLow : null,
+            volume: (typeof data.volume === 'number') ? data.volume : null,
+          };
         }
       }
     }catch(e){ /* fall through to the public proxies below */ }
@@ -419,26 +468,16 @@ async function fetchLivePrice(symbol, isIndian){
       const res = await fetch(proxy + encodeURIComponent(target));
       const data = await res.json();
       const meta = data.chart?.result?.[0]?.meta;
-      const price = meta?.regularMarketPrice;
-      const prevClose = meta?.previousClose || meta?.chartPreviousClose;
-      let changePct = null;
-      if(prevClose && prevClose > 0 && typeof price === 'number'){
-        changePct = ((price - prevClose) / prevClose) * 100;
-      }
-      if(typeof price === 'number' && price > 0) return {price, changePct};
+      const out = _extractPriceMeta(meta);
+      if(typeof out.price === 'number' && out.price > 0) return out;
     }catch(e){}
   }
   try{
     const res = await fetch(target);
     const data = await res.json();
     const meta = data.chart?.result?.[0]?.meta;
-    const price = meta?.regularMarketPrice;
-    const prevClose = meta?.previousClose || meta?.chartPreviousClose;
-    let changePct = null;
-    if(prevClose && prevClose > 0 && typeof price === 'number'){
-      changePct = ((price - prevClose) / prevClose) * 100;
-    }
-    if(typeof price === 'number' && price > 0) return {price, changePct};
+    const out = _extractPriceMeta(meta);
+    if(typeof out.price === 'number' && out.price > 0) return out;
   }catch(e){}
   throw new Error('Could not fetch. Try entering the price manually.');
 }
@@ -752,8 +791,10 @@ function renderHoldings(){
   if(isAll && state.holdingsRegion !== 'all'){
     rows = rows.filter(r => r.regions && r.regions.includes(state.holdingsRegion));
   }
+  ensureWatchlistMigration();
   const showSold = state.holdingsSubView === 'sold';
   const showRecurring = state.holdingsSubView === 'recurring';
+  const showWatchlist = state.holdingsSubView === 'watchlist';
   const recurringRows = collectRecurringRows(y, isAll ? null : state.holdingsView);
 
   const filterText = (state.holdingsFilter || '').toLowerCase().trim();
@@ -791,9 +832,32 @@ function renderHoldings(){
     pageRows = filteredRows.slice(pageStart, pageStart + HOLDINGS_PAGE_SIZE);
   }
   
-  /* ---- KPIs: OPEN vs SOLD view ---- */
+  /* ---- KPIs: OPEN vs SOLD vs WATCHLIST view ---- */
   let kpiHtml = '';
-  if(showSold){
+  if(showWatchlist){
+    // WATCHLIST VIEW: signal metrics, not portfolio metrics — this list is
+    // tickers you don't own, so "P&L" doesn't apply here.
+    const wl = DATA.watchlist;
+    const withPrice = wl.filter(w=>w.currentPrice!==null);
+    const gainers = withPrice.filter(w=>(w.dayChangePct||0)>0).length;
+    const losers = withPrice.filter(w=>(w.dayChangePct||0)<0).length;
+    const nearLow = withPrice.filter(w=>{
+      if(!w.fiftyTwoWeekLow || w.fiftyTwoWeekLow<=0) return false;
+      return ((w.currentPrice - w.fiftyTwoWeekLow) / w.fiftyTwoWeekLow) * 100 <= 5;
+    }).length;
+    const nearHigh = withPrice.filter(w=>{
+      if(!w.fiftyTwoWeekHigh || w.fiftyTwoWeekHigh<=0) return false;
+      return ((w.currentPrice - w.fiftyTwoWeekHigh) / w.fiftyTwoWeekHigh) * 100 >= -5;
+    }).length;
+    kpiHtml = `
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="kpi-card c-gold"><div class="kpi-label">Watching</div><div class="kpi-value">${wl.length}</div></div>
+        <div class="kpi-card c-teal"><div class="kpi-label">Today</div><div class="kpi-value" style="font-size:20px;">${gainers}↑ / ${losers}↓</div><div class="kpi-delta flat">${withPrice.length} of ${wl.length} have live prices</div></div>
+        <div class="kpi-card c-teal"><div class="kpi-label">Near 52W Low <span style="opacity:.6;">(≤5%)</span></div><div class="kpi-value">${nearLow}</div><div class="kpi-delta flat">Potential entry points</div></div>
+        <div class="kpi-card c-rust"><div class="kpi-label">Near 52W High <span style="opacity:.6;">(≤5%)</span></div><div class="kpi-value">${nearHigh}</div><div class="kpi-delta flat">Momentum / breakout watch</div></div>
+      </div>
+    `;
+  } else if(showSold){
     // SOLD VIEW: Realized metrics
     const allSold = soldGroups.flatMap(g=>g.rows);
     const totalRealized = allSold.reduce((a,r)=>a+(r.realizedUSD||0),0);
@@ -871,11 +935,12 @@ function renderHoldings(){
     </button>
   `).join('')}</div>`;
 
-  /* ---- Holdings / Recurring / Sold toggle ---- */
+  /* ---- Holdings / Recurring / Watchlist / Sold toggle ---- */
   const subToggle = `
     <div class="seg-toggle">
       <button class="seg-btn ${state.holdingsSubView==='open'?'active':''}" data-subview="open">📈 Holdings <span class="seg-count">${rows.length}</span></button>
       <button class="seg-btn ${showRecurring?'active':''}" data-subview="recurring">🔁 Recurring <span class="seg-count">${recurringRows.length}</span></button>
+      <button class="seg-btn ${showWatchlist?'active':''}" data-subview="watchlist">👀 Watchlist <span class="seg-count">${DATA.watchlist.length}</span></button>
       <button class="seg-btn ${showSold?'active':''}" data-subview="sold">💰 Sold <span class="seg-count">${soldGroups.reduce((a,g)=>a+g.rows.length,0)}</span></button>
     </div>
   `;
@@ -908,7 +973,7 @@ function renderHoldings(){
   `;
 
   /* ---- Toolbar ---- */
-  const toolbar = (showSold || showRecurring) ? '' : `
+  const toolbar = (showSold || showRecurring || showWatchlist) ? '' : `
     <div style="display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap;">
       <button class="btn small" id="hFetchPrices">🔄 Fetch live prices</button>
       <span class="section-sub" style="margin:0;">Fetching uses Yahoo Finance. Browsers may block it (CORS) — if so, enter prices manually.</span>
@@ -1035,7 +1100,7 @@ function renderHoldings(){
   `;
 
   /* ---- Add form ---- */
-  const addForm = (isAll || showSold || showRecurring) ? '' : `
+  const addForm = (isAll || showSold || showRecurring || showWatchlist) ? '' : `
     <div class="addcat-row" style="margin-top:14px;">
       <input type="text" id="hNewSym" placeholder="Symbol" style="min-width:80px;">
       <input type="text" id="hNewName" placeholder="Name" style="min-width:120px;">
@@ -1054,7 +1119,7 @@ function renderHoldings(){
 
   /* ---- Today's Top Gainers / Losers ---- */
   /* ---- Today's Top Gainers / Losers ---- */
-  const moversSection = (showSold || showRecurring) ? '' : (() => {
+  const moversSection = (showSold || showRecurring || showWatchlist) ? '' : (() => {
     const moversRows = rows.filter(r => r.dayChangePct !== null && r.dayChangePct !== undefined);
     const topGainers = [...moversRows].sort((a,b)=>b.dayChangePct-a.dayChangePct).slice(0,5);
     const topLosers = [...moversRows].sort((a,b)=>a.dayChangePct-b.dayChangePct).filter(r=>r.dayChangePct<0).slice(0,5);
@@ -1087,7 +1152,7 @@ function renderHoldings(){
     </div>`;
   })();
 
-  const chartSection = (showSold || showRecurring) ? '' : `
+  const chartSection = (showSold || showRecurring || showWatchlist) ? '' : `
     <div class="card" style="margin-bottom:20px;">
       <div class="card-head" style="flex-wrap:wrap; gap:10px;">
         <h3>Portfolio history${isAll ? '' : ' · ' + ((investments.find(i=>i.id===state.holdingsView)||{}).name || '')}</h3>
@@ -1106,7 +1171,7 @@ function renderHoldings(){
   `;
 
   /* ---- Allocation + P&L charts (only open view) ---- */
-  const openCharts = (showSold || showRecurring) ? '' : `
+  const openCharts = (showSold || showRecurring || showWatchlist) ? '' : `
     <div class="grid-2">
       <div class="card">
         <div class="card-head"><h3>Portfolio allocation</h3></div>
@@ -1152,6 +1217,97 @@ function renderHoldings(){
     </div>
   `;
 
+  /* ---- Watchlist section ---- */
+  const wlSortMode = state.watchlistSort || 'dayChgDesc';
+  // Wrapper copies (not the real DATA.watchlist objects) so these
+  // display-only derived fields never get written back to Supabase.
+  let wlItems = DATA.watchlist.map(w=>{
+    const pctFromLow = (w.fiftyTwoWeekLow && w.fiftyTwoWeekLow>0 && w.currentPrice!==null) ? ((w.currentPrice - w.fiftyTwoWeekLow)/w.fiftyTwoWeekLow)*100 : null;
+    const pctFromHigh = (w.fiftyTwoWeekHigh && w.fiftyTwoWeekHigh>0 && w.currentPrice!==null) ? ((w.currentPrice - w.fiftyTwoWeekHigh)/w.fiftyTwoWeekHigh)*100 : null;
+    const rangePos = (w.fiftyTwoWeekHigh && w.fiftyTwoWeekLow && w.fiftyTwoWeekHigh>w.fiftyTwoWeekLow && w.currentPrice!==null)
+      ? Math.max(0, Math.min(100, ((w.currentPrice - w.fiftyTwoWeekLow)/(w.fiftyTwoWeekHigh-w.fiftyTwoWeekLow))*100))
+      : null;
+    return Object.assign({}, w, { _pctFromLow: pctFromLow, _pctFromHigh: pctFromHigh, _rangePos: rangePos });
+  });
+  wlItems.sort((a,b)=>{
+    switch(wlSortMode){
+      case 'dayChgAsc': return (a.dayChangePct??999) - (b.dayChangePct??999);
+      case 'nameAsc': return (a.symbol||'').localeCompare(b.symbol||'');
+      case 'nearLowAsc': return (a._pctFromLow??999) - (b._pctFromLow??999);
+      case 'nearHighDesc': return (b._pctFromHigh??-999) - (a._pctFromHigh??-999);
+      case 'addedDesc': return (b.addedDate||'').localeCompare(a.addedDate||'');
+      default: return (b.dayChangePct??-999) - (a.dayChangePct??-999); // dayChgDesc
+    }
+  });
+  const watchlistSection = `
+    <div class="card">
+      <div class="card-head" style="flex-wrap:wrap; gap:10px;">
+        <h3>Watchlist</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="wlSort" style="appearance:none;-webkit-appearance:none;background:var(--bg-card);color:var(--text);border:1px solid var(--line);padding:6px 26px 6px 10px;border-radius:7px;font-family:var(--font-mono);font-size:11.5px;cursor:pointer;">
+            <option value="dayChgDesc" ${wlSortMode==='dayChgDesc'?'selected':''}>Sort: Day Chg (high→low)</option>
+            <option value="dayChgAsc" ${wlSortMode==='dayChgAsc'?'selected':''}>Sort: Day Chg (low→high)</option>
+            <option value="nearLowAsc" ${wlSortMode==='nearLowAsc'?'selected':''}>Sort: Nearest 52W Low</option>
+            <option value="nearHighDesc" ${wlSortMode==='nearHighDesc'?'selected':''}>Sort: Nearest 52W High</option>
+            <option value="nameAsc" ${wlSortMode==='nameAsc'?'selected':''}>Sort: Symbol A→Z</option>
+            <option value="addedDesc" ${wlSortMode==='addedDesc'?'selected':''}>Sort: Recently added</option>
+          </select>
+          <button class="btn small" id="wlFetchPrices">🔄 Fetch live prices</button>
+        </div>
+      </div>
+      <p class="section-sub">Stocks you don't own yet but want to track — separate from your actual holdings, so it never affects your portfolio totals. 52-week high/low come from the same price fetch, no extra lookup needed.</p>
+      ${!wlItems.length ? '<div class="section-sub" style="padding:16px 0; text-align:center;">Nothing on your watchlist yet — add a ticker below.</div>' : `
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr>
+            <th>Symbol</th><th>Name</th><th>Region</th>
+            <th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th>
+            <th>52W Low</th><th style="min-width:110px;">52W Range</th><th>52W High</th>
+            <th data-tip="How far above the 52-week low — smaller = closer to a potential entry" class="has-tip">vs Low</th>
+            <th data-tip="How far below the 52-week high — closer to 0 = near breakout territory" class="has-tip">vs High</th>
+            <th>Target</th><th>Notes</th><th></th>
+          </tr></thead>
+          <tbody id="watchlistBody">${wlItems.map(w=>{
+            const dayColor = w.dayChangePct===null||w.dayChangePct===undefined ? 'var(--text-dim)' : (w.dayChangePct>=0?'var(--good)':'var(--danger)');
+            const nearLowTag = (w._pctFromLow!==null && w._pctFromLow<=5) ? `<span class="debt-tag" style="background:rgba(127,174,121,.18); color:var(--good); border-color:transparent; margin-left:6px;">near low</span>` : '';
+            const nearHighTag = (w._pctFromHigh!==null && w._pctFromHigh>=-5) ? `<span class="debt-tag" style="background:rgba(192,106,70,.18); color:var(--rust-soft); border-color:transparent; margin-left:6px;">near high</span>` : '';
+            const atTarget = (w.targetPrice!==null && w.currentPrice!==null && w.currentPrice<=w.targetPrice);
+            const rangeBar = w._rangePos===null ? '<span style="color:var(--text-faint); font-size:11px;">—</span>' : `<div class="runway" style="margin:0;"><div class="runway-fill" style="width:${w._rangePos}%; background:linear-gradient(90deg, var(--good), var(--gold));"></div></div>`;
+            return `<tr data-wid="${w.id}">
+              <td style="font-weight:600;" class="editable" contenteditable="true" data-wf="symbol" data-id="${w.id}">${w.symbol||''}${nearLowTag}${nearHighTag}</td>
+              <td class="editable" contenteditable="true" data-wf="name" data-id="${w.id}">${w.name||''}</td>
+              <td><select data-wregion="${w.id}" style="background:var(--bg-card-hi);color:var(--gold-soft);border:1px solid var(--line);border-radius:5px;font-family:var(--font-mono);font-size:11.5px;padding:3px 4px;">
+                <option value="US" ${w.region==='US'?'selected':''}>🇺🇸 US</option>
+                <option value="IN" ${w.region==='IN'?'selected':''}>🇮🇳 IN</option>
+              </select></td>
+              <td style="${w.priceFetchFailed?'color:var(--danger);':''}">${w.currentPrice===null ? '—' : fmt$(w.currentPrice,2)}</td>
+              <td style="color:${dayColor}; font-weight:600; font-family:var(--font-mono); font-size:11.5px;">${w.dayChangePct===null||w.dayChangePct===undefined?'—':(w.dayChangePct>=0?'+':'')+w.dayChangePct.toFixed(2)+'%'}</td>
+              <td style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim);">${w.fiftyTwoWeekLow===null?'—':fmt$(w.fiftyTwoWeekLow,2)}</td>
+              <td>${rangeBar}</td>
+              <td style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim);">${w.fiftyTwoWeekHigh===null?'—':fmt$(w.fiftyTwoWeekHigh,2)}</td>
+              <td style="color:${w._pctFromLow!==null && w._pctFromLow<=5?'var(--good)':'var(--text-dim)'}; font-family:var(--font-mono); font-size:11.5px;">${w._pctFromLow===null?'—':'+'+w._pctFromLow.toFixed(1)+'%'}</td>
+              <td style="color:${w._pctFromHigh!==null && w._pctFromHigh>=-5?'var(--rust-soft)':'var(--text-dim)'}; font-family:var(--font-mono); font-size:11.5px;">${w._pctFromHigh===null?'—':w._pctFromHigh.toFixed(1)+'%'}</td>
+              <td class="editable" contenteditable="true" data-wf="targetPrice" data-id="${w.id}" style="${atTarget?'color:var(--good); font-weight:700;':''}">${w.targetPrice===null?'–':fmt$(w.targetPrice,2)}${atTarget?' ✓':''}</td>
+              <td class="editable" contenteditable="true" data-wf="notes" data-id="${w.id}" style="max-width:160px; color:var(--text-dim); font-size:11.5px;">${w.notes||''}</td>
+              <td style="white-space:nowrap;"><span class="row-del" data-delw="${w.id}" title="Remove from watchlist">✕</span></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>
+      `}
+      <div class="addcat-row" style="margin-top:14px;">
+        <input type="text" id="wlNewSym" placeholder="Symbol, e.g. AAPL" style="min-width:90px;">
+        <input type="text" id="wlNewName" placeholder="Name (optional)" style="min-width:130px;">
+        <select id="wlNewRegion" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+          <option value="US">🇺🇸 US</option>
+          <option value="IN">🇮🇳 India</option>
+        </select>
+        <input type="number" id="wlNewTarget" placeholder="Target price (optional)" step="any" style="width:150px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
+        <button class="btn primary small" id="wlAddBtn">+ Add to watchlist</button>
+      </div>
+    </div>
+  `;
+
   const html = `
     <div class="section-title">Holdings · ${y}</div>
     <p class="section-sub">Every stock, mutual fund, ETF, index, and crypto you own. <b>All Platforms</b> shows the consolidated view. Click a platform pill to edit its individual holdings. YTD uses Jan 1 price (defaults to your avg cost if not set).</p>
@@ -1163,13 +1319,13 @@ function renderHoldings(){
 
     ${chartSection}
 
-    ${pillHtml}
+    ${showWatchlist ? '' : pillHtml}
     <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
       ${subToggle}
-      ${regionToggle}
+      ${showWatchlist ? '' : regionToggle}
     </div>
 
-    ${showSold ? soldSection : showRecurring ? recurringSection : `
+    ${showSold ? soldSection : showRecurring ? recurringSection : showWatchlist ? watchlistSection : `
     ${toolbar}
 
     ${openCharts}
@@ -1457,6 +1613,103 @@ function renderHoldings(){
         showToast(`${updated} prices updated${failed>0 ? ', '+failed+' failed (CORS/manual needed)' : ''}`);
       });
     }
+  }
+
+  /* ---- Watchlist handlers ---- */
+  if(showWatchlist){
+    const wlFetchBtn = document.getElementById('wlFetchPrices');
+    if(wlFetchBtn) wlFetchBtn.addEventListener('click', async ()=>{
+      wlFetchBtn.textContent = '⏳ Fetching...';
+      wlFetchBtn.disabled = true;
+      let updated = 0, failed = 0;
+      for(const w of DATA.watchlist){
+        if(!w.symbol) continue;
+        try{
+          const result = await fetchLivePrice(w.symbol, w.region==='IN');
+          w.currentPrice = result.price;
+          w.dayChangePct = result.changePct;
+          w.fiftyTwoWeekHigh = result.fiftyTwoWeekHigh;
+          w.fiftyTwoWeekLow = result.fiftyTwoWeekLow;
+          w.prevClose = result.prevClose;
+          w.volume = result.volume;
+          w.lastFetched = Date.now();
+          w.priceFetchFailed = false;
+          updated++;
+        }catch(e){ w.priceFetchFailed = true; failed++; }
+        await new Promise(r => setTimeout(r, 300));
+      }
+      markDirty();
+      renderHoldings();
+      showToast(`${updated} watchlist price${updated===1?'':'s'} updated${failed>0 ? ', '+failed+' failed (CORS/manual needed)' : ''}`);
+    });
+
+    const wlSortSel = document.getElementById('wlSort');
+    if(wlSortSel) wlSortSel.addEventListener('change', ()=>{ state.watchlistSort = wlSortSel.value; renderHoldings(); });
+
+    document.querySelectorAll('[data-wregion]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{
+        const w = DATA.watchlist.find(x=>x.id===sel.dataset.wregion);
+        if(w){ w.region = sel.value; markDirty(); renderHoldings(); }
+      });
+    });
+
+    document.querySelectorAll('[data-delw]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const idx = DATA.watchlist.findIndex(x=>x.id===el.dataset.delw);
+        if(idx>-1){
+          const sym = DATA.watchlist[idx].symbol;
+          DATA.watchlist.splice(idx,1);
+          markDirty();
+          renderHoldings();
+          showToast(`${sym} removed from watchlist`);
+        }
+      });
+    });
+
+    document.querySelectorAll('#watchlistBody [data-wf]').forEach(td=>{
+      td.addEventListener('focus', ()=>{ td.dataset.origRaw = td.textContent; });
+      td.addEventListener('blur', ()=>{
+        if(td.textContent === td.dataset.origRaw) return;
+        const w = DATA.watchlist.find(x=>x.id===td.dataset.id);
+        if(!w) return;
+        const field = td.dataset.wf;
+        let raw = td.textContent.trim();
+        if(field==='symbol'){
+          w.symbol = raw.toUpperCase().replace(/[^A-Z0-9.\-]/g,'');
+        } else if(field==='name'){
+          w.name = raw;
+        } else if(field==='targetPrice'){
+          const cleaned = raw.replace(/[$₹,\s]/g,'').replace(/✓$/,'');
+          const v = cleaned==='' || cleaned==='–' ? null : evalExpr(cleaned);
+          w.targetPrice = (v===null || isNaN(v)) ? null : roundCents(v);
+        } else if(field==='notes'){
+          w.notes = raw;
+        }
+        markDirty();
+        renderHoldings();
+      });
+      td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
+    });
+
+    const wlAddBtn = document.getElementById('wlAddBtn');
+    if(wlAddBtn) wlAddBtn.addEventListener('click', ()=>{
+      const symInp = document.getElementById('wlNewSym');
+      const sym = symInp.value.trim().toUpperCase();
+      if(!sym){ symInp.focus(); return; }
+      const name = document.getElementById('wlNewName').value.trim();
+      const region = document.getElementById('wlNewRegion').value;
+      const targetRaw = document.getElementById('wlNewTarget').value;
+      const targetPrice = targetRaw==='' ? null : (parseFloat(targetRaw) || null);
+      DATA.watchlist.push({
+        id: uid(), symbol: sym, name, region, targetPrice, notes: '',
+        addedDate: new Date().toISOString().slice(0,10),
+        currentPrice: null, dayChangePct: null, fiftyTwoWeekHigh: null, fiftyTwoWeekLow: null,
+        prevClose: null, volume: null, lastFetched: null, priceFetchFailed: false
+      });
+      markDirty();
+      renderHoldings();
+      showToast(`${sym} added to watchlist`);
+    });
   }
 
   /* ---- Snapshot & timeframe ---- */

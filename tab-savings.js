@@ -36,7 +36,8 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
     const cells = MONTHS.map((_,i)=>{
       const v = (acc.m||[])[i];
       const val = v===null||v===undefined ? '' : v;
-      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-sfield="m" data-sid="${acc.id}" data-idx="${i}">${val===''?'–':roundCents(val)}</td>`;
+      const tip = monthCellFxTip(v, acc.currency, y, i);
+      return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-sfield="m" data-sid="${acc.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${val===''?'–':roundCents(val)}</td>`;
     }).join('');
     const total = sumArr(acc.m||[]);
     const effectiveBal = savingsBalanceForInterest(acc, activeMonthIdx>=0?activeMonthIdx:0);
@@ -238,7 +239,8 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
     const monthCells = !acc ? MONTHS.map((_,i)=>{
       const v = (g.m||[])[i];
       const val = v===null||v===undefined ? '' : v;
-      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-gfield="m" data-gid="${g.id}" data-idx="${i}">${val===''?'–':roundCents(val)}</td>`;
+      const tip = monthCellFxTip(v, g.currency, y, i);
+      return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-gfield="m" data-gid="${g.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${val===''?'–':roundCents(val)}</td>`;
     }).join('') : MONTHS.map(()=>`<td style="color:var(--text-faint);">—</td>`).join('');
 
     return `
@@ -389,12 +391,14 @@ function renderRetirementSection(y, retAccounts){
     const selfCells = MONTHS.map((_,i)=>{
       const v = (r.mSelf||[])[i];
       const val = v===null||v===undefined ? '' : v;
-      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-rfield="mSelf" data-rid="${r.id}" data-idx="${i}">${val===''?'–':roundCents(val)}</td>`;
+      const tip = monthCellFxTip(v, r.currency, y, i);
+      return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-rfield="mSelf" data-rid="${r.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${val===''?'–':roundCents(val)}</td>`;
     }).join('');
     const employerCells = MONTHS.map((_,i)=>{
       const v = (r.mEmployer||[])[i];
       const val = v===null||v===undefined ? '' : v;
-      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-rfield="mEmployer" data-rid="${r.id}" data-idx="${i}">${val===''?'–':roundCents(val)}</td>`;
+      const tip = monthCellFxTip(v, r.currency, y, i);
+      return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-rfield="mEmployer" data-rid="${r.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${val===''?'–':roundCents(val)}</td>`;
     }).join('');
     const selfTotal = sumArr(r.mSelf||[]);
     const employerTotal = sumArr(r.mEmployer||[]);

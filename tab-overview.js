@@ -57,9 +57,27 @@ function bucketSmallSlices(items, grandTotal, bucketIdBase, alwaysKeep){
   return big.sort((a,b)=> b.value-a.value);
 }
 
+/* Sum a 12-slot monthly array — either the whole year, or just one month,
+   depending on the global month selector at the top of the app (state.month).
+   null monthIdx means "Full Year". */
+function scopedSumArr(arr, monthIdx){
+  if(monthIdx===null || monthIdx===undefined) return sumArr(arr);
+  return num((arr||[])[monthIdx]);
+}
+/* Same idea for a currency-aware monthly array (INR entries locked to
+   each month's own FX rate — see core-data.js monthlyArrToUsd). */
+function scopedMonthlyArrToUsd(arr, currency, year, monthIdx){
+  if(monthIdx===null || monthIdx===undefined) return monthlyArrToUsd(arr, currency, year);
+  return nativeMonthToUsd((arr||[])[monthIdx], currency, year, monthIdx);
+}
 function buildSankeyData(y){
+  // Follows the global month dropdown at the top of the app — pick a
+  // specific month there and this diagram (and only this diagram; the KPI
+  // cards above stay full-year) scopes down to that month's flows.
+  const monthIdx = (state.month === 'ALL' || state.month === undefined || state.month === null) ? null : Number(state.month);
+
   let incomeItems = yearData(y).income
-    .map(it => ({ id:'incitem:'+it.id, name: it.name, value: sumArr(it.m), kind:'incomeItem' }))
+    .map(it => ({ id:'incitem:'+it.id, name: it.name, value: scopedSumArr(it.m, monthIdx), kind:'incomeItem' }))
     .filter(x => x.value > 0.005)
     .sort((a,b)=> b.value - a.value);
   const totalIncome = sumArr(incomeItems.map(x=>x.value));
@@ -67,7 +85,7 @@ function buildSankeyData(y){
   const groups = yearData(y).expenseGroups.filter(g=>!g.excludeFromTotal);
   let groupNodes = groups.map(g=>{
     const cats = g.categories
-      .map(c=>({ id:'cat:'+c.id, name:c.name, value: sumArr(c.m), kind:'category', parentGroupId:g.id }))
+      .map(c=>({ id:'cat:'+c.id, name:c.name, value: scopedSumArr(c.m, monthIdx), kind:'category', parentGroupId:g.id }))
       .filter(c=>c.value>0.005)
       .sort((a,b)=> b.value-a.value);
     const total = sumArr(cats.map(c=>c.value));
@@ -75,14 +93,13 @@ function buildSankeyData(y){
   }).filter(n=>n.value>0.005);
 
   let investItems = yearData(y).investments.map(inv=>{
-    const raw = sumArr(inv.m);
-    const usd = inv.currency==='INR' ? inrToUsd(raw) : raw;
+    const usd = scopedMonthlyArrToUsd(inv.m, inv.currency, y, monthIdx);
     return { id:'inv:'+inv.id, name:inv.name, value: usd, kind:'investmentItem' };
   }).filter(x=>x.value>0.005).sort((a,b)=>b.value-a.value);
   const investTotal = sumArr(investItems.map(x=>x.value));
 
   let debtItems = yearData(y).debts.map(d=>{
-    const usd = debtToUsd(sumArr(d.m), d);
+    const usd = scopedMonthlyArrToUsd(d.m, d.currency, y, monthIdx);
     return { id:'debtitem:'+d.id, name:d.name, value: usd, kind:'debtItem', debtId:d.id };
   }).filter(x=>x.value>0.005).sort((a,b)=>b.value-a.value);
   const debtTotal = sumArr(debtItems.map(x=>x.value));
@@ -91,7 +108,7 @@ function buildSankeyData(y){
   // employer match never passed through your income, so it can't be an
   // outflow here without breaking the diagram's inflow=outflow balance.
   let retirementItems = (yearData(y).retirementAccounts||[]).map(r=>{
-    const usd = retirementToUsd(sumArr(r.mSelf||[]), r);
+    const usd = scopedMonthlyArrToUsd(r.mSelf||[], r.currency, y, monthIdx);
     return { id:'retitem:'+r.id, name:r.name, value: usd, kind:'retirementItem' };
   }).filter(x=>x.value>0.005).sort((a,b)=>b.value-a.value);
   const retirementTotal = sumArr(retirementItems.map(x=>x.value));
@@ -690,7 +707,7 @@ function renderOverview(){
 
   const html = `
   <div class="section-title">Overview</div>
-  <p class="section-sub">Full-year snapshot for ${y}${hasPrevYear?', compared against '+prevY:''} — this tab always shows the whole year, regardless of the month selector above (that selector still drives Cash Flow, Expenses, and Debt Payoff). Click any card or chart segment to jump to where that figure comes from.</p>
+  <p class="section-sub">Full-year snapshot for ${y}${hasPrevYear?', compared against '+prevY:''} — the KPI cards and charts below always show the whole year, regardless of the month selector above (that selector still drives Cash Flow, Expenses, and Debt Payoff). The <b>"Where it went"</b> diagram further down is the one exception — it follows the month selector, so pick a specific month up top to see just that month's flow. Click any card or chart segment to jump to where that figure comes from.</p>
 
   <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit, minmax(170px,1fr));">
     <!-- NET WORTH: now first -->
@@ -745,9 +762,9 @@ function renderOverview(){
   </div>
 
   <div class="card sankey-card">
-    <div class="card-head"><h3>Where ${y} went</h3></div>
+    <div class="card-head"><h3>Where ${state.month==='ALL'||state.month===undefined ? y : MONTHS[Number(state.month)]+' '+y} went</h3></div>
     <div id="sankeyWrap">${renderSankeySVG(buildSankeyData(y), y)}</div>
-    <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Click a bar with a ▸ to open its breakdown · click any other bar to jump to that tab.</div>
+    <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Click a bar with a ▸ to open its breakdown · click any other bar to jump to that tab. Change the month up top to see a different period.</div>
   </div>
 
   ${renderUpcomingRecurringCard(y)}

@@ -85,12 +85,14 @@ async function loadData(){
         if(!DATA[y].savingsGoals) DATA[y].savingsGoals = [];
       });
       if(!DATA.paymentPlan) DATA.paymentPlan = buildDefaultPaymentPlan();
+      if(!DATA.fxRateHistory) DATA.fxRateHistory = {};
       lastSavedSnapshot = JSON.stringify(DATA);
       return;
     }
   }catch(e){ /* not found or storage unavailable */ }
   DATA = buildDefaultData();
   DATA.paymentPlan = buildDefaultPaymentPlan();
+  DATA.fxRateHistory = {};
   lastSavedSnapshot = JSON.stringify(DATA);
 }
 
@@ -281,6 +283,103 @@ function roundCents(v){
   return isNaN(n) ? v : Math.round((n + Number.EPSILON) * 100) / 100;
 }
 function sumArr(arr){ return arr.reduce((a,b)=>a+num(b),0); }
+
+/* =========================================================================
+   FX RATE HISTORY — locks each closed calendar month's own USD/INR rate so
+   an INR entry doesn't silently reprice in USD every time the live rate
+   drifts. No new external API call: this just remembers the rate that
+   ensureFxRates() (tab-investments.js) already fetches, whether that
+   fetch happened because you opened the app or a background refresh ran.
+
+   Stored at DATA.fxRateHistory["YYYY-MM"] = { start, end, lastUpdatedDay }
+   - start: the rate the FIRST time this month was seen.
+   - end:   the rate the MOST RECENT time this month was seen — this gets
+            overwritten every new day while the month is still open (today
+            → tomorrow → the day after, etc.), and simply stops being
+            touched once the month has passed, so it freezes into that
+            month's real closing sample automatically — no extra step.
+   ========================================================================= */
+function ensureFxRateHistory(){
+  if(DATA && !DATA.fxRateHistory) DATA.fxRateHistory = {};
+}
+function fxMonthKey(year, monthIdx){
+  return year + '-' + String(monthIdx+1).padStart(2,'0');
+}
+function todayDateStr(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+/* Call this whenever a fresh LIVE rate comes back from the FX API (not on
+   a fallback/failure — we don't want an outage's placeholder rate getting
+   written into history as if it were real). */
+function recordFxRateSample(rate){
+  if(!rate || !isFinite(rate) || !DATA) return;
+  ensureFxRateHistory();
+  const now = new Date();
+  const key = fxMonthKey(now.getFullYear(), now.getMonth());
+  const today = todayDateStr();
+  const existing = DATA.fxRateHistory[key];
+  if(!existing){
+    DATA.fxRateHistory[key] = { start: rate, end: rate, lastUpdatedDay: today };
+    markDirty(null);
+  } else if(existing.lastUpdatedDay !== today){
+    existing.end = rate;
+    existing.lastUpdatedDay = today;
+    markDirty(null);
+  }
+  // Same day, already sampled today — leave it alone so the day's locked
+  // rate stays stable instead of jittering with every extra refresh.
+}
+/* The rate to use for a specific calendar month's INR entries:
+   - the month we're currently in (no "end" sample yet, still moving)
+     or a future month → live rate, exactly as before this feature existed
+   - a closed past month we have a history record for → midpoint of that
+     month's start/end samples
+   - a closed past month with NO history record (predates this feature,
+     or the app simply wasn't opened that month) → live rate, same
+     graceful fallback as today */
+function fxRateForMonth(year, monthIdx){
+  const liveRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : (typeof FX_FALLBACK_INR !== 'undefined' ? FX_FALLBACK_INR : 84.0);
+  if(year===undefined || year===null || monthIdx===undefined || monthIdx===null) return liveRate;
+  const now = new Date();
+  const curKey = fxMonthKey(now.getFullYear(), now.getMonth());
+  const key = fxMonthKey(year, monthIdx);
+  if(key >= curKey) return liveRate;
+  const rec = DATA && DATA.fxRateHistory && DATA.fxRateHistory[key];
+  if(!rec) return liveRate;
+  return (rec.start + rec.end) / 2;
+}
+/* Convert one month's native-currency figure to USD, locked to that
+   month's own rate instead of today's live rate. Non-INR passes through
+   unchanged, same as every other *ToUsd helper in this file. */
+function nativeMonthToUsd(v, currency, year, monthIdx){
+  const n = num(v);
+  if(currency !== 'INR') return n;
+  return n / fxRateForMonth(year, monthIdx);
+}
+/* Same idea for a full 12-slot monthly array — sums each month's own USD
+   conversion rather than summing native values first and applying one
+   blanket rate to the total. */
+function monthlyArrToUsd(arr, currency, year){
+  return sumArr((arr||[]).map((v,i)=> nativeMonthToUsd(v, currency, year, i)));
+}
+/* Shared hover-tooltip text for any monthly INR cell (Savings, Goals,
+   Retirement, Debt — Investments has its own richer version in
+   tab-investments.js since it also needs to show math breakdowns).
+   Returns null for USD/empty cells (nothing worth showing). */
+function monthCellFxTip(nativeValue, currency, year, monthIdx){
+  if(currency !== 'INR' || nativeValue===null || nativeValue===undefined || nativeValue==='') return null;
+  const usd = nativeMonthToUsd(nativeValue, currency, year, monthIdx);
+  const rate = fxRateForMonth(year, monthIdx);
+  const curKey = fxMonthKey(new Date().getFullYear(), new Date().getMonth());
+  const key = fxMonthKey(year, monthIdx);
+  const isLocked = key < curKey && DATA && DATA.fxRateHistory && DATA.fxRateHistory[key];
+  const rateLabel = isLocked
+    ? `at ${MONTHS[monthIdx]} ${year}'s locked rate (₹${rate.toFixed(2)}/$)`
+    : `at current rate (₹${rate.toFixed(2)}/$)`;
+  return (typeof fmtInr === 'function' ? fmtInr(nativeValue) : ('₹'+nativeValue)) + '\n≈ ' + fmt$(usd,2) + ' ' + rateLabel;
+}
+
 /* Debts (like investments) can be entered in native currency (USD/INR).
    d.total / d.cleared / d.emi / d.m[] are always stored in that native
    currency — this converts to USD wherever a figure is combined with USD
@@ -291,8 +390,8 @@ function debtToUsd(v, d){
   return (d && d.currency === 'INR') ? inrToUsd(n) : n;
 }
 function debtClearedToDate(d){
-  const clearedNative = num(d.cleared) + sumArr(d.m);
-  return debtToUsd(clearedNative, d);
+  const y = state.year;
+  return debtToUsd(num(d.cleared), d) + monthlyArrToUsd(d.m||[], d.currency, y);
 }
 function debtPendingCalc(d){ return Math.max(debtToUsd(d.total, d) - debtClearedToDate(d), 0); }
 function debtOriginalUsd(d){ return debtToUsd(d.total, d); }
@@ -347,8 +446,7 @@ function expenseTotalsExcluded(y){
 function investContribTotals(y){
   const out = n12().map(()=>0);
   yearData(y).investments.forEach(inv=> inv.m.forEach((v,i)=> {
-    const raw = num(v);
-    out[i] += (inv.currency === 'INR') ? inrToUsd(raw) : raw;
+    out[i] += nativeMonthToUsd(v, inv.currency, y, i);
   }));
   return out;
 }
@@ -392,11 +490,17 @@ function retirementProjectedAnnualGrowth(r){
    already works. Employer match is intentionally excluded here. */
 function retirementSelfContribTotals(y){
   const out = n12().map(()=>0);
-  (yearData(y).retirementAccounts||[]).forEach(r=> (r.mSelf||[]).forEach((v,i)=> out[i]+=retirementToUsd(v,r)));
+  (yearData(y).retirementAccounts||[]).forEach(r=> (r.mSelf||[]).forEach((v,i)=> out[i]+=nativeMonthToUsd(v, r.currency, y, i)));
   return out;
 }
-function retirementAccountTotalSelf(r){ return retirementToUsd(num(r.priorSelf) + sumArr(r.mSelf||[]), r); }
-function retirementAccountTotalEmployer(r){ return retirementToUsd(num(r.priorEmployer) + sumArr(r.mEmployer||[]), r); }
+function retirementAccountTotalSelf(r){
+  const y = state.year;
+  return retirementToUsd(num(r.priorSelf), r) + monthlyArrToUsd(r.mSelf||[], r.currency, y);
+}
+function retirementAccountTotalEmployer(r){
+  const y = state.year;
+  return retirementToUsd(num(r.priorEmployer), r) + monthlyArrToUsd(r.mEmployer||[], r.currency, y);
+}
 function retirementAccountTotalBalance(r){ return retirementAccountTotalSelf(r) + retirementAccountTotalEmployer(r); }
 
 /* =========================================================================
@@ -431,14 +535,13 @@ function goalTargetUsd(goal, accounts){
 function goalContributedUsd(goal, accounts, monthIdx){
   const cur = goalEffectiveCurrency(goal, accounts);
   const acc = goalLinkedAccount(goal, accounts);
-  let native;
+  const y = state.year;
   if(acc){
     const i = monthIdx>=0 ? monthIdx : 0;
-    native = num((acc.m||[])[i]);
-  } else {
-    native = sumArr(goal.m||[]);
+    const native = num((acc.m||[])[i]);
+    return cur==='INR' ? nativeMonthToUsd(native, cur, y, i) : native;
   }
-  return cur==='INR' ? inrToUsd(native) : native;
+  return monthlyArrToUsd(goal.m||[], cur, y);
 }
 
 function sumRange(arr, months){ return months.reduce((a,i)=>a+num(arr[i]),0); }
@@ -457,7 +560,7 @@ function findLatestMonthWithData(y){
    ========================================================================= */
 function debtPaymentTotals(y){
   const out = n12().map(()=>0);
-  yearData(y).debts.forEach(d=> d.m.forEach((v,i)=> out[i]+=debtToUsd(v, d)));
+  yearData(y).debts.forEach(d=> d.m.forEach((v,i)=> out[i]+=nativeMonthToUsd(v, d.currency, y, i)));
   return out;
 }
 function cfOverride(y, i, field){

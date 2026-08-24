@@ -18,6 +18,10 @@ async function ensureFxRates(){
     fxRates = data.rates;
     fxLastFetch = Date.now();
     console.log('[FX] USD/INR =', fxRates.INR);
+    // Feed today's live rate into the monthly rate-history lock (core-data.js)
+    // — this is the ONLY place that happens, so it fires whether you're
+    // opening the app for the day or a stale cache just expired.
+    if (typeof recordFxRateSample === 'function' && fxRates.INR) recordFxRateSample(fxRates.INR);
     return fxRates;
   } catch(e) {
     console.warn('[FX] fetch failed, using fallback', FX_FALLBACK_INR);
@@ -39,11 +43,23 @@ function fmtInr(v){
   return (neg ? '-₹' : '₹') + s;
 }
 
-/* Convert any value to USD for display / math */
+/* Convert any value to USD for display / math — LIVE rate. Used for lump
+   fields (currentValue, invested — a snapshot of right now, not tied to
+   any one month), same as Holdings' "current value" always uses live. */
 function toUsd(item, fieldOrValue){
   let v = (typeof fieldOrValue === 'number') ? fieldOrValue : item[fieldOrValue];
   if (v === null || v === undefined || isNaN(v)) return 0;
   if (item.currency === 'INR') return inrToUsd(v);
+  return v;
+}
+
+/* Same, but for ONE cell of the recurring-contribution grid (item.m[monthIdx])
+   — locks to that month's own rate (core-data.js fxRateForMonth) instead of
+   today's live rate, so a past month's contribution doesn't reprice as the
+   live USD/INR rate drifts. */
+function toUsdMonth(item, v, monthIdx, year){
+  if (v === null || v === undefined || isNaN(v)) return 0;
+  if (item.currency === 'INR') return v / fxRateForMonth(year, monthIdx);
   return v;
 }
 
@@ -52,8 +68,10 @@ function toUsd(item, fieldOrValue){
    2) a currency conversion note, if the item is in INR
    Rather than fighting over one hover slot, stack them as two short lines —
    breakdown (in the currency you typed) on top, USD equivalent underneath.
-   Returns null if there's nothing worth showing. */
-function investCellTip(item, rawExpr, nativeValue){
+   Returns null if there's nothing worth showing.
+   Pass monthIdx/year for a recurring-contribution cell so the note reads
+   "at <Month>'s locked rate" instead of the misleading "at current rate". */
+function investCellTip(item, rawExpr, nativeValue, monthIdx, year){
   const isInr = item.currency === 'INR';
   const hasBreakdown = rawExpr && /\+/.test(rawExpr);
 
@@ -69,17 +87,29 @@ function investCellTip(item, rawExpr, nativeValue){
 
   let line2 = null;
   if (isInr && nativeValue !== null && nativeValue !== undefined) {
-    line2 = '≈ ' + fmt$(inrToUsd(nativeValue), 2) + ' at current rate';
+    const isMonthCell = monthIdx !== undefined && monthIdx !== null;
+    const rate = isMonthCell ? fxRateForMonth(year, monthIdx) : ((typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : FX_FALLBACK_INR);
+    const usd = isMonthCell ? (nativeValue / rate) : inrToUsd(nativeValue);
+    const rateLabel = isMonthCell
+      ? `at ${MONTHS[monthIdx]} ${year}'s locked rate (₹${rate.toFixed(2)}/$)`
+      : `at current rate (₹${rate.toFixed(2)}/$)`;
+    line2 = '≈ ' + fmt$(usd, 2) + ' ' + rateLabel;
   }
 
   if (!line1) return null;
   return line2 ? (line1 + '&#10;' + line2) : line1; // &#10; = newline in a title/data-tip
 }
 
-/* What to paint inside a cell */
-function displayCell(item, v, rates){
+/* What to paint inside a cell. Pass monthIdx/year for a recurring
+   contribution cell to use that month's locked rate; omit both (lump
+   fields like currentValue/invested) to keep using the live rate. */
+function displayCell(item, v, rates, monthIdx, year){
   if (v === null || v === undefined) return '–';
-  if (item.currency === 'INR') return fmt$(inrToUsd(v, rates), 2);
+  if (item.currency === 'INR'){
+    const isMonthCell = monthIdx !== undefined && monthIdx !== null;
+    const usd = isMonthCell ? (v / fxRateForMonth(year, monthIdx)) : inrToUsd(v, rates);
+    return fmt$(usd, 2);
+  }
   return Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
@@ -115,7 +145,7 @@ function renderInvestments(){
   /* ---- Totals in USD ---- */
   const totalsUSD = n12().map(() => 0);
   items.forEach(it => {
-    it.m.forEach((v, i) => { totalsUSD[i] += toUsd(it, v); });
+    it.m.forEach((v, i) => { totalsUSD[i] += toUsdMonth(it, v, i, y); });
   });
   // For any platform that has real holdings tracked in the Holdings tab, pull its
   // current/invested value FROM there instead of the old manually-typed fields, so
@@ -147,9 +177,9 @@ function renderInvestments(){
     })() : '';
 
     const cells = it.m.map((v, i) => {
-      const display = displayCell(it, v, rates);
+      const display = displayCell(it, v, rates, i, y);
       const rawExpr = it.raw && it.raw[i];
-      const tip = investCellTip(it, rawExpr, v);
+      const tip = investCellTip(it, rawExpr, v, i, y);
       return `<td class="editable ${!v ? 'zero' : ''} ${tip ? 'has-tip' : ''}"
                   contenteditable="true"
                   data-field="m" data-idx="${i}" data-id="${it.id}"
@@ -157,7 +187,7 @@ function renderInvestments(){
                   data-raw="${v === null || v === undefined ? '' : v}">${display}</td>`;
     }).join('');
 
-    const yearTotal = it.m.reduce((a, v) => a + toUsd(it, v), 0);
+    const yearTotal = it.m.reduce((a, v, i) => a + toUsdMonth(it, v, i, y), 0);
     const dyn = dynamicValuesFor(it);
 
     /* Name is clickable if holdings exist; Current/Invested are plain display */

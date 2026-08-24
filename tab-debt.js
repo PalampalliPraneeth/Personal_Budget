@@ -96,7 +96,7 @@ function renderDebt(){
       </div>
       <div class="runway ${isPaid?'zero':''}"><div class="runway-fill" style="width:${pct2}%"></div></div>
       <div class="debt-foot">
-        <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedToDate.toFixed(2)}</b> USD <span style="opacity:.55">(incl. ${fmt$(debtToUsd(sumArr(d.m),d),2)} from monthly payments this year${isINR?', converted from INR':''})</span></span>
+        <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedToDate.toFixed(2)}</b> USD <span style="opacity:.55">(incl. ${fmt$(monthlyArrToUsd(d.m, d.currency, y),2)} from monthly payments this year${isINR?', converted from INR at each month\u2019s locked rate':''})</span></span>
         <span>Pending: <b class="editable-inline" style="color:var(--rust-soft)" contenteditable="true" data-debtfield="pending" data-id="${d.id}">${fmt$(debtPendingCalc(d),2)}</b> USD</span>
         <span>Original: <b class="editable-inline" contenteditable="true" data-debtfield="total" data-id="${d.id}">${d.total}</b> ${d.currency||'USD'} ${isINR?`<span style="opacity:.55">(${fmt$(debtOriginalUsd(d),2)})</span>`:''}</span>
       </div>
