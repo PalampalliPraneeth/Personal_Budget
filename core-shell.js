@@ -187,10 +187,15 @@ function refreshMonthOptions(){
   const optAll = document.createElement('option'); optAll.value='ALL'; optAll.textContent='Full Year';
   sel.appendChild(optAll);
   MONTHS.forEach((m,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=m+' '+state.year; sel.appendChild(o); });
-  const latest = findLatestMonthWithData(state.year);
   const today = new Date();
-  const defaultMonth = (state.year===today.getFullYear()) ? Math.min(today.getMonth(), latest>=0?Math.max(latest,today.getMonth()):today.getMonth()) : latest;
-  state.month = String(latest>=0? latest : (today.getMonth()));
+  const latest = findLatestMonthWithData(state.year);
+  // For the CURRENT calendar year, always default to today's actual month —
+  // never jump ahead into a future month just because it happens to have
+  // data already entered (e.g. December filled in early while it's still
+  // August). For a past/other year there's no "today" in that year, so
+  // fall back to the latest month that has data.
+  const defaultMonth = (state.year===today.getFullYear()) ? today.getMonth() : (latest>=0 ? latest : today.getMonth());
+  state.month = String(defaultMonth);
   sel.value = state.month;
   document.getElementById('scopeStr').textContent = state.year + ' · ' + MONTHS[Number(state.month)];
 }
