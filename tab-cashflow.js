@@ -22,7 +22,7 @@ function renderCashFlow(){
   const y = state.year;
   const rows = computeCashFlow(y);
   const isFullYear = state.month==='ALL';
-  const mi = isFullYear ? findLatestMonthWithData(y) : Number(state.month);
+  const mi = isFullYear ? currentSnapshotMonth(y) : Number(state.month);
   const thisRow = rows[mi];
   const prevRow = mi>0 ? rows[mi-1] : null;
 
@@ -50,6 +50,7 @@ function renderCashFlow(){
       ${editCell(i,'expenses', r.expenses)}
       ${editCell(i,'card', r.card)}
       ${editCell(i,'debtPaid', r.debtPaid)}
+      ${editCell(i,'retirement', r.retirement)}
       <td style="font-weight:600; color:${r.netFlow>=0?'var(--teal-soft)':'var(--rust-soft)'}">${r.netFlow>=0?'+':''}${fmt$(r.netFlow,2)}</td>
       <td style="font-weight:700; color:var(--gold-soft)">${fmt$(r.carryOut,2)}</td>
     </tr>`).join('');
@@ -88,12 +89,12 @@ function renderCashFlow(){
 
   const html = `
     <div class="section-title">Cash Flow · ${y}</div>
-    <p class="section-sub">What you actually have on hand: income, minus categorized spending, minus card bill payments, minus debt payments — carried forward month over month. Every cell below is editable — type over anything to correct it for a specific month; clear a cell to go back to the calculated value.</p>
+    <p class="section-sub">What you actually have on hand: income, minus categorized spending, minus card bill payments, minus debt payments, minus your own retirement contribution — carried forward month over month. Every cell below is editable — type over anything to correct it for a specific month; clear a cell to go back to the calculated value.</p>
 
     <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
       <div class="kpi-card c-gold"><div class="kpi-label">Carried in from ${mi>0?MONTHS[mi-1]:'prior year'}</div><div class="kpi-value">${fmt$(thisRow.carryIn)}</div></div>
       <div class="kpi-card c-teal"><div class="kpi-label">${MONTHS[mi]} net flow</div><div class="kpi-value">${thisRow.netFlow>=0?'+':''}${fmt$(thisRow.netFlow)}</div></div>
-      <div class="kpi-card c-rust"><div class="kpi-label">Card + debt paid this month</div><div class="kpi-value">${fmt$(thisRow.card+thisRow.debtPaid)}</div></div>
+      <div class="kpi-card c-rust"><div class="kpi-label">Card + debt + retirement this month</div><div class="kpi-value">${fmt$(thisRow.card+thisRow.debtPaid+thisRow.retirement)}</div></div>
       <div class="kpi-card c-gold"><div class="kpi-label">Cash on hand, end of ${MONTHS[mi]}</div><div class="kpi-value">${fmt$(thisRow.carryOut)}</div>${deltaHtml(thisRow.carryOut, prevRow)}</div>
     </div>
 
@@ -106,12 +107,12 @@ function renderCashFlow(){
       <div class="card-head"><h3>Month by month — computed cash flow</h3></div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Month</th><th>Carry-in</th><th>Income</th><th>Expenses</th><th>Card Paid</th><th>Debt Paid</th><th>Net Flow</th><th>Carry-out</th></tr></thead>
+          <thead><tr><th>Month</th><th>Carry-in</th><th>Income</th><th>Expenses</th><th>Card Paid</th><th>Debt Paid</th><th>Retirement</th><th>Net Flow</th><th>Carry-out</th></tr></thead>
           <tbody id="cfBody">${tableRows}</tbody>
         </table>
       </div>
       <div class="section-sub" style="margin-top:10px; margin-bottom:0;">
-        <b>How this works:</b> <b>Carry-in</b> is what you had at the start. <b>Income</b> adds to it. <b>Expenses</b>, <b>Card Paid</b>, and <b>Debt Paid</b> subtract. The result is <b>Net Flow</b>. <b>Carry-out</b> = Carry-in + Net Flow. That carry-out becomes next month's carry-in automatically.
+        <b>How this works:</b> <b>Carry-in</b> is what you had at the start. <b>Income</b> adds to it. <b>Expenses</b>, <b>Card Paid</b>, <b>Debt Paid</b>, and <b>Retirement</b> (your own contribution — employer match isn't your cash, so it's excluded) subtract. The result is <b>Net Flow</b>. <b>Carry-out</b> = Carry-in + Net Flow. That carry-out becomes next month's carry-in automatically.
       </div>
     </div>
 

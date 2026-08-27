@@ -163,7 +163,7 @@ function renderSavings(){
   const goals = yearData(y).savingsGoals;
   const retAccounts = yearData(y).retirementAccounts;
 
-  const latestDataMonth = findLatestMonthWithData(y);
+  const latestDataMonth = currentSnapshotMonth(y);
   const selectedMonthIndex = state.month === 'ALL' ? latestDataMonth : Number(state.month);
   const activeMonthIdx = Number.isInteger(selectedMonthIndex) ? selectedMonthIndex : latestDataMonth;
 

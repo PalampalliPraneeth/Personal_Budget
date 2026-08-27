@@ -552,6 +552,21 @@ function findLatestMonthWithData(y){
   for(let i=0;i<12;i++){ if(inc[i]>0 || exp[i]>0) last=i; }
   return last;
 }
+/* "What month should count as 'right now' for a snapshot figure?" — Cash on
+   Hand, Net Worth, latest Savings/Goals balance, etc. all need to answer
+   this. For the CURRENT calendar year this is always today's actual
+   month — never a future month, even if it already has data entered (e.g.
+   pre-filling December while it's still August). For a past year there's
+   no "today" inside it, so it falls back to the latest month that
+   actually has data. findLatestMonthWithData() itself stays a plain
+   data-scanner; this is the "don't jump into the future" wrapper around it.
+*/
+function currentSnapshotMonth(y){
+  const today = new Date();
+  if(y === today.getFullYear()) return today.getMonth();
+  const latest = findLatestMonthWithData(y);
+  return latest>=0 ? latest : today.getMonth();
+}
 
 /* =========================================================================
    CASH FLOW: income minus categorized spend minus card bill payments minus
@@ -582,6 +597,14 @@ function getAutoYearStart(y){
 }
 function computeCashFlow(y){
   const incBase = incomeTotals(y), expBase = expenseTotalsCounted(y), cardBase = expenseTotalsExcluded(y), debtBase = debtPaymentTotals(y);
+  // Your own retirement contribution already leaves your pocket the moment
+  // it's diverted — the Sankey ("Where it went") already treats it as an
+  // outflow of your income, so Cash Flow needs to agree, or that same
+  // dollar amount silently double-counts into Net Worth (once as if it's
+  // still cash, again as your retirement balance). Employer match is
+  // deliberately excluded: it never passed through your income, so it
+  // can't be a cash outflow of yours.
+  const retBase = retirementSelfContribTotals(y);
   let running = getAutoYearStart(y);
   const rows = [];
   for(let i=0;i<12;i++){
@@ -589,16 +612,18 @@ function computeCashFlow(y){
     const expenses = cfOverride(y,i,'expenses') ?? expBase[i];
     const card = cfOverride(y,i,'card') ?? cardBase[i];
     const debtPaid = cfOverride(y,i,'debtPaid') ?? debtBase[i];
+    const retirement = cfOverride(y,i,'retirement') ?? retBase[i];
     const carryInOverride = cfOverride(y,i,'carryIn');
     const carryIn = carryInOverride!==undefined ? carryInOverride : running;
-    const netFlow = income - expenses - card - debtPaid;
+    const netFlow = income - expenses - card - debtPaid - retirement;
     const carryOut = carryIn + netFlow;
     rows.push({
-      income, expenses, card, debtPaid, netFlow, carryIn, carryOut,
+      income, expenses, card, debtPaid, retirement, netFlow, carryIn, carryOut,
       incomeOverridden: cfOverride(y,i,'income')!==undefined,
       expensesOverridden: cfOverride(y,i,'expenses')!==undefined,
       cardOverridden: cfOverride(y,i,'card')!==undefined,
       debtPaidOverridden: cfOverride(y,i,'debtPaid')!==undefined,
+      retirementOverridden: cfOverride(y,i,'retirement')!==undefined,
       carryInOverridden: carryInOverride!==undefined
     });
     running = carryOut;

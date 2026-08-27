@@ -628,8 +628,7 @@ function renderSavingsGoalsMiniCard(y){
   if(typeof ensureGoalsMigration === 'function') ensureGoalsMigration();
   const goals = yearData(y).savingsGoals || [];
   const accounts = yearData(y).savingsAccounts || [];
-  const latest = findLatestMonthWithData(y);
-  const monthIdx = latest>=0 ? latest : 0;
+  const monthIdx = currentSnapshotMonth(y);
 
   if(!goals.length){
     return `
@@ -675,18 +674,23 @@ function renderOverview(){
   const expPrevYear = hasPrevYear ? sumArr(expenseTotalsCounted(prevY)) : 0;
 
   const cfRows = computeCashFlow(y);
-  const cfIdx = findLatestMonthWithData(y);
+  const cfIdx = currentSnapshotMonth(y);
   const cashOnHand = cfRows[cfIdx].carryOut;
   const cashPrevMonth = cfIdx>0 ? cfRows[cfIdx-1].carryOut : null;
 
   const fx = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : 84.0;
-  const invCurrent = sumArr(yearData(y).investments.map(i => {
-    if (i.currency === 'INR') return num(i.currentValue) / fx;
-    return num(i.currentValue);
+  // Match the Investments tab exactly: a platform with Holdings tracked
+  // gets its value from LIVE stock prices (platformHoldings), not the
+  // static currentValue field, which goes stale the moment you fetch new
+  // prices on the Holdings tab but never hand-update this field too.
+  const invCurrent = sumArr(yearData(y).investments.map(it => {
+    const platRows = (it.holdings && it.holdings.length && typeof platformHoldings === 'function') ? platformHoldings(y, it.id) : [];
+    if(platRows.length) return sumArr(platRows.map(r=>r.currentValueUSD));
+    return it.currency === 'INR' ? num(it.currentValue) / fx : num(it.currentValue);
   }));
 
   const savingsCurrent = sumArr((yearData(y).savingsAccounts||[]).map(acc=>{
-    const latest = findLatestMonthWithData(y);
+    const latest = currentSnapshotMonth(y);
     const bal = num((acc.m||[])[latest>=0?latest:0]);
     return acc.currency==='INR' ? bal/fx : bal;
   }));
