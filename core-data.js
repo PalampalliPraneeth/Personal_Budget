@@ -319,16 +319,25 @@ function recordFxRateSample(rate){
   const key = fxMonthKey(now.getFullYear(), now.getMonth());
   const today = todayDateStr();
   const existing = DATA.fxRateHistory[key];
+  let changed = false;
   if(!existing){
     DATA.fxRateHistory[key] = { start: rate, end: rate, lastUpdatedDay: today };
-    markDirty(null);
+    changed = true;
   } else if(existing.lastUpdatedDay !== today){
     existing.end = rate;
     existing.lastUpdatedDay = today;
-    markDirty(null);
+    changed = true;
   }
   // Same day, already sampled today — leave it alone so the day's locked
   // rate stays stable instead of jittering with every extra refresh.
+  if(changed && typeof persistData === 'function'){
+    // This is something the APP did, not something YOU did — save it
+    // quietly in the background instead of marking the app "dirty" (which
+    // would otherwise prompt a save/discard dialog the next time you
+    // switch tabs, just for visiting a page that happened to refresh
+    // the exchange rate).
+    persistData(true).catch(()=>{});
+  }
 }
 /* The rate to use for a specific calendar month's INR entries:
    - the month we're currently in (no "end" sample yet, still moving)

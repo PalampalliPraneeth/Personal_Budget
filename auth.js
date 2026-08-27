@@ -124,6 +124,13 @@ async function proceedAfterAuth(role){
   await loadData();
   await loadLogs();
   await logAccess(role);
+  // Get the live FX rate BEFORE the first render, not lazily whenever the
+  // person happens to visit Investments/Holdings — otherwise Overview's
+  // Net Worth briefly computes with no rate at all (or a stale one) on
+  // first load, then jumps once you visit a tab that triggers the fetch.
+  if(typeof ensureFxRates === 'function'){
+    try{ await ensureFxRates(); }catch(e){ /* fall back to whatever ensureFxRates already handles internally */ }
+  }
   panelsEl.innerHTML = '';
   initShell();
   renderActive();
