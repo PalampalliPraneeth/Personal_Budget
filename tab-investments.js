@@ -168,6 +168,23 @@ function renderInvestments(){
   }, 0);
   const gainUSD = currentTotalUSD - investedTotalUSD;
 
+  /* Portfolio-level XIRR — every buy/sell across every holding on every
+     platform folded into ONE set of cash flows, so this is your real
+     overall annualized return, not any single stock's. Reuses each
+     platform's already-computed live prices/currency handling via
+     platformHoldings() rather than re-deriving pricing logic here. */
+  const portfolioFlows = [];
+  items.forEach(inv=>{
+    if(!inv.holdings || !inv.holdings.length || typeof platformHoldings !== 'function') return;
+    const holdingRows = platformHoldings(y, inv.id);
+    const isINR = inv.currency === 'INR';
+    holdingRows.forEach(r=>{
+      portfolioFlows.push(...holdingCashflowsForXirr(r.lots, r.dividends, isINR?'INR':'USD', r.qty, r.currentValueUSD));
+    });
+  });
+  const portfolioXirrResult = xirrWithMinHistory(portfolioFlows);
+  const portfolioXirr = portfolioXirrResult.rate;
+
   /* ---- Build rows ---- */
   let lastCat = null;
   const rows = items.map(it => {
@@ -240,10 +257,11 @@ function renderInvestments(){
     <div class="section-title">Investments · ${y}</div>
     <p class="section-sub">Every holding's monthly contribution, plus current value vs. what you've put in. <b style="color:var(--teal-soft)">Indian Stocks marked "INR" are auto-converted to USD.</b> Hover any converted cell to see the original amount. Rates fetched live (cached 1 hr). <b style="color:var(--gold-soft)">Click any platform name</b> that has Holdings tracked to jump straight to its positions.</p>
 
-    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
       <div class="kpi-card c-teal"><div class="kpi-label">Current Portfolio Value (USD)</div><div class="kpi-value">${fmt$(currentTotalUSD)}</div></div>
       <div class="kpi-card c-gold"><div class="kpi-label">Total Invested (USD)</div><div class="kpi-value">${fmt$(investedTotalUSD)}</div></div>
       <div class="kpi-card ${gainUSD>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized Gain / Loss (USD)</div><div class="kpi-value">${gainUSD>=0?'+':''}${fmt$(gainUSD)}</div></div>
+      <div class="kpi-card ${portfolioXirr===null?'c-gold':(portfolioXirr>=0?'c-teal':'c-danger')}"><div class="kpi-label" data-tip="Annualized return across every buy and sell, on every holding, on every platform combined — the exact dates and sizes of each transaction all factor in. Not the same as raw % gain." class="has-tip">Portfolio XIRR</div><div class="kpi-value">${fmtXirr(portfolioXirr, portfolioXirrResult.tooNew)}</div></div>
     </div>
 
     <div class="grid-2">

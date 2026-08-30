@@ -276,6 +276,81 @@ function openConfirmBuyModal(h, scheduledDate, onConfirm){
   amountEl.focus(); amountEl.select();
 }
 
+/* ---------- Quick Buy modal — a one-off purchase directly from the
+   holdings row, without setting up a recurring schedule. Creates a proper
+   dated lot, same as confirming a scheduled buy does, so XIRR and cost
+   basis both stay accurate. ---------- */
+function openQuickBuyModal(h, onConfirm){
+  const old = document.getElementById('quickBuyOverlay');
+  if(old) old.remove();
+
+  const todayStr = new Date().toISOString().slice(0,10);
+  const defaultPrice = h.currentPrice || h.avgPrice || 0;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'quickBuyOverlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <h3>+ Buy more — ${h.symbol}</h3>
+      <p class="modal-sub">Records a new purchase as its own dated lot — this is what keeps XIRR and cost basis accurate, unlike typing directly into the Qty cell.</p>
+      <div class="modal-field">
+        <label>Quantity (shares)</label>
+        <input type="number" id="qbQty" min="0" step="any" placeholder="0">
+      </div>
+      <div class="modal-field">
+        <label>Price / share</label>
+        <input type="number" id="qbPrice" value="${defaultPrice||''}" min="0" step="any">
+      </div>
+      <div class="modal-field">
+        <label>Date</label>
+        <input type="date" id="qbDate" value="${todayStr}">
+      </div>
+      <div class="modal-preview">
+        <span class="label">Total cost</span>
+        <span class="value" id="qbTotalVal">—</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="qbCancelBtn">Cancel</button>
+        <button class="btn primary" id="qbSaveBtn">Add purchase</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const qtyEl = overlay.querySelector('#qbQty');
+  const priceEl = overlay.querySelector('#qbPrice');
+  const dateEl = overlay.querySelector('#qbDate');
+  const totalEl = overlay.querySelector('#qbTotalVal');
+
+  function updatePreview(){
+    const qty = parseFloat(qtyEl.value)||0;
+    const price = parseFloat(priceEl.value)||0;
+    totalEl.textContent = (qty>0 && price>0) ? fmt$(qty*price,2) : '—';
+  }
+  updatePreview();
+  qtyEl.addEventListener('input', updatePreview);
+  priceEl.addEventListener('input', updatePreview);
+
+  function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if(e.key==='Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  overlay.querySelector('#qbCancelBtn').addEventListener('click', close);
+
+  overlay.querySelector('#qbSaveBtn').addEventListener('click', ()=>{
+    const qty = parseFloat(qtyEl.value);
+    const price = parseFloat(priceEl.value);
+    const date = dateEl.value || todayStr;
+    if(!qty || qty<=0){ qtyEl.focus(); return; }
+    if(!price || price<=0){ priceEl.focus(); return; }
+    close();
+    onConfirm(qty, price, date);
+  });
+
+  qtyEl.focus();
+}
+
 
 function _ensureFx(){
   if(typeof fxRates !== 'undefined' && fxRates && fxRates.INR) return fxRates;
@@ -539,6 +614,127 @@ function recalcHolding(h){
   if(!h.ytdStartPrice) h.ytdStartPrice = h.avgPrice;
 }
 
+/* =========================================================================
+   XIRR — annualized return across irregular, dated cash flows. Standard
+   finance formula: find the rate r that makes the net present value of
+   every cash flow (buys = money out, sells/dividends = money in, plus
+   today's market value if still holding) equal to zero:
+     Σ CF_i / (1+r)^(days_i / 365) = 0
+   There's no closed-form solution, so this solves it numerically:
+   Newton-Raphson first (fast, usually converges in a handful of steps),
+   falling back to bisection (slower, but always finds a root if one
+   exists in a sane range) if Newton-Raphson fails to converge or leaves
+   the valid domain (rate must stay > -100%).
+   ========================================================================= */
+function _xirrNpv(flows, rate, t0){
+  return flows.reduce((sum, cf) => {
+    const days = (cf.date - t0) / 86400000; // ms -> days
+    return sum + cf.amount / Math.pow(1 + rate, days / 365);
+  }, 0);
+}
+function _xirrNpvDerivative(flows, rate, t0){
+  return flows.reduce((sum, cf) => {
+    const t = (cf.date - t0) / 86400000 / 365;
+    if(t === 0) return sum;
+    return sum - (t * cf.amount) / Math.pow(1 + rate, t + 1);
+  }, 0);
+}
+function calcXirr(cashflows){
+  if(!cashflows) return null;
+  const flows = cashflows.filter(cf => cf.amount && cf.date instanceof Date && !isNaN(cf.date.getTime()));
+  if(flows.length < 2) return null; // not enough data points to have a "return" at all
+
+  const hasPositive = flows.some(cf => cf.amount > 0);
+  const hasNegative = flows.some(cf => cf.amount < 0);
+  if(!hasPositive || !hasNegative) return null; // need both money-out and money-in to compute a rate
+
+  const t0 = flows.reduce((min, cf) => cf.date < min ? cf.date : min, flows[0].date);
+  if(flows.every(cf => cf.date.getTime() === t0.getTime())) return null; // no time elapsed -> "annualized" is meaningless
+
+  // ---- Newton-Raphson ----
+  let rate = 0.1, converged = false;
+  for(let i=0; i<100; i++){
+    const npv = _xirrNpv(flows, rate, t0);
+    const dnpv = _xirrNpvDerivative(flows, rate, t0);
+    if(Math.abs(dnpv) < 1e-12) break;
+    const next = rate - npv / dnpv;
+    if(!isFinite(next) || next <= -0.999999) break; // left the valid domain (rate > -100%)
+    if(Math.abs(next - rate) < 1e-7){ rate = next; converged = true; break; }
+    rate = next;
+  }
+  if(converged) return rate;
+
+  // ---- Bisection fallback: slower, but guaranteed to converge if a root
+  // exists between these bounds (covers cases Newton-Raphson overshoots on,
+  // e.g. very short holding periods, extreme multi-baggers, or a near-total
+  // loss — that last case needs the lower bound extremely close to -100%,
+  // since losing almost everything means the true rate sits right at the
+  // edge of the valid domain). ----
+  let lo = -0.999999999, hi = 10;
+  let npvLo = _xirrNpv(flows, lo, t0), npvHi = _xirrNpv(flows, hi, t0);
+  if(!isFinite(npvLo) || !isFinite(npvHi) || (npvLo > 0) === (npvHi > 0)){
+    hi = 100; // widen once for extreme gains before giving up
+    npvHi = _xirrNpv(flows, hi, t0);
+    if(!isFinite(npvHi) || (npvLo > 0) === (npvHi > 0)) return null; // no sign change -> no solution in a sane range
+  }
+  for(let i=0; i<200; i++){
+    const mid = (lo + hi) / 2;
+    const npvMid = _xirrNpv(flows, mid, t0);
+    if(Math.abs(npvMid) < 1e-6) return mid;
+    if((npvMid > 0) === (npvLo > 0)){ lo = mid; npvLo = npvMid; } else { hi = mid; }
+  }
+  return (lo + hi) / 2;
+}
+/* Builds the dated USD cash-flow list for one holding: every buy (outflow,
+   locked to that month's own FX rate — same historical-accuracy logic as
+   the rest of the app) and sell/dividend (inflow, same treatment), plus —
+   if any shares are still held — today's market value as a final
+   hypothetical "sold today" inflow, using the LIVE rate since that's a
+   right-now valuation, not a historical transaction. */
+function holdingCashflowsForXirr(lots, dividends, fallbackCurrency, qtyStillHeld, currentValueUsd){
+  const flows = [];
+  (lots||[]).forEach(l=>{
+    const dt = new Date(l.date);
+    if(isNaN(dt.getTime())) return;
+    const nativeAmt = num(l.qty) * num(l.price);
+    if(nativeAmt === 0) return;
+    const usdAmt = nativeMonthToUsd(nativeAmt, l.currency || fallbackCurrency, dt.getFullYear(), dt.getMonth());
+    flows.push({ date: dt, amount: l.type === 'sell' ? usdAmt : -usdAmt });
+  });
+  (dividends||[]).forEach(d=>{
+    const dt = new Date(d.date);
+    if(isNaN(dt.getTime()) || !num(d.amount)) return;
+    flows.push({ date: dt, amount: nativeMonthToUsd(num(d.amount), d.currency || fallbackCurrency, dt.getFullYear(), dt.getMonth()) });
+  });
+  if(num(qtyStillHeld) > 0.0000001 && num(currentValueUsd) > 0){
+    flows.push({ date: new Date(), amount: num(currentValueUsd) });
+  }
+  return flows;
+}
+function fmtXirr(rate, tooNew){
+  if(tooNew) return 'New';
+  if(rate === null || rate === undefined || !isFinite(rate)) return '—';
+  const pctVal = rate * 100;
+  if(Math.abs(pctVal) >= 1000) return (pctVal>=0?'>':'<') + (pctVal>=0?'+':'-') + '999%'; // extreme short-period annualization — mathematically real, just not a useful display
+  return (pctVal>=0?'+':'') + pctVal.toFixed(1) + '%';
+}
+/* A handful of buys/sells within the last ~30 days can produce an
+   annualized return in the thousands of percent — technically correct
+   math, but not a meaningful "how well is this doing per year" number
+   (the same reason Fidelity/Schwab don't show an annualized return on
+   very fresh positions). Below that threshold, XIRR is suppressed and
+   flagged tooNew instead of shown as a wild number. */
+function xirrWithMinHistory(cashflows, minDays){
+  minDays = minDays===undefined ? 30 : minDays;
+  if(!cashflows) return {rate:null, tooNew:false};
+  const dated = cashflows.filter(cf => cf.date instanceof Date && !isNaN(cf.date.getTime()));
+  if(dated.length < 2) return {rate:null, tooNew:false};
+  const times = dated.map(cf=>cf.date.getTime());
+  const spanDays = (Math.max(...times) - Math.min(...times)) / 86400000;
+  if(spanDays < minDays) return {rate:null, tooNew:true};
+  return {rate: calcXirr(cashflows), tooNew:false};
+}
+
 /* ---------- Aggregation ---------- */
 function aggregateAllHoldings(y){
   ensureHoldingsMigration();
@@ -552,8 +748,11 @@ function aggregateAllHoldings(y){
         symbol: sym, name: h.name || sym, type: h.type || 'stock',
         qty: 0, invested: 0, currentValue: 0, ytdStartValue: 0,
         platforms: [], prices: [], avgPrices: [], ytdPrices: [],
-        dayPLUSD: 0, dayPLKnown: false, regions: new Set()
+        dayPLUSD: 0, dayPLKnown: false, regions: new Set(),
+        _allLots: [], _allDividends: []
       };
+      map[sym]._allLots.push(...(h.lots||[]).map(l=>({...l, currency: isINR?'INR':'USD'})));
+      map[sym]._allDividends.push(...(h.dividends||[]).map(d=>({...d, currency: isINR?'INR':'USD'})));
       map[sym].regions.add(isINR ? 'IN' : 'US');
       const q = num(h.qty);
       const avgUSD = _toUsd(h.avgPrice, isINR ? 'INR' : 'USD');
@@ -902,6 +1101,40 @@ function renderHoldings(){
     const fxRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : null;
     const fxSource = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? 'live' : 'updating...';
 
+    // Portfolio XIRR for exactly what's on screen right now — every row's
+    // buys/sells/dividends combined into one set of cash flows (works for
+    // both the All-Platforms aggregated view and a single platform, since
+    // aggregated rows already carry a currency tag per lot and single-
+    // platform rows fall back to that platform's own currency).
+    const curInvForXirr = !isAll ? investments.find(i=>i.id===state.holdingsView) : null;
+    const portfolioFallbackCurrency = (curInvForXirr && curInvForXirr.currency==='INR') ? 'INR' : 'USD';
+    const portfolioFlows = [];
+    rows.forEach(r=>{
+      const lots = r._allLots || r.lots;
+      const divs = r._allDividends || r.dividends;
+      const curVal = r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue;
+      portfolioFlows.push(...holdingCashflowsForXirr(lots, divs, portfolioFallbackCurrency, r.qty, curVal));
+    });
+    // Fully-sold (closed) positions are excluded from the table above on
+    // purpose (so they don't skew current allocation), but their buys and
+    // realized sells are real cash flows that happened — leaving them out
+    // would silently understate the portfolio's true annualized return.
+    if(isAll){
+      allSoldHoldingsByPlatform(y).forEach(group=>{
+        const groupInv = investments.find(i=>i.id===group.platformId);
+        const groupCurrency = (groupInv && groupInv.currency==='INR') ? 'INR' : 'USD';
+        group.rows.forEach(r=>{
+          portfolioFlows.push(...holdingCashflowsForXirr(r.lots, r.dividends, groupCurrency, 0, 0));
+        });
+      });
+    } else {
+      platformSoldHoldings(y, state.holdingsView).forEach(r=>{
+        portfolioFlows.push(...holdingCashflowsForXirr(r.lots, r.dividends, portfolioFallbackCurrency, 0, 0));
+      });
+    }
+    const portfolioXirrResult = xirrWithMinHistory(portfolioFlows);
+    const portfolioXirr = portfolioXirrResult.rate;
+
     // KPI cards are always shown in USD; when you're looking at a single INR
     // platform, attach the native-currency figure as a hover tooltip too,
     // same as every row cell already does.
@@ -911,11 +1144,11 @@ function renderHoldings(){
     const tipAttr = (usdVal) => isInrPlatform ? `data-tip="${fmtInr(usdVal*fxForTip)}"` : '';
 
     kpiHtml = `
-      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
+      <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);">
         <div class="kpi-card c-teal"><div class="kpi-label">Current Value</div><div class="kpi-value" ${tipAttr(totalCurrent)}>${fmt$(totalCurrent)}</div></div>
         <div class="kpi-card c-gold"><div class="kpi-label">Total Invested</div><div class="kpi-value" ${tipAttr(totalInvested)}>${fmt$(totalInvested)}</div></div>
         <div class="kpi-card ${totalPl>=0?'c-teal':'c-danger'}"><div class="kpi-label">Unrealized P&L</div><div class="kpi-value" ${tipAttr(totalPl)}>${totalPl>=0?'+':''}${fmt$(totalPl)}</div><div class="kpi-delta ${totalPl>=0?'up':'down'}">${totalPl>=0?'+':''}${pct(totalPlPct)}</div></div>
-        <!-- YTD P&L card removed here — replaced by Day Change P&L below -->
+        <div class="kpi-card ${portfolioXirr===null?'c-gold':(portfolioXirr>=0?'c-teal':'c-danger')}"><div class="kpi-label" data-tip="Annualized return combining every buy/sell/dividend shown below — not an average of the individual XIRR column, the actual combined cash flows" class="has-tip">${isAll?'Portfolio':'Platform'} XIRR</div><div class="kpi-value">${fmtXirr(portfolioXirr, portfolioXirrResult.tooNew)}</div></div>
         <div class="kpi-card ${!anyDayDataKnown?'':(totalDayPl>=0?'c-teal':'c-danger')}"><div class="kpi-label">Day Change P&L</div><div class="kpi-value" ${anyDayDataKnown?tipAttr(totalDayPl):''}>${anyDayDataKnown ? (totalDayPl>=0?'+':'')+fmt$(totalDayPl) : '—'}</div><div class="kpi-delta ${totalDayPl>=0?'up':'down'}">${anyDayDataKnown ? (totalDayPl>=0?'+':'')+pct(totalDayPlPct) : 'Click Fetch live prices'}</div></div>
       </div>
       <div class="section-sub" style="margin-top:8px; margin-bottom:0; text-align:right;">
@@ -1046,7 +1279,7 @@ function renderHoldings(){
       <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
       <td style="font-weight:600;color:${r.dayChangePct===null?'var(--text-dim)':plColor(r.dayPLUSD||0)};" ${tip(r.tDayPl)}>${r.dayChangePct===null?'—':(r.dayPLUSD>=0?'+':'')+r.dDayPl}</td>
       <td style="color:${plColor(r.ytdNet)}" title="${r.ytdBaselineNote}">${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
-      <td style="white-space:nowrap;"><button class="btn small sell" data-sellh="${r.id}">Sell</button> <button class="btn small" data-recurh="${r.id}" title="Set up a recurring buy" style="margin-left:4px;">🔁</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
+      <td style="white-space:nowrap;"><button class="btn small" data-buyh="${r.id}" title="Record a one-off purchase, dated today (or whichever date you pick)" style="margin-right:4px;">+ Buy</button><button class="btn small sell" data-sellh="${r.id}">Sell</button> <button class="btn small" data-recurh="${r.id}" title="Set up a recurring buy" style="margin-left:4px;">🔁</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
     </tr>`;
   }).join('');
 
@@ -1477,12 +1710,23 @@ function renderHoldings(){
           if(isNaN(v)) v = null;
           if(field === 'qty') v = v !== null ? v : 0;
           if(field === 'qty'){
-            const buyLots = h.lots.filter(l => l.type !== 'sell');
-            const otherBuysQty = buyLots.slice(0,-1).reduce((a,l)=>a+num(l.qty),0);
-            const targetLastBuyQty = Math.max((v||0) + num(h.totalSoldQty) - otherBuysQty, 0);
-            if(buyLots.length === 1){ buyLots[0].qty = targetLastBuyQty; }
-            else if(buyLots.length === 0){ h.lots.push({id: uid(), type:'buy', qty: v||0, price: h.avgPrice||0, date: `${y}-01-01`}); }
-            else { buyLots[buyLots.length-1].qty = targetLastBuyQty; }
+            // Whatever the difference is between the new total and what we
+            // already had, record it as its OWN lot dated TODAY — exactly
+            // like clicking "Buy" would. Silently stretching an existing
+            // lot's quantity (its old behavior) backdated newly-added
+            // shares onto whatever date the original lot happened to be,
+            // which corrupts XIRR (and cost basis) for anyone who uses this
+            // cell to add to a position instead of the Buy button.
+            const currentQty = num(h.qty);
+            const delta = (v||0) - currentQty;
+            const todayStr = new Date().toISOString().slice(0,10);
+            if(Math.abs(delta) > 0.0000001){
+              if(delta > 0){
+                h.lots.push({id: uid(), type:'buy', qty: delta, price: h.currentPrice||h.avgPrice||0, date: todayStr});
+              } else {
+                h.lots.push({id: uid(), type:'sell', qty: -delta, price: h.currentPrice||h.avgPrice||0, date: todayStr});
+              }
+            }
             recalcHolding(h);
           } else if(field === 'avgPrice'){
             const buyLots = h.lots.filter(l => l.type !== 'sell');
@@ -1541,6 +1785,18 @@ function renderHoldings(){
           markDirty('holdings');
           renderHoldings();
           showToast(`Sold ${qty} ${h.symbol} @ ${fmt$(price,2)}`);
+        });
+      }));
+
+      document.querySelectorAll('[data-buyh]').forEach(el => el.addEventListener('click', ()=>{
+        const h = inv.holdings.find(x => x.id === el.dataset.buyh);
+        if(!h) return;
+        openQuickBuyModal(h, (qty, price, date) => {
+          h.lots.push({id: uid(), type:'buy', qty, price, date});
+          recalcHolding(h);
+          markDirty('holdings');
+          renderHoldings();
+          showToast(`Added ${qty} ${h.symbol} @ ${fmt$(price,2)} on ${date}`);
         });
       }));
 
