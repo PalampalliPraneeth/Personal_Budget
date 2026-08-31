@@ -351,6 +351,98 @@ function openQuickBuyModal(h, onConfirm){
   qtyEl.focus();
 }
 
+/* ---------- Edit Lots modal ----------
+   Lets you correct any past buy/sell directly — the fix for holdings that
+   got their date wrong when first entered (e.g. dated "today" during setup
+   even though you'd actually owned them for months). Changing a date/qty/
+   price here directly affects cost basis and XIRR the next time they're
+   computed, since both read straight from h.lots. ========================================================================= */
+function openEditLotsModal(h){
+  const old = document.getElementById('editLotsOverlay');
+  if(old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'editLotsOverlay';
+  overlay.className = 'modal-overlay';
+
+  const lotsSorted = [...(h.lots||[])].sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+
+  const rowsHtml = lotsSorted.map(l => `
+    <div class="lot-edit-row" data-lot-id="${l.id}">
+      <select data-lot-field="type" data-lot-id="${l.id}">
+        <option value="buy" ${l.type==='buy'?'selected':''}>Buy</option>
+        <option value="sell" ${l.type==='sell'?'selected':''}>Sell</option>
+      </select>
+      <input type="number" data-lot-field="qty" data-lot-id="${l.id}" value="${l.qty}" step="any" placeholder="Qty">
+      <input type="number" data-lot-field="price" data-lot-id="${l.id}" value="${l.price}" step="any" placeholder="Price">
+      <input type="date" data-lot-field="date" data-lot-id="${l.id}" value="${l.date}">
+      <span class="row-del" data-lot-delete="${l.id}" title="Remove this lot">✕</span>
+    </div>
+  `).join('');
+
+  overlay.innerHTML = `
+    <div class="modal-card" style="width:540px;">
+      <h3>📝 Edit lots — ${h.symbol}</h3>
+      <p class="modal-sub">Correct the date, quantity, or price of any past purchase or sale — this is what fixes a holding that got dated "today" when you first entered it, even though you'd actually owned it for a while. Affects cost basis and XIRR immediately.</p>
+      <div class="lot-edit-header">
+        <span>Type</span><span>Qty</span><span>Price</span><span>Date</span><span></span>
+      </div>
+      <div style="max-height:300px; overflow-y:auto; margin-bottom:16px;">
+        ${rowsHtml || '<div class="section-sub" style="text-align:center; padding:14px 0;">No lots recorded for this holding.</div>'}
+      </div>
+      <div class="modal-actions" style="justify-content:space-between;">
+        <button class="btn" id="editLotsCancelBtn">Cancel</button>
+        <button class="btn primary" id="editLotsSaveBtn">Save changes</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if(e.key==='Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  overlay.querySelector('#editLotsCancelBtn').addEventListener('click', close);
+
+  // Deletions are staged locally (toggle-able) until Save is clicked, so a
+  // misclick doesn't immediately destroy a lot.
+  const toDelete = new Set();
+  overlay.querySelectorAll('[data-lot-delete]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const id = el.dataset.lotDelete;
+      const row = overlay.querySelector(`.lot-edit-row[data-lot-id="${id}"]`);
+      if(toDelete.has(id)){
+        toDelete.delete(id);
+        row.style.opacity = '1';
+        el.textContent = '✕';
+      } else {
+        toDelete.add(id);
+        row.style.opacity = '0.35';
+        el.textContent = '↺';
+      }
+    });
+  });
+
+  overlay.querySelector('#editLotsSaveBtn').addEventListener('click', ()=>{
+    const updatedLots = [];
+    lotsSorted.forEach(l=>{
+      if(toDelete.has(l.id)) return;
+      const row = overlay.querySelector(`.lot-edit-row[data-lot-id="${l.id}"]`);
+      const type = row.querySelector('[data-lot-field="type"]').value;
+      const qty = parseFloat(row.querySelector('[data-lot-field="qty"]').value) || 0;
+      const price = parseFloat(row.querySelector('[data-lot-field="price"]').value) || 0;
+      const date = row.querySelector('[data-lot-field="date"]').value || l.date;
+      updatedLots.push({id: l.id, type, qty, price, date});
+    });
+    h.lots = updatedLots;
+    recalcHolding(h);
+    markDirty('holdings');
+    close();
+    renderHoldings();
+    showToast(`Updated ${h.symbol} — ${updatedLots.length} lot${updatedLots.length===1?'':'s'}`);
+  });
+}
+
 
 function _ensureFx(){
   if(typeof fxRates !== 'undefined' && fxRates && fxRates.INR) return fxRates;
@@ -1279,7 +1371,7 @@ function renderHoldings(){
       <td style="font-weight:600;color:${plColor(r.plNet)}" ${tip(r.tPl)}>${r.plNet>=0?'+':''}${r.dPl} <span style="font-size:11px;opacity:.75;">(${r.plPct>=0?'+':''}${pct(r.plPct)})</span></td>
       <td style="font-weight:600;color:${r.dayChangePct===null?'var(--text-dim)':plColor(r.dayPLUSD||0)};" ${tip(r.tDayPl)}>${r.dayChangePct===null?'—':(r.dayPLUSD>=0?'+':'')+r.dDayPl}</td>
       <td style="color:${plColor(r.ytdNet)}" title="${r.ytdBaselineNote}">${r.ytdNet>=0?'+':''}${r.dYtdPl} <span style="font-size:11px;opacity:.75;">(${r.ytdPct>=0?'+':''}${pct(r.ytdPct)})</span></td>
-      <td style="white-space:nowrap;"><button class="btn small" data-buyh="${r.id}" title="Record a one-off purchase, dated today (or whichever date you pick)" style="margin-right:4px;">+ Buy</button><button class="btn small sell" data-sellh="${r.id}">Sell</button> <button class="btn small" data-recurh="${r.id}" title="Set up a recurring buy" style="margin-left:4px;">🔁</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
+      <td style="white-space:nowrap;"><button class="btn small" data-buyh="${r.id}" title="Record a one-off purchase, dated today (or whichever date you pick)" style="margin-right:4px;">+ Buy</button><button class="btn small sell" data-sellh="${r.id}">Sell</button> <button class="btn small" data-recurh="${r.id}" title="Set up a recurring buy" style="margin-left:4px;">🔁</button> <button class="btn small" data-editlots="${r.id}" title="Edit or correct individual buy/sell lots" style="margin-left:4px;">📝</button> <span class="row-del" data-delh="${r.id}" title="Delete this holding entirely">✕</span></td>
     </tr>`;
   }).join('');
 
@@ -1343,6 +1435,7 @@ function renderHoldings(){
       <input type="number" id="hNewQty" placeholder="Qty" step="any" style="width:70px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
       <input type="number" id="hNewAvg" placeholder="Avg price" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
       <input type="number" id="hNewCur" placeholder="LTP(Last Trade Price)" step="any" style="width:90px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;">
+      <input type="date" id="hNewDate" title="When you actually bought this — defaults to today, but backdate it if you're entering a holding you've had for a while, so XIRR reflects your real holding period." style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
       <button class="btn primary small" id="hAddBtn">+ Add</button>
     </div>
   `;
@@ -1763,11 +1856,13 @@ function renderHoldings(){
         const qty = parseFloat(document.getElementById('hNewQty').value) || 0;
         const avg = parseFloat(document.getElementById('hNewAvg').value) || 0;
         const cur = parseFloat(document.getElementById('hNewCur').value) || 0;
+        const dateInp = document.getElementById('hNewDate').value;
+        const purchaseDate = dateInp || new Date().toISOString().slice(0,10);
         if(!sym){ document.getElementById('hNewSym').focus(); return; }
         const newH = {
           id: uid(), symbol: sym, name: name || sym, type,
           currentPrice: cur, ytdStartPrice: avg,
-          lots: [{id: uid(), type:'buy', qty, price: avg, date: new Date().toISOString().slice(0,10)}],
+          lots: [{id: uid(), type:'buy', qty, price: avg, date: purchaseDate}],
           dividends: [], currency: inv.currency || 'USD'
         };
         recalcHolding(newH);
@@ -1798,6 +1893,11 @@ function renderHoldings(){
           renderHoldings();
           showToast(`Added ${qty} ${h.symbol} @ ${fmt$(price,2)} on ${date}`);
         });
+      }));
+
+      document.querySelectorAll('[data-editlots]').forEach(el => el.addEventListener('click', ()=>{
+        const h = inv.holdings.find(x => x.id === el.dataset.editlots);
+        if(h) openEditLotsModal(h);
       }));
 
       document.querySelectorAll('[data-recurh]').forEach(el => el.addEventListener('click', ()=>{
