@@ -305,9 +305,26 @@ function ensureFxRateHistory(){
 function fxMonthKey(year, monthIdx){
   return year + '-' + String(monthIdx+1).padStart(2,'0');
 }
+/* ---------- Timezone-safe date helpers (used app-wide) ----------
+   new Date("YYYY-MM-DD") parses as UTC midnight; calling .getMonth()/
+   .getDate()/.getFullYear() on it then reads it back in the browser's
+   LOCAL time. For anyone west of Greenwich that can roll the 1st of the
+   month back into the previous month; .toISOString() on a locally-built
+   midnight Date has the mirror problem east of Greenwich (e.g. India),
+   silently shifting a date back by one day. These avoid any UTC
+   conversion at all, so what you typed/see is exactly what gets stored. */
+function parseLocalDateParts(dateStr){
+  const [yy, mm, dd] = dateStr.split('-').map(Number);
+  return { year: yy, monthIdx: mm-1, day: dd };
+}
+function toLocalISODate(d){
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return yy+'-'+mm+'-'+dd;
+}
 function todayDateStr(){
-  const d = new Date();
-  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  return toLocalISODate(new Date());
 }
 /* Call this whenever a fresh LIVE rate comes back from the FX API (not on
    a fallback/failure — we don't want an outage's placeholder rate getting

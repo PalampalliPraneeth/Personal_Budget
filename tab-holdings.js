@@ -22,7 +22,7 @@ function nextRecurringDate(daysOfMonth){
       const day = _clampDayOfMonth(d, y, m);
       const candidate = new Date(y, m, day);
       candidate.setHours(0,0,0,0);
-      if(candidate >= today) return candidate.toISOString().slice(0,10);
+      if(candidate >= today) return toLocalISODate(candidate);
     }
   }
   return null;
@@ -61,17 +61,17 @@ function nextRecurringDateForPlan(r){
       const day = _clampDayOfMonth(anchorDay, y, m);
       const candidate = new Date(y, m, day);
       candidate.setHours(0,0,0,0);
-      if(candidate >= today) return candidate.toISOString().slice(0,10);
+      if(candidate >= today) return toLocalISODate(candidate);
     }
     return null;
   }
   const stepDays = norm.frequencyType === 'weekly' ? 7 : norm.frequencyType === 'biweekly' ? 14 : 1; // 'daily' falls through to 1
-  if(start >= today) return start.toISOString().slice(0,10);
+  if(start >= today) return toLocalISODate(start);
   const diffDays = Math.floor((today - start) / (1000*60*60*24));
   const stepsNeeded = Math.ceil(diffDays / stepDays);
   const next = new Date(start);
   next.setDate(next.getDate() + stepsNeeded*stepDays);
-  return next.toISOString().slice(0,10);
+  return toLocalISODate(next);
 }
 function collectRecurringRows(y, platformId){ // platformId falsy = all platforms
   ensureHoldingsMigration();
@@ -111,7 +111,7 @@ function openRecurringModal(h, onSave, onRemove){
 
   const existing = _normalizedRecurring(h.recurring) || {};
   const selectedDays = new Set(existing.daysOfMonth || []);
-  const todayISO = new Date().toISOString().slice(0,10);
+  const todayISO = toLocalISODate(new Date());
   const hasExistingPlan = !!(h.recurring && h.recurring.active);
 
   const overlay = document.createElement('div');
@@ -284,7 +284,7 @@ function openQuickBuyModal(h, onConfirm){
   const old = document.getElementById('quickBuyOverlay');
   if(old) old.remove();
 
-  const todayStr = new Date().toISOString().slice(0,10);
+  const todayStr = toLocalISODate(new Date());
   const defaultPrice = h.currentPrice || h.avgPrice || 0;
 
   const overlay = document.createElement('div');
@@ -494,7 +494,7 @@ function filterSnapshots(snaps, timeframe){
 function recordPortfolioSnapshot(y, silent){
   ensureHoldingsMigration();
   const snaps = yearData(y).portfolioSnapshots || [];
-  const today = new Date().toISOString().slice(0,10);
+  const today = toLocalISODate(new Date());
   const all = aggregateAllHoldings(y);
   const totalValue = all.reduce((a,r)=>a+r.currentValue,0);
   const totalInvested = all.reduce((a,r)=>a+r.invested,0);
@@ -571,7 +571,7 @@ function ensureWatchlistMigration(){
     if(w.volume===undefined) w.volume = null;
     if(w.lastFetched===undefined) w.lastFetched = null;
     if(w.priceFetchFailed===undefined) w.priceFetchFailed = false;
-    if(!w.addedDate) w.addedDate = new Date().toISOString().slice(0,10);
+    if(!w.addedDate) w.addedDate = toLocalISODate(new Date());
   });
 }
 /* ---------- Live price fetch (best effort) ---------- */
@@ -786,17 +786,21 @@ function calcXirr(cashflows){
 function holdingCashflowsForXirr(lots, dividends, fallbackCurrency, qtyStillHeld, currentValueUsd){
   const flows = [];
   (lots||[]).forEach(l=>{
-    const dt = new Date(l.date);
+    if(!l.date) return;
+    const {year, monthIdx, day} = parseLocalDateParts(l.date);
+    const dt = new Date(year, monthIdx, day);
     if(isNaN(dt.getTime())) return;
     const nativeAmt = num(l.qty) * num(l.price);
     if(nativeAmt === 0) return;
-    const usdAmt = nativeMonthToUsd(nativeAmt, l.currency || fallbackCurrency, dt.getFullYear(), dt.getMonth());
+    const usdAmt = nativeMonthToUsd(nativeAmt, l.currency || fallbackCurrency, year, monthIdx);
     flows.push({ date: dt, amount: l.type === 'sell' ? usdAmt : -usdAmt });
   });
   (dividends||[]).forEach(d=>{
-    const dt = new Date(d.date);
-    if(isNaN(dt.getTime()) || !num(d.amount)) return;
-    flows.push({ date: dt, amount: nativeMonthToUsd(num(d.amount), d.currency || fallbackCurrency, dt.getFullYear(), dt.getMonth()) });
+    if(!d.date || !num(d.amount)) return;
+    const {year, monthIdx, day} = parseLocalDateParts(d.date);
+    const dt = new Date(year, monthIdx, day);
+    if(isNaN(dt.getTime())) return;
+    flows.push({ date: dt, amount: nativeMonthToUsd(num(d.amount), d.currency || fallbackCurrency, year, monthIdx) });
   });
   if(num(qtyStillHeld) > 0.0000001 && num(currentValueUsd) > 0){
     flows.push({ date: new Date(), amount: num(currentValueUsd) });
@@ -978,7 +982,7 @@ function openSellModal(h, onConfirm){
 
   const maxQty = h.qty;
   const defaultPrice = h.currentPrice || h.avgPrice || 0;
-  const today = new Date().toISOString().slice(0,10);
+  const today = toLocalISODate(new Date());
 
   const overlay = document.createElement('div');
   overlay.id = 'sellModalOverlay';
@@ -1331,8 +1335,8 @@ function renderHoldings(){
      Day Chg right next to Unrealized P&L rather than up by LTP. */
   const typeTh = `<th id="typeFilterTh" style="cursor:pointer; white-space:nowrap;" title="Filter by type">Type <span id="typeFilterIcon" style="opacity:.75;">🔽</span></th>`;
   const thead = isAll
-    ? `<tr><th>Name</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th style="min-width:70px;">Day Chg</th><th>Day P&L</th>${typeTh}<th>Platforms</th></tr>`
-    : `<tr><th>Symbol</th><th>Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year — hover a row's value to see the exact baseline" class="has-tip">YTD P&L</th><th></th></tr>`;
+    ? `<tr><th class="pin-col-1">Name</th><th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th style="min-width:70px;">Day Chg</th><th>Day P&L</th>${typeTh}<th>Platforms</th></tr>`
+    : `<tr><th class="pin-col-1" style="width:72px;min-width:72px;max-width:72px;">Symbol</th><th class="pin-col-2" style="min-width:140px;">Name</th>${typeTh}<th>Qty</th><th>Avg Price</th><th data-tip="Last Traded Price" class="has-tip">LTP</th><th style="min-width:70px;">Day Chg</th><th>Invested</th><th>Current Value</th><th>Unrealized P&L</th><th>Day P&L</th><th data-tip="Calculated automatically from your earliest snapshot this year — hover a row's value to see the exact baseline" class="has-tip">YTD P&L</th><th></th></tr>`;
 
   /* ---- OPEN table body ---- */
   const tbody = pageRows.map(r => {
@@ -1341,7 +1345,7 @@ function renderHoldings(){
       const dayColor = r.dayChangePct===null ? 'var(--text-dim)' : (r.dayChangePct>=0 ? 'var(--good)' : 'var(--danger)');
       const dayPlColor = r.dayChangePct===null ? 'var(--text-dim)' : plColor(r.dayPLUSD||0);
       return `<tr>
-        <td>${r.name}</td>
+        <td class="pin-col-1">${r.name}</td>
         <td data-tip="${r.qty}" class="has-tip">${(r.qty||0).toFixed(2)}</td>
         <td>${fmt$(r.avgPrice,2)}</td>
         <td>${r.priceUnknown ? '—' : fmt$(r.currentPrice,2)}</td>
@@ -1357,8 +1361,8 @@ function renderHoldings(){
     }
     const tip = (t) => t ? `data-tip="${t}" class="has-tip"` : '';
     return `<tr data-hid="${r.id}">
-      <td style="font-weight:600;" class="editable" contenteditable="true" data-f="symbol" data-id="${r.id}">${r.symbol||''}</td>
-      <td class="editable" contenteditable="true" data-f="name" data-id="${r.id}">${r.name||''}</td>
+      <td class="pin-col-1 editable" style="font-weight:600; width:72px; min-width:72px; max-width:72px; overflow:hidden; text-overflow:ellipsis;" contenteditable="true" data-f="symbol" data-id="${r.id}">${r.symbol||''}</td>
+      <td class="pin-col-2 editable" style="min-width:140px;" contenteditable="true" data-f="name" data-id="${r.id}">${r.name||''}</td>
       <td><select data-htype="${r.id}" style="background:var(--bg-card-hi);color:var(--gold-soft);border:1px solid var(--line);border-radius:5px;font-family:var(--font-mono);font-size:11.5px;padding:3px 4px;">
         ${HOLDING_TYPES.map(t=>`<option value="${t}" ${r.type===t?'selected':''}>${t}</option>`).join('')}
       </select></td>
@@ -1812,7 +1816,7 @@ function renderHoldings(){
             // cell to add to a position instead of the Buy button.
             const currentQty = num(h.qty);
             const delta = (v||0) - currentQty;
-            const todayStr = new Date().toISOString().slice(0,10);
+            const todayStr = toLocalISODate(new Date());
             if(Math.abs(delta) > 0.0000001){
               if(delta > 0){
                 h.lots.push({id: uid(), type:'buy', qty: delta, price: h.currentPrice||h.avgPrice||0, date: todayStr});
@@ -1857,7 +1861,7 @@ function renderHoldings(){
         const avg = parseFloat(document.getElementById('hNewAvg').value) || 0;
         const cur = parseFloat(document.getElementById('hNewCur').value) || 0;
         const dateInp = document.getElementById('hNewDate').value;
-        const purchaseDate = dateInp || new Date().toISOString().slice(0,10);
+        const purchaseDate = dateInp || toLocalISODate(new Date());
         if(!sym){ document.getElementById('hNewSym').focus(); return; }
         const newH = {
           id: uid(), symbol: sym, name: name || sym, type,
@@ -2058,7 +2062,7 @@ function renderHoldings(){
       const targetPrice = targetRaw==='' ? null : (parseFloat(targetRaw) || null);
       DATA.watchlist.push({
         id: uid(), symbol: sym, name, region, targetPrice, notes: '',
-        addedDate: new Date().toISOString().slice(0,10),
+        addedDate: toLocalISODate(new Date()),
         currentPrice: null, dayChangePct: null, fiftyTwoWeekHigh: null, fiftyTwoWeekLow: null,
         prevClose: null, volume: null, lastFetched: null, priceFetchFailed: false
       });

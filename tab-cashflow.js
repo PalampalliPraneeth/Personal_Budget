@@ -1,6 +1,9 @@
 /* =========================================================================
    CASH FLOW TAB
    ========================================================================= */
+/* Timezone-safe date parsing (parseLocalDateParts, toLocalISODate) now lives
+   in core-data.js, shared by every tab — see that file for why it matters. */
+
 function ensureBanksMigration(){
   const y = state.year;
   if(!yearData(y).banks) yearData(y).banks = [];
@@ -16,11 +19,12 @@ function ensureBanksMigration(){
       delete b.lastUpdated;
     }
     if(!b.type) b.type = 'checking';
+    if(b.type==='credit' && b.creditLimit===undefined) b.creditLimit = null;
     if(!b.transactions) b.transactions = [];
     if(b.lastUpdatedAt===undefined) b.lastUpdatedAt = null;
   });
 }
-const BANK_TYPE_LABELS = { checking:'Checking', savings:'Savings', other:'Other' };
+const BANK_TYPE_LABELS = { checking:'Checking', savings:'Savings', credit:'Credit Card', other:'Other' };
 function timeAgo(ts){
   if(!ts) return 'no updates yet';
   const diffMs = Date.now() - ts;
@@ -35,6 +39,41 @@ function timeAgo(ts){
   return months+' month'+(months===1?'':'s')+' ago';
 }
 
+/* ---------- Expense-category lookup (used by Add Money's "Expense" option) ---------- */
+function flattenExpenseCategories(y){
+  const groups = yearData(y).expenseGroups || [];
+  const list = [];
+  groups.forEach(g=>{
+    (g.categories||[]).forEach(c=>{
+      list.push({ id:c.id, name:c.name, groupId:g.id, groupName:g.name });
+    });
+  });
+  return list;
+}
+function findExpenseCategoryById(y, catId){
+  const groups = yearData(y).expenseGroups || [];
+  for(const g of groups){
+    const c = (g.categories||[]).find(x=>x.id===catId);
+    if(c) return { cat:c, group:g };
+  }
+  return null;
+}
+
+/* ---------- Additive breakdown chain (so hover/edit shows the running composition, e.g. "1000+200+1000") ---------- */
+function appendAdditiveTerm(raw, prevVal, term){
+  const base = raw!=null ? raw : (prevVal ? String(prevVal) : null);
+  return base!=null ? (base + '+' + term) : String(roundCents(prevVal + term));
+}
+function stripAdditiveTerm(raw, term){
+  if(raw==null) return null;
+  const suffix = '+'+term;
+  if(raw.endsWith(suffix)) return raw.slice(0, -suffix.length) || null;
+  if(raw === String(term)) return null;
+  return null; // chain doesn't match exactly (e.g. hand-edited since) — safest fallback is to clear it
+}
+
+let cashflowFullYearView = false;
+
 function renderCashFlow(){
   const y = state.year;
   const rows = computeCashFlow(y);
@@ -43,9 +82,15 @@ function renderCashFlow(){
   const thisRow = rows[mi];
   const prevRow = mi>0 ? rows[mi-1] : null;
 
-  /* ---- Banks ---- */
+  const isMonthScope = state.month !== 'ALL';
+  const showFullYear = cashflowFullYearView || !isMonthScope;
+  const monthsToShow = showFullYear ? [0,1,2,3,4,5,6,7,8,9,10,11] : [mi];
+
+  /* ---- Banks & credit cards ---- */
   ensureBanksMigration();
-  const banks = yearData(y).banks;
+  const allAccounts = yearData(y).banks;
+  const banks = allAccounts.filter(b=>b.type!=='credit');       // real cash accounts
+  const creditCards = allAccounts.filter(b=>b.type==='credit'); // liabilities, tracked separately
 
   /* ---- Cash summary card + clickable bank list (Monarch-style) ---- */
   const bankUsdAt = (b, i) => {
@@ -58,6 +103,8 @@ function renderCashFlow(){
   const cashPrevTotal = cashSnapIdx>0 ? sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx-1) || 0)) : null;
   const cashDelta = cashPrevTotal===null ? null : cashTotal - cashPrevTotal;
   const cashDeltaPct = (cashPrevTotal && cashPrevTotal!==0) ? (cashDelta/Math.abs(cashPrevTotal))*100 : null;
+
+  const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, cashSnapIdx) || 0)));
 
   // Same components Net Worth uses, so "% of assets" lines up with Overview.
   const invCurrentForAssets = sumArr(yearData(y).investments.map(it => {
@@ -83,6 +130,27 @@ function renderCashFlow(){
       <div class="bank-row-right">
         <div class="bank-row-balance">${bal===null?'—':fmt$(bal,2)}</div>
         <div class="bank-row-sub">${timeAgo(b.lastUpdatedAt)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const creditRows = creditCards.map(b=>{
+    const bal = bankUsdAt(b, cashSnapIdx);
+    const owed = bal===null ? 0 : Math.max(0,-bal);
+    const hasLimit = b.creditLimit!=null && b.creditLimit>0;
+    const pctUsed = hasLimit ? (owed/b.creditLimit)*100 : null;
+    const pctColor = pctUsed===null ? 'var(--text-dim)' : pctUsed>=70 ? 'var(--rust-soft)' : pctUsed>=30 ? 'var(--gold-soft)' : 'var(--good)';
+    const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
+    return `
+    <div class="bank-row" data-bank-open="${b.id}">
+      <div class="bank-row-icon">${initial}</div>
+      <div class="bank-row-main">
+        <div class="bank-row-name">${b.name} <span class="row-del" data-editlimit="${b.id}" title="edit credit limit">✎</span></div>
+        <div class="bank-row-sub">${hasLimit ? `${fmt$(b.creditLimit,0)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'}</div>
+      </div>
+      <div class="bank-row-right">
+        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmt$(owed,2)+' owed':'Paid off')}</div>
+        <div class="bank-row-sub">${hasLimit ? fmt$(Math.max(0,b.creditLimit-owed),2)+' available' : timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
   }).join('');
@@ -119,6 +187,34 @@ function renderCashFlow(){
     </div>
   `;
 
+  const cardsWithLimit = creditCards.filter(b=>b.creditLimit!=null && b.creditLimit>0);
+  const totalLimit = sumArr(cardsWithLimit.map(b=>b.creditLimit));
+  const totalOwedWithLimit = sumArr(cardsWithLimit.map(b=>Math.max(0,-(bankUsdAt(b, cashSnapIdx)||0))));
+  const overallPct = totalLimit>0 ? (totalOwedWithLimit/totalLimit)*100 : null;
+
+  const creditCard = `
+    <div class="card cash-summary-card">
+      <div class="cash-summary-head">
+        <div class="cash-summary-title">Credit Cards</div>
+        <div class="cash-summary-value" style="color:${creditOwedTotal>0?'var(--rust-soft)':'var(--good)'}">${fmt$(creditOwedTotal,2)} owed</div>
+      </div>
+      <p class="section-sub" style="margin-top:0;">A credit card is a liability, not income — it isn't added here. Log each purchase as an <b>Expense</b> from "+ Add money" below (it raises what's owed); when you pay the statement, log a <b>Transfer</b> from the paying bank to the card (it clears what's owed and lowers that bank's balance) — by month end the two match up automatically. This total is excluded from "Cash" above and from the reconciliation table, since it's debt, not cash on hand.
+      ${overallPct===null ? '' : ` Across cards with a set limit, you're using <b>${overallPct.toFixed(0)}%</b> of ${fmt$(totalLimit,0)} available (cards with no preset limit, like an Amex with no fixed cap, aren't counted here).`}</p>
+      <div class="bank-row-list">
+        ${creditRows || '<div class="section-sub" style="padding:14px 0; text-align:center; margin:0;">No credit cards yet — add one below.</div>'}
+      </div>
+      <div class="addcat-row" style="margin-top:14px; flex-wrap:wrap;">
+        <input type="text" id="newCreditName" placeholder="New card name, e.g. Amex Blue Cash…" style="min-width:180px;">
+        <input type="number" id="newCreditLimit" min="0" step="any" placeholder="Credit limit (blank = no preset limit)" style="min-width:220px; background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+        <select id="newCreditCurrency" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+          <option value="USD">USD</option>
+          <option value="INR">INR</option>
+        </select>
+        <button class="btn primary small" id="addCreditBtn">+ Add credit card</button>
+      </div>
+    </div>
+  `;
+
   const deltaHtml = (curr, prev)=>{
     if(prev===null) return `<div class="kpi-delta flat">no prior month in ${y}</div>`;
     const d = curr - prev.carryOut;
@@ -130,8 +226,10 @@ function renderCashFlow(){
     return `<td class="editable cf-cell ${extraClass||''} ${overridden?'overridden':''}" contenteditable="true" data-cfcell="${i}" data-cffield="${field}" title="${overridden?'Manually overridden — clear the cell to go back to the calculated value':''}">${fmt$(value,2)}</td>`;
   };
 
-  /* ---- Cash Flow Month-by-Month Table ---- */
-  const tableRows = rows.map((r,i)=>`
+  /* ---- Cash Flow Month-by-Month Table (respects the month picker up top; toggle to see the full year) ---- */
+  const tableRows = monthsToShow.map(i=>{
+    const r = rows[i];
+    return `
     <tr>
       <td>${MONTHS[i]}</td>
       ${editCell(i,'carryIn', r.carryIn)}
@@ -142,10 +240,12 @@ function renderCashFlow(){
       ${editCell(i,'retirement', r.retirement)}
       <td style="font-weight:600; color:${r.netFlow>=0?'var(--teal-soft)':'var(--rust-soft)'}">${r.netFlow>=0?'+':''}${fmt$(r.netFlow,2)}</td>
       <td style="font-weight:700; color:var(--gold-soft)">${fmt$(r.carryOut,2)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
-  /* ---- Reconciliation row: computed cash vs bank balances ---- */
-  const reconcileRows = rows.map((r,i)=>{
+  /* ---- Reconciliation row: computed cash vs bank balances (credit cards excluded — they're debt, not cash) ---- */
+  const reconcileRows = monthsToShow.map(i=>{
+    const r = rows[i];
     const bankTotal = banks.reduce((a,b)=>a+num((b.m||[])[i]),0);
     const diff = bankTotal - r.carryOut;
     const match = Math.abs(diff) < 1;
@@ -160,21 +260,31 @@ function renderCashFlow(){
     </tr>`;
   }).join('');
 
-  /* ---- Banks Month-by-Month Table (like Expenses) ---- */
-  const bankMonthRows = banks.map(b=>{
-    const cells = MONTHS.map((_,i)=>{
-      const v = (b.m||[])[i];
-      const val = v===null||v===undefined ? '' : v;
-      return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-bfield="m" data-bid="${b.id}" data-idx="${i}">${val===''?'–':val}</td>`;
+  /* ---- Banks Month-by-Month Table (like Expenses) — respects the month picker ---- */
+  function accountMonthRows(list){
+    return list.map(b=>{
+      const cells = monthsToShow.map(i=>{
+        const v = (b.m||[])[i];
+        const val = v===null||v===undefined ? '' : v;
+        return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-bfield="m" data-bid="${b.id}" data-idx="${i}">${val===''?'–':val}</td>`;
+      }).join('');
+      const total = sumArr(b.m||[]);
+      return `<tr data-bank-id="${b.id}">
+        <td style="font-weight:600;">${b.name} <span class="row-del" data-delbank="${b.id}">✕</span></td>
+        ${cells}
+        <td style="font-weight:700;">${fmt$(total,2)}</td>
+        <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
+      </tr>`;
     }).join('');
-    const total = sumArr(b.m||[]);
-    return `<tr data-bank-id="${b.id}">
-      <td style="font-weight:600;">${b.name} <span class="row-del" data-delbank="${b.id}">✕</span></td>
-      ${cells}
-      <td style="font-weight:700;">${fmt$(total,2)}</td>
-      <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
-    </tr>`;
-  }).join('');
+  }
+  const bankMonthRows = accountMonthRows(banks);
+  const creditMonthRows = accountMonthRows(creditCards);
+
+  const viewToggleHtml = `
+    <div class="view-toggle">
+      ${isMonthScope ? `<button class="btn small" id="cashflowViewToggle">${showFullYear && cashflowFullYearView ? '◀ Show only '+MONTHS[mi] : 'Show full year →'}</button>` : `<span class="section-sub" style="margin:0;">Showing the full year — pick a specific month above to narrow the tables.</span>`}
+    </div>
+  `;
 
   const html = `
     <div class="section-title">Cash Flow · ${y}</div>
@@ -191,6 +301,8 @@ function renderCashFlow(){
       <div class="card-head"><h3>Running cash balance</h3></div>
       <div class="chart-box tall"><canvas id="chartCashRunning"></canvas></div>
     </div>
+
+    ${viewToggleHtml}
 
     <div class="card">
       <div class="card-head"><h3>Month by month — computed cash flow</h3></div>
@@ -214,22 +326,34 @@ function renderCashFlow(){
         </table>
       </div>
       <div class="section-sub" style="margin-top:10px; margin-bottom:0;">
-        Enter your actual bank balances below month by month. <b>✓</b> means your tracked numbers match reality. If there's a gap, you missed income, an expense, a transfer, or a debt payment.
+        Enter your actual bank balances below month by month. <b>✓</b> means your tracked numbers match reality. If there's a gap, you missed income, an expense, a transfer, or a debt payment. Credit cards are excluded here — they're debt, not cash.
       </div>
     </div>
 
     ${cashCard}
+    ${creditCard}
 
     <div class="card">
       <div class="card-head"><h3>Advanced: bank accounts, month by month</h3><span class="section-sub" style="margin:0;">Direct editing for any month — the card above only touches the current month via "Add money."</span></div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Bank / Account</th>${monthHeaderCells()}<th>Year</th><th>Currency</th></tr></thead>
+          <thead><tr><th>Bank / Account</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Currency</th></tr></thead>
           <tbody id="bankBody">${bankMonthRows}
-            <tr class="total-row"><td>Total across banks</td>${MONTHS.map((_,i)=>{
+            <tr class="total-row"><td>Total across banks</td>${monthsToShow.map(i=>{
               const t = banks.reduce((a,b)=>a+num((b.m||[])[i]),0);
               return `<td>${t>0?fmt$(t):'—'}</td>`;
             }).join('')}<td>${fmt$(banks.reduce((a,b)=>a+sumArr(b.m||[]),0))}</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Advanced: credit cards, month by month</h3><span class="section-sub" style="margin:0;">Values here are the balance owed at month end (0 = paid in full).</span></div>
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr><th>Card</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Currency</th></tr></thead>
+          <tbody id="creditBody">${creditMonthRows || `<tr><td colspan="${monthsToShow.length+3}" class="section-sub" style="text-align:center;">No credit cards yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -257,12 +381,12 @@ function renderCashFlow(){
     td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
   });
 
-  /* ---- Bank month cell handlers ---- */
-  document.querySelectorAll('#bankBody [data-bfield="m"]').forEach(td=>{
+  /* ---- Bank / credit-card month cell handlers ---- */
+  document.querySelectorAll('#bankBody [data-bfield="m"], #creditBody [data-bfield="m"]').forEach(td=>{
     td.addEventListener('focus', ()=>{ td.dataset.origRaw = td.textContent; });
     td.addEventListener('blur', ()=>{
       if(td.textContent === td.dataset.origRaw) return;
-      const b = banks.find(x=>x.id===td.dataset.bid);
+      const b = allAccounts.find(x=>x.id===td.dataset.bid);
       if(!b) return;
       const idx = Number(td.dataset.idx);
       const raw = td.textContent.trim().replace(/[$,]/g,'');
@@ -275,29 +399,29 @@ function renderCashFlow(){
       b.lastUpdatedAt = Date.now();
       td.textContent = v===null?'–':roundCents(v);
       td.classList.toggle('zero', !v);
-      markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Bank '+b.name, field:MONTHS[idx], oldVal:before===null?'empty':before, newVal:v===null?'empty':v});
+      markDirty('cashflow', {tab:'cashflow', action:'edit', target:(b.type==='credit'?'Credit card ':'Bank ')+b.name, field:MONTHS[idx], oldVal:before===null?'empty':before, newVal:v===null?'empty':v});
       renderCashFlow();
     });
     td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
   });
 
-  /* ---- Delete bank ---- */
+  /* ---- Delete bank / credit card ---- */
   document.querySelectorAll('[data-delbank]').forEach(el=>{
     el.addEventListener('click', ()=>{
-      const idx = banks.findIndex(x=>x.id===el.dataset.delbank);
-      if(idx>-1 && confirm('Remove "'+banks[idx].name+'"?')){
-        const name = banks[idx].name;
-        banks.splice(idx,1);
+      const idx = allAccounts.findIndex(x=>x.id===el.dataset.delbank);
+      if(idx>-1 && confirm('Remove "'+allAccounts[idx].name+'"?')){
+        const name = allAccounts[idx].name;
+        allAccounts.splice(idx,1);
         markDirty('cashflow', {tab:'cashflow', action:'delete', target:'Bank '+name});
         renderCashFlow();
       }
     });
   });
 
-  /* ---- Open bank detail (Monarch-style click-through) ---- */
+  /* ---- Open bank/credit-card detail (Monarch-style click-through) ---- */
   document.querySelectorAll('[data-bank-open]').forEach(el=>{
     el.addEventListener('click', ()=>{
-      const b = banks.find(x=>x.id===el.dataset.bankOpen);
+      const b = allAccounts.find(x=>x.id===el.dataset.bankOpen);
       if(b) openBankDetailModal(b, y);
     });
   });
@@ -309,10 +433,46 @@ function renderCashFlow(){
     const type = document.getElementById('newBankType').value;
     const currency = document.getElementById('newBankCurrency').value;
     if(!name){ inp.focus(); return; }
-    banks.push({id:uid(), name, m:n12(), currency, type, transactions:[], lastUpdatedAt:null});
+    allAccounts.push({id:uid(), name, m:n12(), currency, type, transactions:[], lastUpdatedAt:null});
     markDirty('cashflow', {tab:'cashflow', action:'add', target:'Bank '+name});
     renderCashFlow();
   });
+
+  /* ---- Add credit card ---- */
+  document.getElementById('addCreditBtn').addEventListener('click', ()=>{
+    const inp = document.getElementById('newCreditName');
+    const name = inp.value.trim();
+    const currency = document.getElementById('newCreditCurrency').value;
+    const limitRaw = document.getElementById('newCreditLimit').value.trim();
+    const creditLimit = limitRaw==='' ? null : Math.abs(parseFloat(limitRaw));
+    if(!name){ inp.focus(); return; }
+    allAccounts.push({id:uid(), name, m:n12(), currency, type:'credit', creditLimit: isNaN(creditLimit)?null:creditLimit, transactions:[], lastUpdatedAt:null});
+    markDirty('cashflow', {tab:'cashflow', action:'add', target:'Credit card '+name});
+    renderCashFlow();
+  });
+
+  /* ---- Edit an existing card's credit limit (leave blank for no preset limit, e.g. Amex Gold) ---- */
+  document.querySelectorAll('[data-editlimit]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const b = allAccounts.find(x=>x.id===el.dataset.editlimit);
+      if(!b) return;
+      const current = b.creditLimit!=null ? String(b.creditLimit) : '';
+      const entered = prompt('Credit limit for '+b.name+' (in '+(b.currency||'USD')+') — leave blank if this card has no preset limit:', current);
+      if(entered===null) return; // cancelled
+      const trimmed = entered.trim();
+      const newLimit = trimmed==='' ? null : Math.abs(parseFloat(trimmed));
+      b.creditLimit = (newLimit===null || isNaN(newLimit)) ? null : newLimit;
+      markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Credit card '+b.name, field:'credit limit', newVal: b.creditLimit===null?'no preset limit':b.creditLimit});
+      renderCashFlow();
+    });
+  });
+
+  /* ---- View toggle ---- */
+  const viewToggle = document.getElementById('cashflowViewToggle');
+  if(viewToggle){
+    viewToggle.addEventListener('click', ()=>{ cashflowFullYearView = !cashflowFullYearView; renderCashFlow(); });
+  }
 
   /* ---- Charts ---- */
   destroyChart('cashRunning');
@@ -327,8 +487,62 @@ function renderCashFlow(){
       scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
   });
 }
-/* ---------- Bank detail modal (Monarch-style click-through) ---------- */
-function openBankDetailModal(bank, y){
+
+/* ---------- Reverse & delete a single transaction (used by the ✕ next to each line in the bank/card detail modal) ---------- */
+function deleteBankTransaction(bank, y, txn){
+  const warnExtra = txn.category==='income' ? ' and that income entry'
+    : txn.category==='expense' ? ' and that expense category'
+    : txn.category==='transfer' ? ' and the other account it moved to/from'
+    : '';
+  if(!confirm('Delete this transaction? This will undo its effect on the balance'+warnExtra+'.')) return;
+
+  const idx = txn.monthIdx;
+
+  // 1. Reverse this account's balance for that month.
+  if(bank.m && bank.m[idx]!=null){
+    bank.m[idx] = roundCents(num(bank.m[idx]) - num(txn.amount));
+  }
+
+  // 2. Reverse the linked income / expense effect, if any.
+  if(txn.category==='income' && txn.refId){
+    const src = (yearData(y).income||[]).find(s=>s.id===txn.refId);
+    if(src && src.m){
+      const term = txn.refDelta!=null ? txn.refDelta : txn.amount; // fallback for older saved transactions
+      src.m[idx] = roundCents(num(src.m[idx]) - term);
+      if(src.raw) src.raw[idx] = stripAdditiveTerm(src.raw[idx], term);
+    }
+  }
+  if(txn.category==='expense' && txn.refId){
+    const found = findExpenseCategoryById(y, txn.refId);
+    if(found && found.cat.m){
+      // Original effect: withdraw (amount<0) added abs(amount) as spend; deposit (amount>0) subtracted it.
+      const term = txn.refDelta!=null ? txn.refDelta : (txn.amount<0 ? Math.abs(txn.amount) : -Math.abs(txn.amount));
+      found.cat.m[idx] = roundCents(num(found.cat.m[idx]) - term);
+      if(found.cat.raw) found.cat.raw[idx] = term>0 ? stripAdditiveTerm(found.cat.raw[idx], term) : null;
+    }
+  }
+
+  // 3. Reverse the paired leg of a transfer, and delete that mirrored transaction too.
+  if(txn.category==='transfer' && txn.transferPairBankId){
+    const otherBank = (yearData(y).banks||[]).find(b=>b.id===txn.transferPairBankId);
+    if(otherBank){
+      if(otherBank.m && otherBank.m[idx]!=null){
+        otherBank.m[idx] = roundCents(num(otherBank.m[idx]) + num(txn.amount));
+      }
+      otherBank.transactions = (otherBank.transactions||[]).filter(t=>t.id!==txn.transferPairTxnId);
+    }
+  }
+
+  // 4. Remove this transaction itself.
+  bank.transactions = (bank.transactions||[]).filter(t=>t.id!==txn.id);
+
+  markDirty('cashflow', {tab:'cashflow', action:'delete', target:'Transaction — '+bank.name, field:MONTHS[idx], oldVal:(txn.amount>=0?'+':'')+txn.amount.toFixed(2)});
+  renderCashFlow();
+  openBankDetailModal(bank, y, idx); // reopen refreshed, staying on the same month
+}
+
+/* ---------- Bank / credit-card detail modal (Monarch-style click-through) ---------- */
+function openBankDetailModal(bank, y, monthIdxArg){
   const old = document.getElementById('bankDetailOverlay');
   if(old) old.remove();
 
@@ -336,32 +550,51 @@ function openBankDetailModal(bank, y){
   overlay.id = 'bankDetailOverlay';
   overlay.className = 'modal-overlay';
 
-  const monthIdx = currentSnapshotMonth(y);
+  const isCredit = bank.type==='credit';
+  const monthIdx = monthIdxArg!=null ? monthIdxArg : (state.month==='ALL' ? currentSnapshotMonth(y) : Number(state.month));
   const balUsd = nativeMonthToUsd(num((bank.m||[])[monthIdx]), bank.currency, y, monthIdx);
-  const txns = [...(bank.transactions||[])].sort((a,b)=> (b.date||'').localeCompare(a.date||'')).slice(0,10);
+  const prevBalUsd = monthIdx>0 ? nativeMonthToUsd(num((bank.m||[])[monthIdx-1]), bank.currency, y, monthIdx-1) : null;
+  const delta = prevBalUsd===null ? null : balUsd - prevBalUsd;
+  const txns = [...(bank.transactions||[])]
+    .filter(t=>t.monthIdx===undefined || t.monthIdx===monthIdx)
+    .sort((a,b)=> (b.date||'').localeCompare(a.date||''))
+    .slice(0,10);
 
   const txnRows = txns.map(t=>{
-    const catLabel = t.category==='income' ? '💰 Income' : t.category==='transfer' ? '🔁 Transfer' : '📝 Other';
+    const catLabel = t.category==='income' ? '💰 Income' : t.category==='expense' ? '🧾 Expense' : t.category==='transfer' ? '🔁 Transfer' : '📝 Other';
     const color = num(t.amount)>=0 ? 'var(--good)' : 'var(--danger)';
     return `<div class="bank-txn-row">
       <div class="bank-txn-main">
         <div class="bank-txn-date">${t.date}</div>
         <div class="bank-txn-cat">${catLabel}${t.note?' · '+t.note:''}</div>
       </div>
-      <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmt$(t.amount,2)}</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmt$(t.amount,2)}</div>
+        <span class="row-del" data-deltxn="${t.id}" title="delete this transaction">✕</span>
+      </div>
     </div>`;
   }).join('');
 
   overlay.innerHTML = `
     <div class="modal-card" style="width:420px;">
-      <h3>🏦 ${bank.name}</h3>
-      <p class="modal-sub">${BANK_TYPE_LABELS[bank.type]||'Checking'} · ${bank.currency||'USD'}</p>
-      <div class="modal-preview">
-        <span class="label">Balance (${MONTHS[monthIdx]})</span>
-        <span class="value">${fmt$(balUsd,2)}</span>
+      <h3>${isCredit?'💳':'🏦'} ${bank.name}</h3>
+      <p class="modal-sub">${isCredit?'Credit Card':(BANK_TYPE_LABELS[bank.type]||'Checking')} · ${bank.currency||'USD'}</p>
+      <div class="modal-field" style="margin-bottom:10px;">
+        <label>Month</label>
+        <select id="bankDetailMonth" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          ${MONTHS.map((m,i)=>`<option value="${i}" ${i===monthIdx?'selected':''}>${m} ${y}</option>`).join('')}
+        </select>
       </div>
+      <div class="modal-preview">
+        <span class="label">${isCredit?'Owed':'Balance'} (${MONTHS[monthIdx]})</span>
+        <span class="value">${isCredit ? fmt$(Math.max(0,-balUsd),2) : fmt$(balUsd,2)}</span>
+      </div>
+      ${!isCredit ? '' : (bank.creditLimit!=null && bank.creditLimit>0
+          ? `<div class="section-sub" style="margin:-8px 0 10px;">${fmt$(Math.max(0,bank.creditLimit-Math.max(0,-balUsd)),2)} available of ${fmt$(bank.creditLimit,0)} limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ edit limit</span></div>`
+          : `<div class="section-sub" style="margin:-8px 0 10px;">No preset limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ set a limit</span></div>`)}
+      ${delta===null ? '' : `<div class="section-sub" style="margin:4px 0 14px;">${delta>=0?'↑':'↓'} ${fmt$(Math.abs(delta),2)} vs ${MONTHS[monthIdx-1]}</div>`}
       <div style="max-height:220px; overflow-y:auto; margin-bottom:18px;">
-        ${txnRows || '<div class="section-sub" style="text-align:center; padding:14px 0;">No transactions logged yet — anything you add here will show up in this list.</div>'}
+        ${txnRows || `<div class="section-sub" style="text-align:center; padding:14px 0;">No transactions logged for ${MONTHS[monthIdx]} — anything you add here will show up in this list, each with an ✕ to remove it.</div>`}
       </div>
       <div class="modal-actions" style="justify-content:space-between;">
         <button class="btn" id="bankDetailCloseBtn">Close</button>
@@ -371,6 +604,10 @@ function openBankDetailModal(bank, y){
   `;
   document.body.appendChild(overlay);
 
+  overlay.querySelector('#bankDetailMonth').addEventListener('change', (e)=>{
+    openBankDetailModal(bank, y, Number(e.target.value));
+  });
+
   function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
   function onKey(e){ if(e.key==='Escape') close(); }
   document.addEventListener('keydown', onKey);
@@ -378,36 +615,84 @@ function openBankDetailModal(bank, y){
   overlay.querySelector('#bankDetailCloseBtn').addEventListener('click', close);
   overlay.querySelector('#bankDetailAddMoneyBtn').addEventListener('click', ()=>{
     close();
-    openAddMoneyModal(bank, y);
+    openAddMoneyModal(bank, y, monthIdx);
   });
+  overlay.querySelectorAll('[data-deltxn]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const txn = (bank.transactions||[]).find(t=>t.id===el.dataset.deltxn);
+      if(txn) deleteBankTransaction(bank, y, txn);
+    });
+  });
+  const editLimitLink = overlay.querySelector('[data-editlimit]');
+  if(editLimitLink){
+    editLimitLink.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const current = bank.creditLimit!=null ? String(bank.creditLimit) : '';
+      const entered = prompt('Credit limit for '+bank.name+' (in '+(bank.currency||'USD')+') — leave blank if this card has no preset limit:', current);
+      if(entered===null) return;
+      const trimmed = entered.trim();
+      const newLimit = trimmed==='' ? null : Math.abs(parseFloat(trimmed));
+      bank.creditLimit = (newLimit===null || isNaN(newLimit)) ? null : newLimit;
+      markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Credit card '+bank.name, field:'credit limit', newVal: bank.creditLimit===null?'no preset limit':bank.creditLimit});
+      renderCashFlow();
+      openBankDetailModal(bank, y, monthIdx);
+    });
+  }
 }
 
 /* ---------- Add Money modal ----------
-   Everything this writes is ADDITIVE, never a replacement: the bank's
-   balance for that month, and (if tagged Income) that income source's
-   month, both get the new amount added to whatever's already there. Log
-   two deposits in the same week — say $2,000 then $1,500 — and the
-   month's income ends up $3,500, not stuck at whichever was entered last.
+   Everything additive (income/expense/deposit/withdraw) is ADDED to whatever's
+   already there for that month, never replacing it — and any stale "raw
+   breakdown" on the affected income/expense cell is cleared so its hover
+   tooltip and edit view immediately reflect the new total, not the old one.
    ========================================================================= */
-function openAddMoneyModal(bank, y){
+/* ---------- Add Money modal ----------
+   Everything additive (income/expense/deposit/withdraw) is ADDED to whatever's
+   already there for that month, never replacing it. Income/expense hover
+   tooltips get an extended breakdown chain (e.g. "1000+200+1000") rather than
+   being wiped, and the exact delta applied is stored on the transaction so
+   deleting it later unwinds precisely — chain and all.
+   ========================================================================= */
+function openAddMoneyModal(bank, y, monthIdxArg){
   const old = document.getElementById('addMoneyOverlay');
   if(old) old.remove();
 
+  const isCredit = bank.type==='credit';
   const incomeSources = yearData(y).income || [];
-  const todayISO = new Date().toISOString().slice(0,10);
+  const expenseGroups = yearData(y).expenseGroups || [];
+  const otherAccounts = (yearData(y).banks||[]).filter(b=>b.id!==bank.id);
+  const hasCreditDestination = otherAccounts.some(b=>b.type==='credit');
+  const today = new Date();
+  // Default the date into whichever month was open in the detail modal — same
+  // day-of-month as today when that's valid for the target month, else the 1st.
+  let defaultDate = today;
+  if(monthIdxArg!=null && monthIdxArg!==today.getMonth()){
+    const day = Math.min(today.getDate(), new Date(y, monthIdxArg+1, 0).getDate());
+    defaultDate = new Date(y, monthIdxArg, day);
+  }
+  const todayISO = toLocalISODate(defaultDate);
+
+  const transferLabel = isCredit
+    ? '🔁 Pay bill (transfer from a bank)'
+    : hasCreditDestination
+      ? '🔁 Transfer between accounts (or pay a credit card bill)'
+      : '🔁 Transfer between my own accounts';
+  const expenseLabel = isCredit ? '🧾 Log a charge (raises what\u2019s owed)' : '🧾 Expense (adds to a spending category too)';
+  const otherLabel = isCredit ? '📝 Set / correct the balance owed' : '📝 Other / balance correction';
 
   const overlay = document.createElement('div');
   overlay.id = 'addMoneyOverlay';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-card" style="width:400px;">
+    <div class="modal-card" style="width:420px;">
       <h3>+ Add money — ${bank.name}</h3>
-      <p class="modal-sub">Adds to this account's balance for the month you pick. Tag it as Income and it also adds to that month's income — on top of anything already there, never replacing it.</p>
+      <p class="modal-sub">Adds to this account's balance for the month you pick — on top of anything already there, never replacing it. Tag it Income/Expense and the linked source or category updates too.</p>
       <div class="modal-field">
         <label>Amount (${bank.currency||'USD'})</label>
         <input type="number" id="amAmount" min="0" step="any" placeholder="0.00">
       </div>
-      <div class="modal-field">
+      <div class="modal-field" id="amDirectionWrap">
         <label>Direction</label>
         <select id="amDirection" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
           <option value="deposit">Deposit (+)</option>
@@ -422,8 +707,9 @@ function openAddMoneyModal(bank, y){
         <label>Category</label>
         <select id="amCategory" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
           <option value="income">💰 Income (adds to your Income tab too)</option>
-          <option value="transfer">🔁 Transfer between my own accounts</option>
-          <option value="other">📝 Other / balance correction</option>
+          <option value="expense" ${isCredit?'selected':''}>${expenseLabel}</option>
+          <option value="transfer">${transferLabel}</option>
+          <option value="other">${otherLabel}</option>
         </select>
       </div>
       <div class="modal-field" id="amIncomeSrcWrap">
@@ -437,6 +723,40 @@ function openAddMoneyModal(bank, y){
         <label>New income source name</label>
         <input type="text" id="amNewIncomeName" placeholder="e.g. Paycheck, Freelance, Side gig…">
       </div>
+      <div class="modal-field" id="amExpenseGroupWrap">
+        <label>Which group?</label>
+        <select id="amExpenseGroup" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          ${expenseGroups.map(g=>`<option value="${g.id}">${g.name}</option>`).join('')}
+          <option value="__newgroup__" ${expenseGroups.length?'':'selected'}>+ New group…</option>
+        </select>
+      </div>
+      <div class="modal-field" id="amNewExpenseGroupNameWrap" style="display:${expenseGroups.length?'none':'block'};">
+        <label>New group name</label>
+        <input type="text" id="amNewExpenseGroupName" placeholder="e.g. Living Expenses, Wants…">
+      </div>
+      <div class="modal-field" id="amExpenseCatWrap">
+        <label>Which category? <span class="hint">uses the month from the date above</span></label>
+        <select id="amExpenseCat" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;"></select>
+      </div>
+      <div class="modal-field" id="amNewExpenseNameWrap" style="display:none;">
+        <label>New category name</label>
+        <input type="text" id="amNewExpenseName" placeholder="e.g. Groceries, Gas, Dining…">
+      </div>
+      <div class="modal-field" id="amTransferWrap">
+        <label>Transfer with which account?</label>
+        <select id="amTransferBank" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          ${otherAccounts.map(b=>`<option value="${b.id}">${b.name}${b.type==='credit'?' (credit card)':''}</option>`).join('')}
+        </select>
+        ${otherAccounts.length===0?'<div class="section-sub" style="margin-top:6px;">Add another bank or credit card first to transfer between accounts.</div>':''}
+      </div>
+      <div class="modal-field" id="amOtherModeWrap" style="display:none;">
+        <label>How do you want to update this?</label>
+        <select id="amOtherMode" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          <option value="additive">Add or withdraw an amount</option>
+          <option value="set">Set the exact ${isCredit?'balance owed':'balance'} for this month</option>
+        </select>
+      </div>
+      <div class="section-sub" id="amAmountHint" style="margin:-8px 0 14px; display:none;"></div>
       <div class="modal-field">
         <label>Note <span class="hint">optional</span></label>
         <input type="text" id="amNote" placeholder="e.g. Biweekly paycheck">
@@ -450,16 +770,75 @@ function openAddMoneyModal(bank, y){
   document.body.appendChild(overlay);
 
   const categorySelect = overlay.querySelector('#amCategory');
+  const directionWrap = overlay.querySelector('#amDirectionWrap');
+  const directionSelect = overlay.querySelector('#amDirection');
   const incomeSrcWrap = overlay.querySelector('#amIncomeSrcWrap');
   const incomeSrcSelect = overlay.querySelector('#amIncomeSrc');
   const newIncomeNameWrap = overlay.querySelector('#amNewIncomeNameWrap');
-  function syncIncomeVisibility(){
-    incomeSrcWrap.style.display = categorySelect.value==='income' ? 'block' : 'none';
-    newIncomeNameWrap.style.display = (categorySelect.value==='income' && incomeSrcSelect.value==='__new__') ? 'block' : 'none';
+  const expenseGroupWrap = overlay.querySelector('#amExpenseGroupWrap');
+  const expenseGroupSelect = overlay.querySelector('#amExpenseGroup');
+  const newExpenseGroupNameWrap = overlay.querySelector('#amNewExpenseGroupNameWrap');
+  const expenseCatWrap = overlay.querySelector('#amExpenseCatWrap');
+  const expenseCatSelect = overlay.querySelector('#amExpenseCat');
+  const newExpenseNameWrap = overlay.querySelector('#amNewExpenseNameWrap');
+  const transferWrap = overlay.querySelector('#amTransferWrap');
+  const otherModeWrap = overlay.querySelector('#amOtherModeWrap');
+  const otherModeSelect = overlay.querySelector('#amOtherMode');
+  const amountHint = overlay.querySelector('#amAmountHint');
+
+  // ---- Cascading group → category dropdown ----
+  function populateCatSelect(groupId){
+    if(groupId==='__newgroup__'){
+      expenseCatSelect.innerHTML = `<option value="__new__">+ New category…</option>`;
+      return;
+    }
+    const group = expenseGroups.find(g=>g.id===groupId);
+    const cats = group ? (group.categories||[]) : [];
+    expenseCatSelect.innerHTML = cats.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')
+      + `<option value="__new__">+ New category…</option>`;
   }
-  categorySelect.addEventListener('change', syncIncomeVisibility);
-  incomeSrcSelect.addEventListener('change', syncIncomeVisibility);
-  syncIncomeVisibility();
+  populateCatSelect(expenseGroupSelect.value);
+  expenseGroupSelect.addEventListener('change', ()=>{ populateCatSelect(expenseGroupSelect.value); syncVisibility(); });
+
+  // ---- Direction: relabel + smart default per category, unless the user has manually touched it ----
+  let directionTouched = false;
+  directionSelect.addEventListener('change', ()=>{ directionTouched = true; });
+  function updateDirectionForCategory(cat){
+    let depositLabel = 'Deposit (+)', withdrawLabel = 'Withdraw (−)', defaultDir = 'deposit';
+    if(cat==='expense'){ depositLabel = 'Refund received (+)'; withdrawLabel = 'Purchase / spent (−)'; defaultDir = 'withdraw'; }
+    else if(cat==='transfer'){ depositLabel = 'Received from the other account (+)'; withdrawLabel = 'Sent to the other account (−)'; defaultDir = 'withdraw'; }
+    else if(cat==='income'){ depositLabel = 'Received (+)'; withdrawLabel = 'Correction (−)'; defaultDir = 'deposit'; }
+    directionSelect.options[0].textContent = depositLabel;
+    directionSelect.options[1].textContent = withdrawLabel;
+    if(!directionTouched) directionSelect.value = defaultDir;
+  }
+
+  function syncVisibility(){
+    const cat = categorySelect.value;
+    incomeSrcWrap.style.display = cat==='income' ? 'block' : 'none';
+    newIncomeNameWrap.style.display = (cat==='income' && incomeSrcSelect.value==='__new__') ? 'block' : 'none';
+
+    expenseGroupWrap.style.display = cat==='expense' ? 'block' : 'none';
+    expenseCatWrap.style.display = cat==='expense' ? 'block' : 'none';
+    const addingNewGroup = cat==='expense' && expenseGroupSelect.value==='__newgroup__';
+    newExpenseGroupNameWrap.style.display = addingNewGroup ? 'block' : 'none';
+    newExpenseNameWrap.style.display = (cat==='expense' && expenseCatSelect.value==='__new__') ? 'block' : 'none';
+
+    transferWrap.style.display = cat==='transfer' ? 'block' : 'none';
+
+    otherModeWrap.style.display = cat==='other' ? 'block' : 'none';
+    const setMode = cat==='other' && otherModeSelect.value==='set';
+    directionWrap.style.display = setMode ? 'none' : 'block';
+    amountHint.style.display = setMode ? 'block' : 'none';
+    amountHint.textContent = setMode ? `Enter the exact ${isCredit?'amount you currently owe':'balance you currently have'} — this replaces this month's number instead of adding to it.` : '';
+
+    updateDirectionForCategory(cat);
+  }
+  categorySelect.addEventListener('change', syncVisibility);
+  incomeSrcSelect.addEventListener('change', syncVisibility);
+  expenseCatSelect.addEventListener('change', syncVisibility);
+  otherModeSelect.addEventListener('change', syncVisibility);
+  syncVisibility();
 
   function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
   function onKey(e){ if(e.key==='Escape') close(); }
@@ -468,52 +847,150 @@ function openAddMoneyModal(bank, y){
   overlay.querySelector('#amCancelBtn').addEventListener('click', close);
 
   overlay.querySelector('#amSaveBtn').addEventListener('click', ()=>{
+    const category = categorySelect.value;
+    const isSetMode = category==='other' && otherModeSelect.value==='set';
+
     const amountInp = overlay.querySelector('#amAmount');
     let amount = parseFloat(amountInp.value);
-    if(!amount || amount<=0){ amountInp.focus(); return; }
-    const direction = overlay.querySelector('#amDirection').value;
-    if(direction==='withdraw') amount = -amount;
+    if(isNaN(amount) || amount<0 || (!isSetMode && amount===0)){ amountInp.focus(); return; }
+    const rawAmountEntered = amount; // unsigned, as typed — used directly by "set exact balance" mode
+    const direction = directionSelect.value;
+    if(!isSetMode && direction==='withdraw') amount = -amount;
+
     const dateStr = overlay.querySelector('#amDate').value;
     if(!dateStr){ overlay.querySelector('#amDate').focus(); return; }
-    const dt = new Date(dateStr);
-    const monthIdx = dt.getMonth();
-    const category = categorySelect.value;
+    const monthIdx = parseLocalDateParts(dateStr).monthIdx;
     const note = overlay.querySelector('#amNote').value.trim();
 
-    // 1. Bank balance: ADD to whatever is already there for that month.
+    if(category==='transfer' && otherAccounts.length===0){
+      showToast('Add another bank or credit card first to transfer between accounts.');
+      return;
+    }
+
+    // 1. This account's balance. Normally ADDS to whatever's already there for
+    //    that month; "set exact balance" mode replaces it instead, and the
+    //    resulting delta is what actually gets stored on the transaction log
+    //    (so deleting it later still reverses it correctly either way).
     if(!bank.m) bank.m = n12();
-    bank.m[monthIdx] = num(bank.m[monthIdx]) + amount;
+    const prevBankVal = num(bank.m[monthIdx]);
+    let bankDelta;
+    if(isSetMode){
+      const newVal = isCredit ? -Math.abs(rawAmountEntered) : Math.abs(rawAmountEntered);
+      bankDelta = roundCents(newVal - prevBankVal);
+      bank.m[monthIdx] = newVal;
+    } else {
+      bankDelta = amount;
+      bank.m[monthIdx] = roundCents(prevBankVal + amount);
+    }
     bank.lastUpdatedAt = Date.now();
 
-    // 2. Transaction log, for the history list in the detail view.
-    if(!bank.transactions) bank.transactions = [];
-    bank.transactions.push({id:uid(), date:dateStr, amount, category, note});
+    let refType = null, refId = null, refDelta = null, linkedName = null;
+    let transferBankId = null, transferPairTxnId = null, finalNote = note;
 
-    // 3. If tagged Income, ADD to that income source's month too.
-    let incomeName = null;
+    // 2. If tagged Income, ADD to that income source's month too, extending its
+    //    hover breakdown chain (e.g. "1000+200" → "1000+200+1000") instead of
+    //    wiping it, so the newest top-up is visible on hover just like manual edits.
     if(category==='income' && amount>0){
       let srcId = incomeSrcSelect.value;
       const incomeList = yearData(y).income;
       if(srcId==='__new__'){
         const newName = overlay.querySelector('#amNewIncomeName').value.trim();
         if(!newName){ overlay.querySelector('#amNewIncomeName').focus(); return; }
-        const newSrc = {id:uid(), name:newName, m:n12()};
+        const newSrc = {id:uid(), name:newName, m:n12(), raw:n12()};
         incomeList.push(newSrc);
         srcId = newSrc.id;
-        incomeName = newName;
+        linkedName = newName;
       }
       const src = incomeList.find(s=>s.id===srcId);
       if(src){
-        src.m[monthIdx] = num(src.m[monthIdx]) + amount;
-        incomeName = incomeName || src.name;
+        if(!src.raw) src.raw = n12();
+        const prevVal = num(src.m[monthIdx]);
+        src.m[monthIdx] = roundCents(prevVal + amount);
+        src.raw[monthIdx] = appendAdditiveTerm(src.raw[monthIdx], prevVal, amount);
+        refType = 'income'; refId = srcId; refDelta = amount;
+        linkedName = linkedName || src.name;
       }
     }
 
-    markDirty('cashflow', {tab:'cashflow', action:'add', target:'Bank '+bank.name+' — '+(amount>=0?'deposit':'withdrawal'),
-      field:MONTHS[monthIdx], newVal: (amount>=0?'+':'')+amount.toFixed(2) + (incomeName?' → income: '+incomeName:'')});
+    // 3. If tagged Expense, ADD (or, on a refund, subtract) from that category's
+    //    month too — same breakdown-chain treatment on a genuine purchase.
+    if(category==='expense'){
+      let groupId = expenseGroupSelect.value;
+      let groups = yearData(y).expenseGroups;
+      if(!groups) groups = yearData(y).expenseGroups = [];
+      if(groupId==='__newgroup__'){
+        const newGroupName = overlay.querySelector('#amNewExpenseGroupName').value.trim();
+        if(!newGroupName){ overlay.querySelector('#amNewExpenseGroupName').focus(); return; }
+        const newGroup = {id:uid(), name:newGroupName, categories:[], excludeFromTotal:/credit card/i.test(newGroupName)};
+        groups.push(newGroup);
+        groupId = newGroup.id;
+      }
+      const group = groups.find(g=>g.id===groupId);
+      let catId = expenseCatSelect.value;
+      if(catId==='__new__'){
+        const newCatName = overlay.querySelector('#amNewExpenseName').value.trim();
+        if(!newCatName){ overlay.querySelector('#amNewExpenseName').focus(); return; }
+        const newCat = {id:uid(), name:newCatName, m:n12(), raw:n12(), notes:''};
+        group.categories.push(newCat);
+        catId = newCat.id;
+        linkedName = newCatName;
+      }
+      const found = findExpenseCategoryById(y, catId);
+      if(found){
+        const cat = found.cat;
+        if(!cat.m) cat.m = n12();
+        if(!cat.raw) cat.raw = n12();
+        const prevVal = num(cat.m[monthIdx]);
+        // Purchase/withdraw (amount<0) adds spend. Refund/deposit (amount>0) removes spend.
+        const delta = amount<0 ? Math.abs(amount) : -Math.abs(amount);
+        cat.m[monthIdx] = roundCents(prevVal + delta);
+        cat.raw[monthIdx] = delta>0 ? appendAdditiveTerm(cat.raw[monthIdx], prevVal, delta) : null;
+        refType = 'expense'; refId = catId; refDelta = delta;
+        linkedName = linkedName || cat.name;
+      }
+    }
+
+    // 4. If tagged Transfer, apply the opposite delta to the other account,
+    //    and log a mirrored transaction there so either side can be deleted cleanly.
+    const txnId = uid();
+    if(category==='transfer'){
+      transferBankId = overlay.querySelector('#amTransferBank').value;
+      const otherBank = otherAccounts.find(b=>b.id===transferBankId);
+      if(otherBank){
+        if(!otherBank.m) otherBank.m = n12();
+        otherBank.m[monthIdx] = roundCents(num(otherBank.m[monthIdx]) - amount);
+        otherBank.lastUpdatedAt = Date.now();
+        transferPairTxnId = uid();
+        if(!otherBank.transactions) otherBank.transactions = [];
+        otherBank.transactions.push({
+          id: transferPairTxnId, date: dateStr, amount: -amount, category:'transfer',
+          note: (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+bank.name,
+          monthIdx, transferPairBankId: bank.id, transferPairTxnId: txnId
+        });
+        finalNote = (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+otherBank.name;
+        linkedName = otherBank.name;
+      }
+    }
+
+    // 5. Transaction log, for the history list in the detail view (with an ✕ to undo it later).
+    //    `amount` here is the actual delta applied to THIS account's balance —
+    //    bankDelta for a normal add/withdraw/transfer, or the computed jump for "set exact balance".
+    if(!bank.transactions) bank.transactions = [];
+    bank.transactions.push({
+      id: txnId, date: dateStr, amount: bankDelta, category, note: finalNote, monthIdx,
+      refType, refId, refDelta, transferPairBankId: transferBankId||null, transferPairTxnId: transferPairTxnId||null
+    });
+
+    markDirty('cashflow', {tab:'cashflow', action:'add', target:(isCredit?'Credit card ':'Bank ')+bank.name+(isSetMode?' — balance set':' — '+(amount>=0?'deposit':'withdrawal')),
+      field:MONTHS[monthIdx], newVal: isSetMode ? bank.m[monthIdx] : (amount>=0?'+':'')+amount.toFixed(2) + (linkedName?' → '+category+': '+linkedName:'')});
     close();
     renderCashFlow();
-    showToast((amount>=0?'+':'')+fmt$(Math.abs(amount),2)+' '+(amount>=0?'added to':'withdrawn from')+' '+bank.name+(incomeName?' · added to '+incomeName+' income':''));
+
+    if(isSetMode){
+      showToast(bank.name+' '+(isCredit?'owed balance set to '+fmt$(Math.abs(bank.m[monthIdx]),2):'balance set to '+fmt$(bank.m[monthIdx],2)));
+    } else {
+      showToast((amount>=0?'+':'')+fmt$(Math.abs(amount),2)+' '+(amount>=0?'added to':'withdrawn from')+' '+bank.name+(linkedName && category!=='transfer'?' · '+(category==='income'?'added to '+linkedName+' income':'logged under '+linkedName):''));
+    }
   });
 
   overlay.querySelector('#amAmount').focus();

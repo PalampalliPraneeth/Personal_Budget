@@ -24,20 +24,28 @@ function formatTip(raw){
   return parts.join(' + ') + ' = ' + fmt$(total,2);
 }
 
-function makeEditableRow(item, monthsToShow){
+function makeEditableRow(item, monthsToShow, opts){
+  opts = opts || {};
   monthsToShow = monthsToShow || [0,1,2,3,4,5,6,7,8,9,10,11];
   if(!item.raw) item.raw = n12();
   if(item.notes===undefined) item.notes = '';
+  const locked = !!opts.locked;
   const cells = monthsToShow.map(i=>{
     const v = item.m[i];
     const val = v===null||v===undefined ? '' : v;
     const displayVal = val==='' ? '' : Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    if(locked){
+      return `<td class="locked-cell ${!val?'zero':''}" title="${(opts.lockedTip||'Auto-calculated').replace(/"/g,'&quot;')}">${displayVal===''?'–':displayVal}</td>`;
+    }
     const tip = formatTip(item.raw[i]);
     return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-field="m" data-idx="${i}" data-id="${item.id}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
   }).join('');
   const total = sumArr(item.m);
+  const nameLabel = locked
+    ? `${item.name} <span class="tag-auto" title="${(opts.lockedTip||'Auto-calculated').replace(/"/g,'&quot;')}">🔗 auto</span>`
+    : item.name;
   return `<tr data-row-id="${item.id}">
-    <td>${item.name} <span class="row-del" data-del="${item.id}" title="remove">✕</span></td>
+    <td>${nameLabel} <span class="row-del" data-del="${item.id}" title="remove">✕</span></td>
     ${cells}
     <td style="font-weight:600;">${fmt$(total,2)}</td>
     <td class="editable notes-cell" contenteditable="true" data-field="notes" data-id="${item.id}">${item.notes||''}</td>

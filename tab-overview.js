@@ -478,7 +478,7 @@ function buildUpcomingRecurring(y){
   const fx = (typeof _ensureFx === 'function') ? (_ensureFx().INR || 95.0)
     : ((typeof fxRates!=='undefined' && fxRates && fxRates.INR) ? fxRates.INR : 95.0);
   const today = new Date(); today.setHours(0,0,0,0);
-  const todayISO = today.toISOString().slice(0,10);
+  const todayISO = toLocalISODate(today);
 
   const rows = [];
   investments.forEach(inv=>{

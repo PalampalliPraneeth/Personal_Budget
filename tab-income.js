@@ -1,21 +1,51 @@
 /* =========================================================================
    INCOME TAB
    ========================================================================= */
+let incomeFullYearView = false;
+
+/* A row literally named "Retirement" is treated as your own 401(k)/IRA
+   contribution showing up as income you earned but never took home as cash
+   — see Savings → Retirement → "Your contributions" for the source data.
+   It's kept in sync automatically, and its cells are locked (not hand-edited)
+   so there's no way for it to silently drift out of sync with Savings. */
+function syncAutoIncomeRows(y){
+  if(typeof retirementSelfContribTotals !== 'function') return;
+  const items = yearData(y).income;
+  const retTotals = retirementSelfContribTotals(y);
+  items.forEach(it=>{
+    if((it.name||'').trim().toLowerCase()==='retirement'){
+      it.m = retTotals.map(v=>roundCents(num(v)));
+      it.raw = n12();
+    }
+  });
+}
+
 function renderIncome(){
   const y = state.year;
+  syncAutoIncomeRows(y);
   const items = yearData(y).income;
   const totals = incomeTotals(y);
+  const isMonthScope = state.month !== 'ALL';
+  const showFullYear = incomeFullYearView || !isMonthScope;
+  const monthsToShow = showFullYear ? [0,1,2,3,4,5,6,7,8,9,10,11] : [Number(state.month)];
+  const totalsShown = monthsToShow.map(i=>totals[i]);
   const html = `
     <div class="section-title">Income · ${y}</div>
-    <p class="section-sub">Every wage entry, editable in place. Click a cell to change it, or add a new income line below.</p>
+    <p class="section-sub">Every wage entry, editable in place. Click a cell to change it, or add a new income line below. A source named "Retirement" auto-fills from Savings → Retirement → "Your contributions" — that one's locked here, since it's computed, not typed.</p>
+    <div class="view-toggle">
+      ${isMonthScope ? `<button class="btn small" id="incomeViewToggle">${showFullYear && incomeFullYearView ? '◀ Show only '+MONTHS[Number(state.month)] : 'Show full year →'}</button>` : `<span class="section-sub" style="margin:0;">Showing the full year — pick a specific month above to narrow the table.</span>`}
+    </div>
     <div class="card">
       <div class="card-head"><h3>Income sources</h3><span class="section-sub" style="margin:0;">Year total: <b style="color:var(--gold-soft)">${fmt$(sumArr(totals),2)}</b></span></div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Source</th>${monthHeaderCells()}<th>Year</th><th>Notes</th></tr></thead>
+          <thead><tr><th>Source</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Notes</th></tr></thead>
           <tbody id="incomeBody">
-            ${items.map(it=>makeEditableRow(it)).join('')}
-            <tr class="total-row"><td>Total</td>${totals.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totals))}</td><td></td></tr>
+            ${items.map(it=>{
+              const isAutoRetirement = (it.name||'').trim().toLowerCase()==='retirement';
+              return makeEditableRow(it, monthsToShow, isAutoRetirement ? {locked:true, lockedTip:'Auto-filled from Savings → Retirement → "Your contributions" — edit it there, not here.'} : undefined);
+            }).join('')}
+            <tr class="total-row"><td>Total</td>${totalsShown.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totals))}</td><td></td></tr>
           </tbody>
         </table>
       </div>
@@ -31,6 +61,11 @@ function renderIncome(){
   `;
   document.getElementById('panel-income').innerHTML = html;
   attachEditableHandlers(document.getElementById('incomeBody'), items, renderIncome);
+
+  const viewToggle = document.getElementById('incomeViewToggle');
+  if(viewToggle){
+    viewToggle.addEventListener('click', ()=>{ incomeFullYearView = !incomeFullYearView; renderIncome(); });
+  }
 
   document.getElementById('addIncomeBtn').addEventListener('click', ()=>{
     const inp = document.getElementById('newIncomeName');
