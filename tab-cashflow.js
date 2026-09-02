@@ -489,13 +489,11 @@ function renderCashFlow(){
 }
 
 /* ---------- Reverse & delete a single transaction (used by the ✕ next to each line in the bank/card detail modal) ---------- */
-function deleteBankTransaction(bank, y, txn){
-  const warnExtra = txn.category==='income' ? ' and that income entry'
-    : txn.category==='expense' ? ' and that expense category'
-    : txn.category==='transfer' ? ' and the other account it moved to/from'
-    : '';
-  if(!confirm('Delete this transaction? This will undo its effect on the balance'+warnExtra+'.')) return;
-
+/* ---------- Undo everything a transaction did (balance, linked income/expense, transfer pair) ----------
+   Shared by both Delete and Edit — Edit is "reverse the old one, then create the new one" under the hood,
+   using this exact same math so there's only one place that can get it wrong. Does NOT remove txn from
+   bank.transactions itself — callers decide when/whether to do that. */
+function reverseTransactionEffects(bank, y, txn){
   const idx = txn.monthIdx;
 
   // 1. Reverse this account's balance for that month.
@@ -532,8 +530,17 @@ function deleteBankTransaction(bank, y, txn){
       otherBank.transactions = (otherBank.transactions||[]).filter(t=>t.id!==txn.transferPairTxnId);
     }
   }
+}
 
-  // 4. Remove this transaction itself.
+function deleteBankTransaction(bank, y, txn){
+  const warnExtra = txn.category==='income' ? ' and that income entry'
+    : txn.category==='expense' ? ' and that expense category'
+    : txn.category==='transfer' ? ' and the other account it moved to/from'
+    : '';
+  if(!confirm('Delete this transaction? This will undo its effect on the balance'+warnExtra+'.')) return;
+
+  const idx = txn.monthIdx;
+  reverseTransactionEffects(bank, y, txn);
   bank.transactions = (bank.transactions||[]).filter(t=>t.id!==txn.id);
 
   markDirty('cashflow', {tab:'cashflow', action:'delete', target:'Transaction — '+bank.name, field:MONTHS[idx], oldVal:(txn.amount>=0?'+':'')+txn.amount.toFixed(2)});
@@ -568,8 +575,9 @@ function openBankDetailModal(bank, y, monthIdxArg){
         <div class="bank-txn-date">${t.date}</div>
         <div class="bank-txn-cat">${catLabel}${t.note?' · '+t.note:''}</div>
       </div>
-      <div style="display:flex; align-items:center; gap:10px;">
+      <div style="display:flex; align-items:center; gap:8px;">
         <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmt$(t.amount,2)}</div>
+        <span class="row-del" data-edittxn="${t.id}" title="edit this transaction">✎</span>
         <span class="row-del" data-deltxn="${t.id}" title="delete this transaction">✕</span>
       </div>
     </div>`;
@@ -624,6 +632,13 @@ function openBankDetailModal(bank, y, monthIdxArg){
       if(txn) deleteBankTransaction(bank, y, txn);
     });
   });
+  overlay.querySelectorAll('[data-edittxn]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const txn = (bank.transactions||[]).find(t=>t.id===el.dataset.edittxn);
+      if(txn){ close(); openAddMoneyModal(bank, y, txn.monthIdx, txn); }
+    });
+  });
   const editLimitLink = overlay.querySelector('[data-editlimit]');
   if(editLimitLink){
     editLimitLink.addEventListener('click', (e)=>{
@@ -654,10 +669,11 @@ function openBankDetailModal(bank, y, monthIdxArg){
    being wiped, and the exact delta applied is stored on the transaction so
    deleting it later unwinds precisely — chain and all.
    ========================================================================= */
-function openAddMoneyModal(bank, y, monthIdxArg){
+function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
   const old = document.getElementById('addMoneyOverlay');
   if(old) old.remove();
 
+  const isEdit = !!editingTxn;
   const isCredit = bank.type==='credit';
   const incomeSources = yearData(y).income || [];
   const expenseGroups = yearData(y).expenseGroups || [];
@@ -666,12 +682,20 @@ function openAddMoneyModal(bank, y, monthIdxArg){
   const today = new Date();
   // Default the date into whichever month was open in the detail modal — same
   // day-of-month as today when that's valid for the target month, else the 1st.
+  // When editing, always start from the transaction's own date instead.
   let defaultDate = today;
   if(monthIdxArg!=null && monthIdxArg!==today.getMonth()){
     const day = Math.min(today.getDate(), new Date(y, monthIdxArg+1, 0).getDate());
     defaultDate = new Date(y, monthIdxArg, day);
   }
-  const todayISO = toLocalISODate(defaultDate);
+  const todayISO = isEdit ? editingTxn.date : toLocalISODate(defaultDate);
+
+  const prefillCategory = isEdit ? editingTxn.category : (isCredit ? 'expense' : 'income');
+  const prefillAmount = isEdit ? Math.abs(editingTxn.amount) : '';
+  const prefillDirection = isEdit ? (editingTxn.amount<0 ? 'withdraw' : 'deposit') : (isCredit ? 'withdraw' : 'deposit');
+  const prefillNote = isEdit ? (editingTxn.userNote != null ? editingTxn.userNote : editingTxn.note) : '';
+  const prefillExpenseFound = (isEdit && editingTxn.category==='expense' && editingTxn.refId) ? findExpenseCategoryById(y, editingTxn.refId) : null;
+  const prefillExpenseGroupId = prefillExpenseFound ? prefillExpenseFound.group.id : null;
 
   const transferLabel = isCredit
     ? '🔁 Pay bill (transfer from a bank)'
@@ -686,17 +710,17 @@ function openAddMoneyModal(bank, y, monthIdxArg){
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal-card" style="width:420px;">
-      <h3>+ Add money — ${bank.name}</h3>
-      <p class="modal-sub">Adds to this account's balance for the month you pick — on top of anything already there, never replacing it. Tag it Income/Expense and the linked source or category updates too.</p>
+      <h3>${isEdit ? '✎ Edit transaction' : '+ Add money'} — ${bank.name}</h3>
+      <p class="modal-sub">${isEdit ? 'Saving re-applies this from scratch: the old effect on the balance and any linked income/expense/transfer is undone first, then these values are applied fresh.' : "Adds to this account's balance for the month you pick — on top of anything already there, never replacing it. Tag it Income/Expense and the linked source or category updates too."}</p>
       <div class="modal-field">
         <label>Amount (${bank.currency||'USD'})</label>
-        <input type="number" id="amAmount" min="0" step="any" placeholder="0.00">
+        <input type="number" id="amAmount" min="0" step="any" placeholder="0.00" value="${prefillAmount}">
       </div>
       <div class="modal-field" id="amDirectionWrap">
         <label>Direction</label>
         <select id="amDirection" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          <option value="deposit">Deposit (+)</option>
-          <option value="withdraw">Withdraw (−)</option>
+          <option value="deposit" ${prefillDirection==='deposit'?'selected':''}>Deposit (+)</option>
+          <option value="withdraw" ${prefillDirection==='withdraw'?'selected':''}>Withdraw (−)</option>
         </select>
       </div>
       <div class="modal-field">
@@ -706,16 +730,16 @@ function openAddMoneyModal(bank, y, monthIdxArg){
       <div class="modal-field">
         <label>Category</label>
         <select id="amCategory" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          <option value="income">💰 Income (adds to your Income tab too)</option>
-          <option value="expense" ${isCredit?'selected':''}>${expenseLabel}</option>
-          <option value="transfer">${transferLabel}</option>
-          <option value="other">${otherLabel}</option>
+          <option value="income" ${prefillCategory==='income'?'selected':''}>💰 Income (adds to your Income tab too)</option>
+          <option value="expense" ${prefillCategory==='expense'?'selected':''}>${expenseLabel}</option>
+          <option value="transfer" ${prefillCategory==='transfer'?'selected':''}>${transferLabel}</option>
+          <option value="other" ${prefillCategory==='other'?'selected':''}>${otherLabel}</option>
         </select>
       </div>
       <div class="modal-field" id="amIncomeSrcWrap">
         <label>Which income source? <span class="hint">uses the month from the date above</span></label>
         <select id="amIncomeSrc" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${incomeSources.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}
+          ${incomeSources.map(s=>`<option value="${s.id}" ${isEdit && editingTxn.category==='income' && editingTxn.refId===s.id?'selected':''}>${s.name}</option>`).join('')}
           <option value="__new__">+ New income source…</option>
         </select>
       </div>
@@ -726,7 +750,7 @@ function openAddMoneyModal(bank, y, monthIdxArg){
       <div class="modal-field" id="amExpenseGroupWrap">
         <label>Which group?</label>
         <select id="amExpenseGroup" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${expenseGroups.map(g=>`<option value="${g.id}">${g.name}</option>`).join('')}
+          ${expenseGroups.map(g=>`<option value="${g.id}" ${prefillExpenseGroupId===g.id?'selected':''}>${g.name}</option>`).join('')}
           <option value="__newgroup__" ${expenseGroups.length?'':'selected'}>+ New group…</option>
         </select>
       </div>
@@ -745,7 +769,7 @@ function openAddMoneyModal(bank, y, monthIdxArg){
       <div class="modal-field" id="amTransferWrap">
         <label>Transfer with which account?</label>
         <select id="amTransferBank" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${otherAccounts.map(b=>`<option value="${b.id}">${b.name}${b.type==='credit'?' (credit card)':''}</option>`).join('')}
+          ${otherAccounts.map(b=>`<option value="${b.id}" ${isEdit && editingTxn.category==='transfer' && editingTxn.transferPairBankId===b.id?'selected':''}>${b.name}${b.type==='credit'?' (credit card)':''}</option>`).join('')}
         </select>
         ${otherAccounts.length===0?'<div class="section-sub" style="margin-top:6px;">Add another bank or credit card first to transfer between accounts.</div>':''}
       </div>
@@ -759,11 +783,11 @@ function openAddMoneyModal(bank, y, monthIdxArg){
       <div class="section-sub" id="amAmountHint" style="margin:-8px 0 14px; display:none;"></div>
       <div class="modal-field">
         <label>Note <span class="hint">optional</span></label>
-        <input type="text" id="amNote" placeholder="e.g. Biweekly paycheck">
+        <input type="text" id="amNote" placeholder="e.g. Biweekly paycheck" value="${(prefillNote||'').replace(/"/g,'&quot;')}">
       </div>
       <div class="modal-actions">
         <button class="btn" id="amCancelBtn">Cancel</button>
-        <button class="btn primary" id="amSaveBtn">Add</button>
+        <button class="btn primary" id="amSaveBtn">${isEdit ? 'Save changes' : 'Add'}</button>
       </div>
     </div>
   `;
@@ -798,10 +822,14 @@ function openAddMoneyModal(bank, y, monthIdxArg){
       + `<option value="__new__">+ New category…</option>`;
   }
   populateCatSelect(expenseGroupSelect.value);
+  if(isEdit && editingTxn.category==='expense' && editingTxn.refId){
+    expenseCatSelect.value = editingTxn.refId;
+  }
   expenseGroupSelect.addEventListener('change', ()=>{ populateCatSelect(expenseGroupSelect.value); syncVisibility(); });
 
-  // ---- Direction: relabel + smart default per category, unless the user has manually touched it ----
-  let directionTouched = false;
+  // ---- Direction: relabel + smart default per category, unless the user has manually touched it
+  //      (or we're editing, where the prefilled direction should win over any smart default) ----
+  let directionTouched = isEdit;
   directionSelect.addEventListener('change', ()=>{ directionTouched = true; });
   function updateDirectionForCategory(cat){
     let depositLabel = 'Deposit (+)', withdrawLabel = 'Withdraw (−)', defaultDir = 'deposit';
@@ -865,6 +893,15 @@ function openAddMoneyModal(bank, y, monthIdxArg){
     if(category==='transfer' && otherAccounts.length===0){
       showToast('Add another bank or credit card first to transfer between accounts.');
       return;
+    }
+
+    // If editing, undo the old transaction's effects now — every validation
+    // above has already passed, so we never destroy the old entry on a form
+    // that's about to fail. The rest of this handler then runs exactly as it
+    // would for a brand-new "Add money," creating the replacement.
+    if(editingTxn){
+      reverseTransactionEffects(bank, y, editingTxn);
+      bank.transactions = (bank.transactions||[]).filter(t=>t.id!==editingTxn.id);
     }
 
     // 1. This account's balance. Normally ADDS to whatever's already there for
@@ -964,7 +1001,7 @@ function openAddMoneyModal(bank, y, monthIdxArg){
         if(!otherBank.transactions) otherBank.transactions = [];
         otherBank.transactions.push({
           id: transferPairTxnId, date: dateStr, amount: -amount, category:'transfer',
-          note: (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+bank.name,
+          note: (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+bank.name, userNote: note,
           monthIdx, transferPairBankId: bank.id, transferPairTxnId: txnId
         });
         finalNote = (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+otherBank.name;
@@ -977,20 +1014,23 @@ function openAddMoneyModal(bank, y, monthIdxArg){
     //    bankDelta for a normal add/withdraw/transfer, or the computed jump for "set exact balance".
     if(!bank.transactions) bank.transactions = [];
     bank.transactions.push({
-      id: txnId, date: dateStr, amount: bankDelta, category, note: finalNote, monthIdx,
+      id: txnId, date: dateStr, amount: bankDelta, category, note: finalNote, userNote: note, monthIdx,
       refType, refId, refDelta, transferPairBankId: transferBankId||null, transferPairTxnId: transferPairTxnId||null
     });
 
-    markDirty('cashflow', {tab:'cashflow', action:'add', target:(isCredit?'Credit card ':'Bank ')+bank.name+(isSetMode?' — balance set':' — '+(amount>=0?'deposit':'withdrawal')),
+    markDirty('cashflow', {tab:'cashflow', action: isEdit?'edit':'add', target:(isCredit?'Credit card ':'Bank ')+bank.name+(isSetMode?' — balance set':' — '+(amount>=0?'deposit':'withdrawal'))+(isEdit?' (edited)':''),
       field:MONTHS[monthIdx], newVal: isSetMode ? bank.m[monthIdx] : (amount>=0?'+':'')+amount.toFixed(2) + (linkedName?' → '+category+': '+linkedName:'')});
     close();
     renderCashFlow();
 
     if(isSetMode){
       showToast(bank.name+' '+(isCredit?'owed balance set to '+fmt$(Math.abs(bank.m[monthIdx]),2):'balance set to '+fmt$(bank.m[monthIdx],2)));
+    } else if(isEdit){
+      showToast('Transaction updated — '+bank.name+' now '+(amount>=0?'+':'')+fmt$(Math.abs(amount),2)+(linkedName && category!=='transfer'?' · '+(category==='income'?'to '+linkedName+' income':'under '+linkedName):''));
     } else {
       showToast((amount>=0?'+':'')+fmt$(Math.abs(amount),2)+' '+(amount>=0?'added to':'withdrawn from')+' '+bank.name+(linkedName && category!=='transfer'?' · '+(category==='income'?'added to '+linkedName+' income':'logged under '+linkedName):''));
     }
+    if(isEdit) openBankDetailModal(bank, y, monthIdx); // return to the transaction list, refreshed
   });
 
   overlay.querySelector('#amAmount').focus();

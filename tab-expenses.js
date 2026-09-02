@@ -3,6 +3,7 @@
    ========================================================================= */
 let collapsedGroups = {};
 let expenseFullYearView = false;
+let expensePieShowAll = false;
 let editingGroupId = null; // tracks which group name is being edited
 
 function renderExpenses(){
@@ -12,7 +13,10 @@ function renderExpenses(){
   const isMonthScope = state.month !== 'ALL';
   const showFullYear = expenseFullYearView || !isMonthScope;
   const monthsToShow = showFullYear ? [0,1,2,3,4,5,6,7,8,9,10,11] : [Number(state.month)];
-  const scopeMonths = monthRange();
+  // Everything below — KPIs, the pie chart, its total — uses this same effective
+  // scope as the tables, so toggling "Show full year" actually changes them too,
+  // instead of only the tables while KPIs/pie silently stayed on the single month.
+  const scopeMonths = monthsToShow;
 
   const incNow = sumRange(incomeTotals(y), scopeMonths);
   const expNoCard = sumRange(expenseTotalsCounted(y), scopeMonths);
@@ -21,7 +25,7 @@ function renderExpenses(){
   const expWithCard = expNoCard + cardNow;
   const expWithAll = expWithCard + debtNow;
   const netAfterCard = incNow - expWithAll;
-  const scopeLabel = state.month==='ALL' ? 'full year' : MONTHS[Number(state.month)];
+  const scopeLabel = showFullYear ? 'full year' : MONTHS[Number(state.month)];
 
   // Data for the pie chart (current scope only, excludes "counted out" groups)
   let pieGroups = groups
@@ -152,14 +156,17 @@ function renderExpenses(){
       ${isMonthScope ? `<button class="btn small" id="expenseViewToggle">${showFullYear && expenseFullYearView ? '◀ Show only '+MONTHS[Number(state.month)] : 'Show full year →'}</button>` : `<span class="section-sub" style="margin:0;">Showing the full year — pick a specific month above to narrow the tables.</span>`}
     </div>
 
-    <div class="grid-2">
-      <div class="card">
-        <div class="card-head"><h3>All groups over the year</h3></div>
-        <div class="chart-box tall"><canvas id="chartExpAll"></canvas></div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h3>Where money went (${scopeLabel})</h3></div>
-        <div class="chart-box tall"><canvas id="chartExpPie"></canvas></div>
+    <div class="card">
+      <div class="card-head"><h3>Spending by category (${scopeLabel})</h3><span class="section-sub" style="margin:0;">${fmt$(pieVals.reduce((a,b)=>a+b,0))} total</span></div>
+      <div class="exp-pie-row">
+        <div class="exp-pie-donut">
+          <canvas id="chartExpPie"></canvas>
+          <div class="exp-pie-center">
+            <div class="amt">${fmt$(pieVals.reduce((a,b)=>a+b,0),0)}</div>
+            <div class="lbl">Total</div>
+          </div>
+        </div>
+        <div class="exp-pie-legend" id="expPieLegend"></div>
       </div>
     </div>
 
@@ -376,9 +383,9 @@ function renderExpenses(){
   charts.expPie = safeChart(document.getElementById('chartExpPie'), {
     type:'doughnut',
     data:{ labels:pieLabels, datasets:[{ data:pieVals, backgroundColor:pieLabels.map((_,i)=>PALETTE[i%PALETTE.length]), borderColor:'#1C2726', borderWidth:2 }] },
-    options:{ responsive:true, maintainAspectRatio:false, cutout:'60%',
+    options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
       plugins:{
-        legend:{position:'right', labels:{boxWidth:9, boxHeight:9, font:{size:10.5}}},
+        legend:{display:false}, // custom HTML legend below instead
         tooltip:{
           callbacks:{
             label: function(ctx){
@@ -391,23 +398,49 @@ function renderExpenses(){
       } }
   });
 
-  destroyChart('expAll');
-  const allGroupsDatasets = groups.map((g,i) => ({
-    label: g.name,
-    data: groupTotals(g),
-    backgroundColor: PALETTE[i % PALETTE.length],
-    stack: 'expenses'
-  }));
-  charts.expAll = safeChart(document.getElementById('chartExpAll'), {
-    type: 'bar',
-    data: { labels: MONTHS, datasets: allGroupsDatasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 9, boxHeight: 9, font: { size: 10 } } } },
-      scales: {
-        x: { stacked: true, grid: { display: false } },
-        y: { stacked: true, grid: { color: '#26332F' }, ticks: { callback: v => '$'+v } }
-      }
-    }
-  });
+  /* ---- Custom HTML legend (dot, name, amount, %) with a "Show all" toggle ---- */
+  const legendEl = document.getElementById('expPieLegend');
+  if(legendEl){
+    const SHOWN_BY_DEFAULT = 9;
+    const visibleGroups = expensePieShowAll ? pieGroups : pieGroups.slice(0, SHOWN_BY_DEFAULT);
+    const legendItems = visibleGroups.map((g,i)=>{
+      const pct = pieTotal>0 ? ((g.total/pieTotal)*100).toFixed(1) : '0.0';
+      const isRealGroup = groups.some(x=>x.name===g.name);
+      const clickAttr = isRealGroup ? `data-pie-goto-group="${g.name.replace(/"/g,'&quot;')}"` : `data-pie-goto-tab="debt"`;
+      return `<div class="exp-pie-item" ${clickAttr}>
+        <div class="exp-pie-dot" style="background:${PALETTE[i%PALETTE.length]};"></div>
+        <div class="exp-pie-item-main">
+          <div class="exp-pie-item-name">${g.name}</div>
+          <div class="exp-pie-item-amt">${fmt$(g.total,2)} (${pct}%)</div>
+        </div>
+      </div>`;
+    }).join('');
+    const toggleHtml = pieGroups.length > SHOWN_BY_DEFAULT
+      ? `<button class="exp-pie-showall" id="expPieShowAllBtn">${expensePieShowAll ? '▴ Show fewer categories' : `▾ Show all ${pieGroups.length} categories`}</button>`
+      : '';
+    legendEl.innerHTML = pieGroups.length ? (legendItems + toggleHtml) : `<div class="section-sub" style="margin:0;">No spending in this period yet.</div>`;
+
+    const showAllBtn = document.getElementById('expPieShowAllBtn');
+    if(showAllBtn) showAllBtn.addEventListener('click', ()=>{ expensePieShowAll = !expensePieShowAll; renderExpenses(); });
+
+    // Clicking a category jumps down to (and briefly highlights) its group card below.
+    // "Debt Paid Off" isn't a real group block, so it's skipped here rather than
+    // matching nothing and silently doing nothing on click.
+    legendEl.querySelectorAll('[data-pie-goto-group]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const name = el.dataset.pieGotoGroup;
+        const g = groups.find(x=>x.name===name);
+        if(!g) return;
+        const target = document.querySelector(`[data-group-id="${g.id}"]`);
+        if(target){
+          target.scrollIntoView({behavior:'smooth', block:'center'});
+          target.classList.add('flash-highlight');
+          setTimeout(()=>target.classList.remove('flash-highlight'), 1600);
+        }
+      });
+    });
+    legendEl.querySelectorAll('[data-pie-goto-tab]').forEach(el=>{
+      el.addEventListener('click', ()=> goToTab(el.dataset.pieGotoTab));
+    });
+  }
 }

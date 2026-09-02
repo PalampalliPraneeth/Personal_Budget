@@ -661,6 +661,55 @@ function renderSavingsGoalsMiniCard(y){
   </div>`;
 }
 
+function renderCashCreditMiniCard(y){
+  ensureBanksMigration();
+  const accounts = yearData(y).banks || [];
+  const banks = accounts.filter(b=>b.type!=='credit');
+  const creditCards = accounts.filter(b=>b.type==='credit');
+  const snapIdx = currentSnapshotMonth(y);
+  const bankUsdAt = (b, i) => {
+    const v = (b.m||[])[i];
+    if(v===null || v===undefined) return null;
+    return nativeMonthToUsd(v, b.currency, y, i);
+  };
+  const cashTotal = sumArr(banks.map(b => bankUsdAt(b, snapIdx) || 0));
+  const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, snapIdx) || 0)));
+
+  const row = (b, isCredit) => {
+    const bal = bankUsdAt(b, snapIdx);
+    const owed = isCredit ? Math.max(0, -(bal||0)) : null;
+    const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
+    return `
+    <div class="bank-row" data-goto="cashflow">
+      <div class="bank-row-icon">${initial}</div>
+      <div class="bank-row-main">
+        <div class="bank-row-name">${b.name}</div>
+        <div class="bank-row-sub">${isCredit ? 'Credit Card' : (BANK_TYPE_LABELS[b.type]||'Checking')}</div>
+      </div>
+      <div class="bank-row-right">
+        <div class="bank-row-balance" style="${isCredit && owed>0?'color:var(--rust-soft);':''}">${bal===null?'—':(isCredit?(owed>0?fmt$(owed,2)+' owed':'Paid off'):fmt$(bal,2))}</div>
+      </div>
+    </div>`;
+  };
+
+  if(!banks.length && !creditCards.length){
+    return `
+    <div class="card mini-accounts-card overview-eq-card">
+      <div class="card-head"><h3>Accounts</h3></div>
+      <div class="section-sub" style="padding:14px 0; text-align:center; margin:0;">No bank or credit card accounts yet — add one on the Cash Flow tab.</div>
+    </div>`;
+  }
+
+  return `
+  <div class="card mini-accounts-card overview-eq-card">
+    <div class="card-head"><h3>Accounts</h3><span class="mini-card-link" data-goto="cashflow">Show more ›</span></div>
+    <div class="mini-accounts-scroll">
+      ${banks.length ? `<div class="accounts-section-label">Cash · ${fmt$(cashTotal,2)}</div>${banks.map(b=>row(b,false)).join('')}` : ''}
+      ${creditCards.length ? `<div class="accounts-section-label">Credit Cards · ${fmt$(creditOwedTotal,2)} owed</div>${creditCards.map(b=>row(b,true)).join('')}` : ''}
+    </div>
+  </div>`;
+}
+
 function renderOverview(){
   const y = state.year;
   const prevY = y-1;
@@ -760,15 +809,18 @@ function renderOverview(){
 
   ${hasExcluded ? `<div class="notice">Card payments of <b>${fmt$(cardNow)}</b> this year aren't added into Expenses above — they're excluded by default since those purchases are already counted under their own category (groceries, dining, etc.) when you swipe. They still reduce your real cash balance though — see the <b>Cash Flow</b> tab.</div>` : ''}
 
-  <div class="card">
-    <div class="card-head"><h3>Income vs. expenses, month by month</h3></div>
-    <div class="chart-box tall"><canvas id="chartTrend"></canvas></div>
-  </div>
-
   <div class="card sankey-card">
     <div class="card-head"><h3>Where ${state.month==='ALL'||state.month===undefined ? y : MONTHS[Number(state.month)]+' '+y} went</h3></div>
     <div id="sankeyWrap">${renderSankeySVG(buildSankeyData(y), y)}</div>
     <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Click a bar with a ▸ to open its breakdown · click any other bar to jump to that tab. Change the month up top to see a different period.</div>
+  </div>
+
+  <div class="overview-equal-row">
+    <div class="card overview-eq-card">
+      <div class="card-head"><h3>Income vs. expenses, month by month</h3></div>
+      <div class="chart-box" style="flex:1;"><canvas id="chartTrend"></canvas></div>
+    </div>
+    ${renderCashCreditMiniCard(y)}
   </div>
 
   ${renderUpcomingRecurringCard(y)}
