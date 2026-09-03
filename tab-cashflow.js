@@ -22,7 +22,48 @@ function ensureBanksMigration(){
     if(b.type==='credit' && b.creditLimit===undefined) b.creditLimit = null;
     if(!b.transactions) b.transactions = [];
     if(b.lastUpdatedAt===undefined) b.lastUpdatedAt = null;
+    repairBankBalancesFromTransactions(b);
   });
+}
+
+/* One-time, ongoing self-heal for data written before the carry-forward fix.
+   Any month that has logged transactions gets recomputed as
+   (correct running balance carried in) + (that month's own transaction total) —
+   rather than trusting whatever number is currently sitting in that cell, which
+   for months touched by the old bug is simply that month's own delta with no
+   carry-in at all. Months with NO transactions (including any you set purely by
+   typing a number into the Advanced table) are left completely untouched, since
+   there's no transaction log to verify them against and they may be intentional. */
+function repairBankBalancesFromTransactions(bank){
+  const deltaByMonth = new Array(12).fill(0);
+  const touched = new Array(12).fill(false);
+  (bank.transactions||[]).forEach(t=>{
+    const i = t.monthIdx;
+    if(i==null || i<0 || i>11) return;
+    deltaByMonth[i] += num(t.amount);
+    touched[i] = true;
+  });
+  if(!touched.some(Boolean)) return; // no transaction log to reconcile against
+
+  let carry = null; // the correct running balance as we sweep forward through the year
+  let changed = false;
+  for(let i=0;i<12;i++){
+    if(touched[i]){
+      const correct = roundCents((carry ?? 0) + deltaByMonth[i]);
+      if(bank.m[i] !== correct){ bank.m[i] = correct; changed = true; }
+      carry = correct;
+    } else if(bank.m[i]!=null){
+      // A manual entry with no transactions this month — trust it as the new baseline.
+      carry = bank.m[i];
+    }
+    // else: blank month, nothing to reconcile, carry stays what it was.
+  }
+  if(changed){
+    // Not the user's own edit, but it does need to actually reach storage —
+    // otherwise this "fix" only lasts until the page reloads and the old
+    // wrong numbers come back down from Supabase again.
+    markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Bank '+bank.name+' (auto-corrected)', field:'monthly balances', newVal:'recalculated from transaction history'});
+  }
 }
 const BANK_TYPE_LABELS = { checking:'Checking', savings:'Savings', credit:'Credit Card', other:'Other' };
 function timeAgo(ts){
@@ -93,11 +134,7 @@ function renderCashFlow(){
   const creditCards = allAccounts.filter(b=>b.type==='credit'); // liabilities, tracked separately
 
   /* ---- Cash summary card + clickable bank list (Monarch-style) ---- */
-  const bankUsdAt = (b, i) => {
-    const v = (b.m||[])[i];
-    if(v===null || v===undefined) return null;
-    return nativeMonthToUsd(v, b.currency, y, i);
-  };
+  const bankUsdAt = (b, i) => bankDisplayUsdAt(b, y, i); // $0 for any month with nothing explicitly entered — no carry-forward
   const cashSnapIdx = currentSnapshotMonth(y);
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx) || 0));
   const cashPrevTotal = cashSnapIdx>0 ? sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx-1) || 0)) : null;
@@ -246,10 +283,10 @@ function renderCashFlow(){
   /* ---- Reconciliation row: computed cash vs bank balances (credit cards excluded — they're debt, not cash) ---- */
   const reconcileRows = monthsToShow.map(i=>{
     const r = rows[i];
-    const bankTotal = banks.reduce((a,b)=>a+num((b.m||[])[i]),0);
+    const bankTotal = banks.reduce((a,b)=>a+bankDisplayUsdAt(b,y,i),0);
     const diff = bankTotal - r.carryOut;
     const match = Math.abs(diff) < 1;
-    const hasBankData = banks.length > 0 && banks.some(b => (b.m||[])[i] !== null && (b.m||[])[i] !== undefined);
+    const hasBankData = banks.length > 0; // blank months are a real $0 now, not "no data yet"
     return `<tr>
       <td>${MONTHS[i]}</td>
       <td style="color:var(--gold-soft); font-weight:600;">${fmt$(r.carryOut,2)}</td>
@@ -264,9 +301,8 @@ function renderCashFlow(){
   function accountMonthRows(list){
     return list.map(b=>{
       const cells = monthsToShow.map(i=>{
-        const v = (b.m||[])[i];
-        const val = v===null||v===undefined ? '' : v;
-        return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-bfield="m" data-bid="${b.id}" data-idx="${i}">${val===''?'–':val}</td>`;
+        const val = bankDisplayValueAt(b, i); // 0 for any month with nothing explicitly entered — no carry-forward
+        return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-bfield="m" data-bid="${b.id}" data-idx="${i}">${val}</td>`;
       }).join('');
       const total = sumArr(b.m||[]);
       return `<tr data-bank-id="${b.id}">
@@ -334,14 +370,14 @@ function renderCashFlow(){
     ${creditCard}
 
     <div class="card">
-      <div class="card-head"><h3>Advanced: bank accounts, month by month</h3><span class="section-sub" style="margin:0;">Direct editing for any month — the card above only touches the current month via "Add money."</span></div>
+      <div class="card-head"><h3>Advanced: bank accounts, month by month</h3><span class="section-sub" style="margin:0;">Direct editing for any month — the card above only touches the current month via "Add money." A month left blank counts as $0 here and everywhere else (the card, the reconciliation total) — it's never silently carried forward from an earlier month.</span></div>
       <div class="table-scroll">
         <table class="ledger">
           <thead><tr><th>Bank / Account</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Currency</th></tr></thead>
           <tbody id="bankBody">${bankMonthRows}
             <tr class="total-row"><td>Total across banks</td>${monthsToShow.map(i=>{
-              const t = banks.reduce((a,b)=>a+num((b.m||[])[i]),0);
-              return `<td>${t>0?fmt$(t):'—'}</td>`;
+              const t = banks.reduce((a,b)=>a+bankDisplayUsdAt(b,y,i),0);
+              return `<td>${fmt$(t)}</td>`;
             }).join('')}<td>${fmt$(banks.reduce((a,b)=>a+sumArr(b.m||[]),0))}</td><td></td></tr>
           </tbody>
         </table>
@@ -349,7 +385,7 @@ function renderCashFlow(){
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>Advanced: credit cards, month by month</h3><span class="section-sub" style="margin:0;">Values here are the balance owed at month end (0 = paid in full).</span></div>
+      <div class="card-head"><h3>Advanced: credit cards, month by month</h3><span class="section-sub" style="margin:0;">Values here are the balance owed at month end (0 = paid in full, and a blank month is treated as 0 — not carried forward).</span></div>
       <div class="table-scroll">
         <table class="ledger">
           <thead><tr><th>Card</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Currency</th></tr></thead>
@@ -559,8 +595,8 @@ function openBankDetailModal(bank, y, monthIdxArg){
 
   const isCredit = bank.type==='credit';
   const monthIdx = monthIdxArg!=null ? monthIdxArg : (state.month==='ALL' ? currentSnapshotMonth(y) : Number(state.month));
-  const balUsd = nativeMonthToUsd(num((bank.m||[])[monthIdx]), bank.currency, y, monthIdx);
-  const prevBalUsd = monthIdx>0 ? nativeMonthToUsd(num((bank.m||[])[monthIdx-1]), bank.currency, y, monthIdx-1) : null;
+  const balUsd = bankDisplayUsdAt(bank, y, monthIdx);
+  const prevBalUsd = monthIdx>0 ? bankDisplayUsdAt(bank, y, monthIdx-1) : null;
   const delta = prevBalUsd===null ? null : balUsd - prevBalUsd;
   const txns = [...(bank.transactions||[])]
     .filter(t=>t.monthIdx===undefined || t.monthIdx===monthIdx)
@@ -909,7 +945,12 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     //    resulting delta is what actually gets stored on the transaction log
     //    (so deleting it later still reverses it correctly either way).
     if(!bank.m) bank.m = n12();
-    const prevBankVal = num(bank.m[monthIdx]);
+    // An explicit value already sitting in THIS month (e.g. typed into the
+    // Advanced table) always wins. Only when this month is genuinely blank do
+    // we consider borrowing an earlier month's balance — and only if this
+    // account actually has a transaction log to justify it; otherwise the
+    // month starts from $0, matching what's displayed everywhere else.
+    const prevBankVal = bankCarryValueAt(bank, monthIdx);
     let bankDelta;
     if(isSetMode){
       const newVal = isCredit ? -Math.abs(rawAmountEntered) : Math.abs(rawAmountEntered);

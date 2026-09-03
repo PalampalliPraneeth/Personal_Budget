@@ -378,6 +378,67 @@ function fxRateForMonth(year, monthIdx){
 /* Convert one month's native-currency figure to USD, locked to that
    month's own rate instead of today's live rate. Non-INR passes through
    unchanged, same as every other *ToUsd helper in this file. */
+/* ---------- Bank / credit-card running balance (carry-forward) ----------
+   A bank's monthly array only has an entry in the months you actually typed
+   or logged a transaction — every other month is blank by default. Reading
+   that cell literally would make a bank's balance look empty/zero in any
+   month you didn't touch it, even though the money obviously didn't
+   disappear. These walk backward to the last month that actually has a
+   value, so "this month's balance" means the real running balance, not
+   "whatever happens to be typed in this exact cell." */
+/* INTERNAL ONLY — carries a balance forward from the last month that has an
+   explicit value. Do NOT use this for anything the user sees: a blank month
+   showing an old month's number (with no visible transaction to explain it)
+   is exactly the confusing behavior we removed. This is kept only for
+   openAddMoneyModal(), and even there it's gated behind
+   bankHasTransactionLog() — see that call site for why. */
+function bankNativeValueAt(bank, monthIdx){
+  const arr = bank && bank.m;
+  if(!arr) return null;
+  for(let i=monthIdx; i>=0; i--){
+    if(arr[i]!==null && arr[i]!==undefined) return arr[i];
+  }
+  return null;
+}
+function bankBalanceUsdAt(bank, year, monthIdx){
+  const native = bankNativeValueAt(bank, monthIdx);
+  if(native===null) return null;
+  return nativeMonthToUsd(native, bank.currency, year, monthIdx);
+}
+/* Used ONLY by openAddMoneyModal() to decide what "already there" means for
+   the month being edited. An explicit value already sitting in that exact
+   month (e.g. typed straight into the Advanced table) always wins. Only when
+   that month is genuinely blank do we consider borrowing an earlier month's
+   balance — and only if bankHasTransactionLog() says this account actually
+   has real transaction history to justify it; otherwise the month starts
+   from $0, matching what's displayed everywhere. */
+function bankCarryValueAt(bank, monthIdx){
+  const arr = bank && bank.m;
+  if(!arr) return 0;
+  if(arr[monthIdx]!==null && arr[monthIdx]!==undefined) return arr[monthIdx];
+  if(!bankHasTransactionLog(bank)) return 0;
+  return bankNativeValueAt(bank, monthIdx) ?? 0;
+}
+/* Does this account have any logged transaction, ever (any month)? Used to
+   decide whether "+ Add money" is allowed to carry forward a real balance,
+   or must start from $0 — see openAddMoneyModal(). */
+function bankHasTransactionLog(bank){
+  return !!(bank && bank.transactions && bank.transactions.length);
+}
+/* DISPLAY VALUE — what every card, table, modal, and reconciliation row
+   should show. A month with nothing explicitly entered (no direct edit, no
+   logged transaction) is exactly $0 — never silently pulled forward from an
+   earlier month. This always returns a number (never null) so callers don't
+   need a `|| 0` fallback. */
+function bankDisplayValueAt(bank, monthIdx){
+  const arr = bank && bank.m;
+  const v = arr ? arr[monthIdx] : null;
+  return (v===null || v===undefined) ? 0 : v;
+}
+function bankDisplayUsdAt(bank, year, monthIdx){
+  return nativeMonthToUsd(bankDisplayValueAt(bank, monthIdx), bank.currency, year, monthIdx);
+}
+
 function nativeMonthToUsd(v, currency, year, monthIdx){
   const n = num(v);
   if(currency !== 'INR') return n;

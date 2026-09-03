@@ -667,11 +667,7 @@ function renderCashCreditMiniCard(y){
   const banks = accounts.filter(b=>b.type!=='credit');
   const creditCards = accounts.filter(b=>b.type==='credit');
   const snapIdx = currentSnapshotMonth(y);
-  const bankUsdAt = (b, i) => {
-    const v = (b.m||[])[i];
-    if(v===null || v===undefined) return null;
-    return nativeMonthToUsd(v, b.currency, y, i);
-  };
+  const bankUsdAt = (b, i) => bankDisplayUsdAt(b, y, i); // $0 for any month with nothing explicitly entered — no carry-forward
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, snapIdx) || 0));
   const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, snapIdx) || 0)));
 
@@ -708,6 +704,51 @@ function renderCashCreditMiniCard(y){
       ${creditCards.length ? `<div class="accounts-section-label">Credit Cards · ${fmt$(creditOwedTotal,2)} owed</div>${creditCards.map(b=>row(b,true)).join('')}` : ''}
     </div>
   </div>`;
+}
+
+function renderDebtPayoffWidget(debts){
+  if(!debts.length){
+    return `<div class="section-sub" style="padding:14px 0; text-align:center; margin:0;">No debts tracked — add one on the Debt Payoff tab.</div>`;
+  }
+  const debtsSorted = debts.slice().sort((a,b)=> debtPendingCalc(b)-debtPendingCalc(a));
+  const originalTotal = sumArr(debtsSorted.map(d=>debtOriginalUsd(d)));
+  const clearedTotal = sumArr(debtsSorted.map(d=>debtClearedToDate(d)));
+  const pendingTotal = sumArr(debtsSorted.map(d=>debtPendingCalc(d)));
+  const overallPct = originalTotal>0 ? (clearedTotal/originalTotal)*100 : 0;
+
+  const heroBarSegments = debtsSorted.map((d,i)=>{
+    const share = originalTotal>0 ? (debtClearedToDate(d)/originalTotal)*100 : 0;
+    return `<div style="background:${PALETTE[i%PALETTE.length]}; width:${share}%;" title="${d.name}"></div>`;
+  }).join('');
+
+  const CIRC = 2*Math.PI*36; // r=36
+  const rings = debtsSorted.map((d,i)=>{
+    const cleared = debtClearedToDate(d);
+    const pending = debtPendingCalc(d);
+    const original = debtOriginalUsd(d);
+    const pct = original>0 ? (cleared/original)*100 : 0;
+    const color = PALETTE[i%PALETTE.length];
+    const offset = CIRC * (1 - pct/100);
+    return `<div class="debt-ring-item" data-debt-goto="${d.id}">
+      <svg width="88" height="88" viewBox="0 0 88 88">
+        <circle cx="44" cy="44" r="36" fill="none" stroke="var(--line-soft)" stroke-width="9"/>
+        <circle cx="44" cy="44" r="36" fill="none" stroke="${color}" stroke-width="9" stroke-dasharray="${CIRC.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}" stroke-linecap="round" transform="rotate(-90 44 44)"/>
+        <text x="44" y="49" text-anchor="middle" fill="var(--text)" font-size="17" font-weight="700" font-family="var(--font-mono)">${pct.toFixed(0)}%</text>
+      </svg>
+      <div class="debt-ring-name">${d.name}</div>
+      <div class="debt-ring-paid" style="color:${color};">${fmt$(cleared,0)} paid</div>
+      <div class="debt-ring-left">${fmt$(pending,0)} left</div>
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="debt-hero">
+      <div class="debt-hero-pct">${overallPct.toFixed(0)}% paid off</div>
+      <div class="debt-hero-sub">${fmt$(pendingTotal,0)} of ${fmt$(originalTotal,0)} remaining across ${debtsSorted.length} debt${debtsSorted.length===1?'':'s'}</div>
+      <div class="debt-hero-bar">${heroBarSegments}<div class="debt-hero-bar-rest"></div></div>
+    </div>
+    <div class="debt-rings-row">${rings}</div>
+  `;
 }
 
 function renderOverview(){
@@ -827,8 +868,8 @@ function renderOverview(){
 
   <div class="overview-split-row">
     <div class="card">
-      <div class="card-head"><h3>Debt runway</h3><span class="section-sub" style="margin:0;">${fmt$(debtPending)} left of ${fmt$(sumArr(debts.map(d=>debtOriginalUsd(d))))} originally owed · click a bar to open that loan</span></div>
-      <div class="chart-box short"><canvas id="chartDebtMini"></canvas></div>
+      <div class="card-head"><h3>Debt payoff</h3><span class="section-sub" style="margin:0;">click a ring to open that loan</span></div>
+      ${renderDebtPayoffWidget(debts)}
     </div>
     ${renderSavingsGoalsMiniCard(y)}
   </div>
@@ -845,9 +886,12 @@ function renderOverview(){
   document.querySelectorAll('#panel-overview [data-recur-goto]').forEach(el=>{
     el.addEventListener('click', ()=> goToTab('holdings'));
   });
+  document.querySelectorAll('#panel-overview [data-debt-goto]').forEach(el=>{
+    el.addEventListener('click', ()=> goToTab('debt', `[data-debt-id="${el.dataset.debtGoto}"]`));
+  });
   attachSankeyHandlers();
 
-  destroyChart('trend'); destroyChart('debtmini');
+  destroyChart('trend');
 
   const netT = MONTHS.map((_,i)=> num(incT[i]) - num(expT[i]));
   charts.trend = safeChart(document.getElementById('chartTrend'), {
@@ -866,17 +910,4 @@ function renderOverview(){
       scales:{ y:{ grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
   });
 
-  const debtsSorted = debts.slice().sort((a,b)=> debtPendingCalc(b)-debtPendingCalc(a));
-  charts.debtmini = safeChart(document.getElementById('chartDebtMini'), {
-    type:'bar',
-    data:{ labels: debtsSorted.map(d=>d.name), datasets:[
-      {label:'Cleared', data:debtsSorted.map(d=>debtClearedToDate(d)), backgroundColor:'#6FA491', stack:'s'},
-      {label:'Pending', data:debtsSorted.map(d=>debtPendingCalc(d)), backgroundColor:'#C06A46', stack:'s'}
-    ]},
-    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
-      plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
-      onClick:(evt,els)=>{ if(els.length){ const d=debtsSorted[els[0].index]; goToTab('debt', `[data-debt-id="${d.id}"]`); } },
-      onHover:(evt,els)=>{ evt.native.target.style.cursor = els.length?'pointer':'default'; },
-      scales:{ x:{ stacked:true, grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v} }, y:{stacked:true, grid:{display:false}} } }
-  });
 }
