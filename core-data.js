@@ -439,6 +439,34 @@ function bankDisplayUsdAt(bank, year, monthIdx){
   return nativeMonthToUsd(bankDisplayValueAt(bank, monthIdx), bank.currency, year, monthIdx);
 }
 
+/* ---------------------------------------------------------------------
+   Cash accounts and credit cards behave differently for a blank month, and
+   every shared render path (summary cards, Advanced table, detail modal,
+   Add money) should go through THESE dispatchers rather than picking a
+   bank-only or credit-only helper directly:
+     - Cash (checking/savings/other): a blank month is a real $0 — you
+       either added money or you didn't, nothing to infer.
+     - Credit card: debt doesn't reset itself. A blank month carries the
+       real owed balance forward from the last month you logged a charge
+       or payment — exactly like a bank statement would.
+   --------------------------------------------------------------------- */
+function accountDisplayValueAt(bank, monthIdx){
+  if(bank && bank.type==='credit') return bankNativeValueAt(bank, monthIdx) ?? 0;
+  return bankDisplayValueAt(bank, monthIdx);
+}
+function accountDisplayUsdAt(bank, year, monthIdx){
+  return nativeMonthToUsd(accountDisplayValueAt(bank, monthIdx), bank.currency, year, monthIdx);
+}
+function accountCarryValueAt(bank, monthIdx){
+  // Add Money / Add Charge base for "what's already there this month".
+  // Credit cards always carry the real owed balance in (debt persists
+  // regardless of whether it was set via a logged transaction or typed
+  // straight into the Advanced table); cash only carries when there's a
+  // real transaction log to justify it — see bankCarryValueAt().
+  if(bank && bank.type==='credit') return bankNativeValueAt(bank, monthIdx) ?? 0;
+  return bankCarryValueAt(bank, monthIdx);
+}
+
 function nativeMonthToUsd(v, currency, year, monthIdx){
   const n = num(v);
   if(currency !== 'INR') return n;

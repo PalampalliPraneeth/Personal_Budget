@@ -474,11 +474,14 @@ function refreshSankey(){
 function buildUpcomingRecurring(y){
   // Defensive: don't assume Holdings' migration already ran for this year.
   if(typeof ensureHoldingsMigration === 'function') ensureHoldingsMigration();
+  if(typeof ensureBanksMigration === 'function') ensureBanksMigration();
   const investments = yearData(y).investments || [];
+  const allBanks = yearData(y).banks || [];
   const fx = (typeof _ensureFx === 'function') ? (_ensureFx().INR || 95.0)
     : ((typeof fxRates!=='undefined' && fxRates && fxRates.INR) ? fxRates.INR : 95.0);
   const today = new Date(); today.setHours(0,0,0,0);
   const todayISO = toLocalISODate(today);
+  const snapIdx = currentSnapshotMonth(y);
 
   const rows = [];
   investments.forEach(inv=>{
@@ -493,12 +496,15 @@ function buildUpcomingRecurring(y){
       const amountNative = num(norm.amount);
       if(amountNative <= 0) return; // guard against a stray $0 plan
       const amountUsd = isINR ? amountNative / fx : amountNative;
+      const bankAccountId = norm.bankAccountId || null;
+      const bankAccount = bankAccountId ? allBanks.find(b=>b.id===bankAccountId) : null;
       rows.push({
         platformId: inv.id, platformName: inv.name || 'Unnamed platform', isINR,
         symbol: h.symbol || h.name || '—', name: h.name,
         amountNative, amountUsd,
         scheduleLabel: recurringScheduleLabel(norm),
-        nextDate, alreadyConfirmed: !!(nextDate && norm.lastConfirmedFor === nextDate)
+        nextDate, alreadyConfirmed: !!(nextDate && norm.lastConfirmedFor === nextDate),
+        bankAccountId, bankAccountName: bankAccount ? bankAccount.name : null
       });
     });
   });
@@ -530,7 +536,38 @@ function buildUpcomingRecurring(y){
     g.byPlatform[r.platformId].count += 1;
   });
   const dateGroups = Object.values(byDate).sort((a,b)=> a.date < b.date ? -1 : 1);
-  dateGroups.forEach(g=>{ g.platformBreakdown = Object.values(g.byPlatform).sort((a,b)=> b.totalUsd - a.totalUsd); });
+  dateGroups.forEach(g=>{
+    g.platformBreakdown = Object.values(g.byPlatform).sort((a,b)=> b.totalUsd - a.totalUsd);
+
+    // Platform + funding, combined: for each platform due this day, split
+    // its total by which account it's linked to (or "not linked"), and for
+    // each real account show what's needed vs what's actually there right
+    // now — same $0-if-blank balance the Cash Flow tab shows, no
+    // carry-forward guessing. This checks "is it covered today," not a
+    // projection of the balance ON the future date.
+    g.platformFunding = g.platformBreakdown.map(p=>{
+      const platformRows = g.rows.filter(r=>r.platformId===p.platformId);
+      const byAcct = {};
+      let unlinkedUsd = 0;
+      platformRows.forEach(r=>{
+        if(!r.bankAccountId){ unlinkedUsd += r.amountUsd; return; }
+        if(!byAcct[r.bankAccountId]) byAcct[r.bankAccountId] = { bankAccountId:r.bankAccountId, neededUsd:0 };
+        byAcct[r.bankAccountId].neededUsd += r.amountUsd;
+      });
+      const accounts = Object.values(byAcct).map(a=>{
+        const bank = allBanks.find(b=>b.id===a.bankAccountId);
+        const balanceUsd = bank ? accountDisplayUsdAt(bank, y, snapIdx) : 0;
+        const shortfallUsd = a.neededUsd - balanceUsd;
+        return {
+          ...a,
+          bankName: bank ? bank.name : 'Unlinked account',
+          balanceUsd, shortfallUsd,
+          ok: shortfallUsd <= 0.005 // covers float rounding
+        };
+      }).sort((x,z)=> x.bankName.localeCompare(z.bankName));
+      return { platformId: p.platformId, name: p.name, totalUsd: p.totalUsd, count: p.count, accounts, unlinkedUsd };
+    });
+  });
 
   return { rows, dateGroups, platformTotals, colorOf, grandTotalUsd: sumArr(rows.map(r=>r.amountUsd)) };
 }
@@ -582,31 +619,38 @@ function renderUpcomingRecurringCard(y){
         <span class="recur-row-dot" style="background:${color};"></span>
         <div class="recur-row-main">
           <div class="recur-row-name">${r.symbol}${r.name && r.name!==r.symbol ? ` <span class="recur-row-sub">· ${r.name}</span>` : ''}${r.alreadyConfirmed ? ' <span class="recur-row-confirmed">✓ confirmed</span>' : ''}</div>
-          <div class="recur-row-platform">${r.platformName} · <span class="recur-row-schedule">${r.scheduleLabel}</span></div>
+          <div class="recur-row-platform">${r.platformName} · <span class="recur-row-schedule">${r.scheduleLabel}</span>${r.bankAccountName ? ` · <span class="recur-row-funding">from ${r.bankAccountName}</span>` : ''}</div>
         </div>
         <div class="recur-row-amt" ${tip}>${displayAmt}</div>
       </div>`;
     }).join('');
     const multi = g.rows.length > 1;
-    // Spell out exactly how much goes into each platform due that day —
-    // shown whether there's one platform or several, so "Fidelity: $200" is
-    // always visible, not just when there's a split to explain.
-    const platformSplitHtml = `
-      <div class="recur-date-split">
-        <span class="recur-date-split-label">${g.platformBreakdown.length>1?'Split by account:':'Account:'}</span>
-        ${g.platformBreakdown.map(p=>`
-          <span class="recur-split-chip" style="border-color:${data.colorOf[p.platformId]}55;">
-            <span class="recur-chip-dot" style="background:${data.colorOf[p.platformId]};"></span>
-            ${p.name} <b>${fmt$(p.totalUsd,2)}</b>
-          </span>`).join('')}
+    // One block per platform due this day: its total, then — indented under
+    // it — each account it draws from with what's needed vs what's actually
+    // there right now. Answers "which platform, from which account, is it
+    // covered" in one place instead of two separate lists.
+    const platformFundingHtml = g.platformFunding.map(p=>{
+      const accountsInline = p.accounts.map(a=>
+        `<span class="recur-funding-inline ${a.ok?'ok':'short'}" title="${a.ok?'Enough in this account right now':'Not enough in this account right now'}">${a.ok?'✓':'⚠'} ${a.bankName} ${fmt$(a.neededUsd,2)} needed · ${fmt$(a.balanceUsd,2)} available${a.ok?'':` · short ${fmt$(a.shortfallUsd,2)}`}</span>`
+      ).join('');
+      const unlinkedInline = p.unlinkedUsd > 0.005
+        ? `<span class="recur-funding-inline unlinked">${fmt$(p.unlinkedUsd,2)} not linked</span>` : '';
+      return `
+      <div class="recur-platform-funding">
+        <span class="recur-platform-funding-name">${p.name}</span>
+        <span class="recur-platform-funding-amt">${fmt$(p.totalUsd,2)}</span>
+        <span class="recur-platform-funding-count">${p.count} buy${p.count===1?'':'s'}</span>
+        ${accountsInline}${unlinkedInline}
       </div>`;
+    }).join('');
     return `
     <div class="recur-date-group">
       <div class="recur-date-head">
         <span class="recur-date-label">${_fmtUpcomingDate(g.date)}</span>
         <span class="recur-date-total">${fmt$(g.totalUsd,2)}${multi ? ` <span class="recur-date-count">needed · ${g.rows.length} plans</span>` : ` <span class="recur-date-count">needed</span>`}</span>
       </div>
-      ${platformSplitHtml}
+      ${platformFundingHtml ? `<div class="recur-section-label">Funding check</div>${platformFundingHtml}` : ''}
+      <div class="recur-section-label">Individual buys</div>
       ${rowsForDate}
     </div>`;
   }).join('');
@@ -667,7 +711,7 @@ function renderCashCreditMiniCard(y){
   const banks = accounts.filter(b=>b.type!=='credit');
   const creditCards = accounts.filter(b=>b.type==='credit');
   const snapIdx = currentSnapshotMonth(y);
-  const bankUsdAt = (b, i) => bankDisplayUsdAt(b, y, i); // $0 for any month with nothing explicitly entered — no carry-forward
+  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: $0 if blank · credit: carries real owed balance
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, snapIdx) || 0));
   const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, snapIdx) || 0)));
 

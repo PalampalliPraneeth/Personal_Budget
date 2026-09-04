@@ -134,7 +134,7 @@ function renderCashFlow(){
   const creditCards = allAccounts.filter(b=>b.type==='credit'); // liabilities, tracked separately
 
   /* ---- Cash summary card + clickable bank list (Monarch-style) ---- */
-  const bankUsdAt = (b, i) => bankDisplayUsdAt(b, y, i); // $0 for any month with nothing explicitly entered — no carry-forward
+  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: $0 if blank · credit: carries real owed balance
   const cashSnapIdx = currentSnapshotMonth(y);
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx) || 0));
   const cashPrevTotal = cashSnapIdx>0 ? sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx-1) || 0)) : null;
@@ -300,9 +300,13 @@ function renderCashFlow(){
   /* ---- Banks Month-by-Month Table (like Expenses) — respects the month picker ---- */
   function accountMonthRows(list){
     return list.map(b=>{
+      const isCreditRow = b.type==='credit';
       const cells = monthsToShow.map(i=>{
-        const val = bankDisplayValueAt(b, i); // 0 for any month with nothing explicitly entered — no carry-forward
-        return `<td class="editable ${!val?'zero':''}" contenteditable="true" data-bfield="m" data-bid="${b.id}" data-idx="${i}">${val}</td>`;
+        const val = accountDisplayValueAt(b, i); // cash: 0 if blank · credit: real carried owed balance
+        const explicit = (b.m||[])[i];
+        const isCarried = isCreditRow && (explicit===null || explicit===undefined) && val!==0;
+        const tip = isCarried ? 'Carried forward from an earlier month — start typing to log a charge or payment for this month' : '';
+        return `<td class="editable ${!val?'zero':''} ${isCarried?'carried-cell':''}" contenteditable="true" data-bfield="m" data-bid="${b.id}" data-idx="${i}" title="${tip}">${val}</td>`;
       }).join('');
       const total = sumArr(b.m||[]);
       return `<tr data-bank-id="${b.id}">
@@ -595,8 +599,8 @@ function openBankDetailModal(bank, y, monthIdxArg){
 
   const isCredit = bank.type==='credit';
   const monthIdx = monthIdxArg!=null ? monthIdxArg : (state.month==='ALL' ? currentSnapshotMonth(y) : Number(state.month));
-  const balUsd = bankDisplayUsdAt(bank, y, monthIdx);
-  const prevBalUsd = monthIdx>0 ? bankDisplayUsdAt(bank, y, monthIdx-1) : null;
+  const balUsd = accountDisplayUsdAt(bank, y, monthIdx);
+  const prevBalUsd = monthIdx>0 ? accountDisplayUsdAt(bank, y, monthIdx-1) : null;
   const delta = prevBalUsd===null ? null : balUsd - prevBalUsd;
   const txns = [...(bank.transactions||[])]
     .filter(t=>t.monthIdx===undefined || t.monthIdx===monthIdx)
@@ -946,11 +950,11 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     //    (so deleting it later still reverses it correctly either way).
     if(!bank.m) bank.m = n12();
     // An explicit value already sitting in THIS month (e.g. typed into the
-    // Advanced table) always wins. Only when this month is genuinely blank do
-    // we consider borrowing an earlier month's balance — and only if this
-    // account actually has a transaction log to justify it; otherwise the
-    // month starts from $0, matching what's displayed everywhere else.
-    const prevBankVal = bankCarryValueAt(bank, monthIdx);
+    // Advanced table) always wins. Otherwise: credit cards always carry the
+    // real owed balance forward (debt doesn't reset itself); cash only
+    // carries an earlier month's balance in if this account actually has a
+    // transaction log to justify it — otherwise cash starts from $0.
+    const prevBankVal = accountCarryValueAt(bank, monthIdx);
     let bankDelta;
     if(isSetMode){
       const newVal = isCredit ? -Math.abs(rawAmountEntered) : Math.abs(rawAmountEntered);

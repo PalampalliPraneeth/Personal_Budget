@@ -75,7 +75,9 @@ function nextRecurringDateForPlan(r){
 }
 function collectRecurringRows(y, platformId){ // platformId falsy = all platforms
   ensureHoldingsMigration();
+  if(typeof ensureBanksMigration === 'function') ensureBanksMigration();
   const investments = yearData(y).investments || [];
+  const allBanks = yearData(y).banks || [];
   const fx = _ensureFx().INR || 95.0;
   const out = [];
   investments.forEach(inv => {
@@ -92,12 +94,15 @@ function collectRecurringRows(y, platformId){ // platformId falsy = all platform
       const alreadyConfirmed = !!(nextDate && norm.lastConfirmedFor === nextDate);
       const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
       const tip = (v) => isINR ? fmtInr(v) : null;
+      const bankAccount = norm.bankAccountId ? allBanks.find(b => b.id === norm.bankAccountId) : null;
       out.push({
         platformId: inv.id, platformName: inv.name, holdingId: h.id,
         symbol: h.symbol, name: h.name,
         amount, dAmount: fmt(amount), tAmount: tip(amount),
         scheduleLabel: recurringScheduleLabel(norm),
-        nextDate, estShares, alreadyConfirmed
+        nextDate, estShares, alreadyConfirmed,
+        bankAccountId: norm.bankAccountId || null,
+        bankAccountName: bankAccount ? bankAccount.name : null
       });
     });
   });
@@ -105,7 +110,7 @@ function collectRecurringRows(y, platformId){ // platformId falsy = all platform
 }
 
 /* ---------- Recurring buy modal ---------- */
-function openRecurringModal(h, onSave, onRemove){
+function openRecurringModal(h, y, onSave, onRemove){
   const old = document.getElementById('recurModalOverlay');
   if(old) old.remove();
 
@@ -113,6 +118,15 @@ function openRecurringModal(h, onSave, onRemove){
   const selectedDays = new Set(existing.daysOfMonth || []);
   const todayISO = toLocalISODate(new Date());
   const hasExistingPlan = !!(h.recurring && h.recurring.active);
+
+  // Funding account picker — cash accounts only (checking/savings/other), not
+  // credit cards, since the point is "is there money sitting here to cover
+  // this" (checked against the account's real balance on Overview).
+  if(typeof ensureBanksMigration === 'function') ensureBanksMigration();
+  const fundingAccounts = (yearData(y).banks || []).filter(b => b.type !== 'credit');
+  const bankOptionsHtml = fundingAccounts.map(b =>
+    `<option value="${b.id}" ${existing.bankAccountId===b.id?'selected':''}>${b.name}${b.currency && b.currency!=='USD' ? ' ('+b.currency+')' : ''}</option>`
+  ).join('');
 
   const overlay = document.createElement('div');
   overlay.id = 'recurModalOverlay';
@@ -145,6 +159,14 @@ function openRecurringModal(h, onSave, onRemove){
       <div class="modal-field" id="recurDaysWrap" style="display:${existing.frequencyType==='daysOfMonth'?'block':'none'};">
         <label>Day(s) of month <span class="hint">tap to toggle, pick as many as you need</span></label>
         <div id="recurDayGrid" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">${dayGrid}</div>
+      </div>
+      <div class="modal-field">
+        <label>Pay from account <span class="hint">optional — shown on Overview so you can see if the money's actually there</span></label>
+        <select id="recurBankAccount" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;" ${fundingAccounts.length?'':'disabled'}>
+          <option value="">— Not linked —</option>
+          ${bankOptionsHtml}
+        </select>
+        ${!fundingAccounts.length ? '<div class="section-sub" style="margin-top:6px;">Add a bank or savings account on Cash Flow first to link one.</div>' : ''}
       </div>
       <div class="modal-actions" style="justify-content:space-between;">
         ${hasExistingPlan ? '<button class="btn danger-outline" id="recurRemoveBtn">Remove plan</button>' : '<span></span>'}
@@ -187,15 +209,16 @@ function openRecurringModal(h, onSave, onRemove){
     const amount = parseFloat(document.getElementById('recurAmount').value);
     if(!amount || amount<=0){ document.getElementById('recurAmount').focus(); return; }
     const frequencyType = freqSelect.value;
+    const bankAccountId = document.getElementById('recurBankAccount').value || null;
     if(frequencyType === 'daysOfMonth'){
       if(!selectedDays.size){ showToast('Pick at least one day of the month'); return; }
       close();
-      onSave({ frequencyType, amount, daysOfMonth: [...selectedDays].sort((a,b)=>a-b) });
+      onSave({ frequencyType, amount, daysOfMonth: [...selectedDays].sort((a,b)=>a-b), bankAccountId });
     } else {
       const startDate = document.getElementById('recurStartDate').value;
       if(!startDate){ document.getElementById('recurStartDate').focus(); return; }
       close();
-      onSave({ frequencyType, amount, startDate });
+      onSave({ frequencyType, amount, startDate, bankAccountId });
     }
   });
 
@@ -1526,13 +1549,14 @@ function renderHoldings(){
       ${!recurringRows.length ? '<div class="section-sub" style="padding:16px 0; text-align:center;">No recurring plans yet.</div>' : `
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr>${isAll?'<th>Platform</th>':''}<th>Holding</th><th>Amount / buy</th><th>Schedule</th><th>Next date</th><th>Est. shares</th><th></th></tr></thead>
+          <thead><tr>${isAll?'<th>Platform</th>':''}<th>Holding</th><th>Amount / buy</th><th>Schedule</th><th>Funding account</th><th>Next date</th><th>Est. shares</th><th></th></tr></thead>
           <tbody>${recurringRows.map(r => `
             <tr>
               ${isAll?`<td><span class="debt-tag" style="font-size:10px;">${r.platformName}</span></td>`:''}
               <td style="font-weight:600;">${r.symbol} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${r.name}</span>` : ''}</td>
               <td ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</td>
               <td><span class="debt-tag">${r.scheduleLabel}</span></td>
+              <td style="font-size:12px;">${r.bankAccountName ? r.bankAccountName : '<span style="color:var(--text-dim);">— not linked —</span>'}</td>
               <td style="font-family:var(--font-mono); font-size:12px; color:var(--gold-soft); font-weight:600;">${r.nextDate||'—'}</td>
               <td style="font-family:var(--font-mono); font-size:12px;">${r.estShares.toFixed(4)}</td>
               <td style="white-space:nowrap;">${r.alreadyConfirmed
@@ -1748,7 +1772,7 @@ function renderHoldings(){
   document.querySelectorAll('[data-editrecur]').forEach(el => el.addEventListener('click', ()=>{
     const h = _findRecurHolding(el.dataset.editrecur);
     if(!h) return;
-    openRecurringModal(h,
+    openRecurringModal(h, y,
       (config) => {
         h.recurring = { active: true, ...config };
         markDirty(); renderHoldings();
@@ -1907,7 +1931,7 @@ function renderHoldings(){
       document.querySelectorAll('[data-recurh]').forEach(el => el.addEventListener('click', ()=>{
         const h = inv.holdings.find(x => x.id === el.dataset.recurh);
         if(!h) return;
-        openRecurringModal(h,
+        openRecurringModal(h, y,
           (config) => {
             h.recurring = { active: true, ...config };
             markDirty(); renderHoldings();
