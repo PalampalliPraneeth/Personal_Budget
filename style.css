@@ -44,6 +44,63 @@ a{color:var(--gold-soft);}
 #debtPayBody.show-paidoff .g-caret{ transform:rotate(-90deg); }
 
 /* ---------- Layout shell ---------- */
+/* ---------- App shell (sidebar + main content) ---------- */
+.app-shell{ display:flex; min-height:100vh; align-items:stretch; }
+
+.sidebar{
+  flex-shrink:0; width:220px; background:var(--bg-panel); border-right:1px solid var(--line);
+  display:flex; flex-direction:column; position:sticky; top:0; height:100vh; z-index:40;
+  transition:width .18s ease;
+}
+.sidebar-brand{ display:flex; align-items:center; gap:10px; padding:20px 18px 16px; border-bottom:1px solid var(--line-soft); }
+.sidebar-brand-icon{ font-size:22px; flex-shrink:0; }
+.sidebar-brand-text{ display:flex; flex-direction:column; gap:3px; min-width:0; overflow:hidden; }
+.sidebar-brand .brand-eyebrow{ margin:0; font-size:9.5px; white-space:nowrap; }
+.sidebar-brand-title{ font-family:var(--font-display); font-weight:600; font-size:16px; color:var(--text); white-space:nowrap; }
+
+.side-nav{ display:flex; flex-direction:column; gap:2px; padding:10px; flex:1; overflow-y:auto; }
+.side-nav .tab-btn{
+  display:flex; align-items:center; gap:11px; width:100%;
+  font-family:var(--font-body); font-size:13.5px; font-weight:500; color:var(--text-dim);
+  background:transparent; border:none; border-left:2px solid transparent; border-radius:0 8px 8px 0;
+  padding:10px 12px; cursor:pointer; text-align:left; white-space:nowrap; overflow:hidden;
+  transition:color .15s ease, background-color .15s ease, border-color .15s ease;
+}
+.side-nav .tab-btn:hover{ color:var(--text); background:var(--bg-card); }
+.side-nav .tab-btn.active{ color:var(--gold-soft); background:var(--bg-card); border-left-color:var(--gold); font-weight:600; }
+.tab-icon{ font-size:16px; flex-shrink:0; width:20px; text-align:center; }
+.tab-label{ overflow:hidden; text-overflow:ellipsis; }
+
+.sidebar-collapse-btn{
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); background:transparent;
+  border:none; border-top:1px solid var(--line-soft); padding:12px; cursor:pointer; white-space:nowrap;
+}
+.sidebar-collapse-btn:hover{ color:var(--gold-soft); }
+.collapse-arrow{ transition:transform .18s ease; }
+
+/* Collapsed: icons only, no labels/brand text â€” a compact rail */
+.sidebar.collapsed{ width:64px; }
+.sidebar.collapsed .sidebar-brand-text,
+.sidebar.collapsed .tab-label,
+.sidebar.collapsed .collapse-label{ display:none; }
+.sidebar.collapsed .sidebar-brand{ justify-content:center; padding:20px 0 16px; }
+.sidebar.collapsed .side-nav .tab-btn{ justify-content:center; padding:10px 0; border-radius:8px; border-left:none; }
+.sidebar.collapsed .side-nav .tab-btn.active{ background:var(--bg-card-hi); }
+.sidebar.collapsed .tab-icon{ width:auto; }
+.sidebar.collapsed .collapse-arrow{ transform:rotate(180deg); }
+
+.sidebar-toggle-mobile{
+  display:none; position:fixed; top:14px; left:14px; z-index:55;
+  width:40px; height:40px; align-items:center; justify-content:center;
+  background:var(--bg-card); border:1px solid var(--line); border-radius:8px;
+  color:var(--text); font-size:18px; cursor:pointer;
+}
+.sidebar-backdrop{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:39; }
+.sidebar-backdrop.show{ display:block; }
+
+.main-col{ flex:1; min-width:0; }
+
 .wrap{max-width:1240px; margin:0 auto; padding:28px 24px 80px;}
 
 /* ---------- Header ---------- */
@@ -78,25 +135,34 @@ a{color:var(--gold-soft);}
 }
 .selectbox select:focus{outline:2px solid var(--gold); outline-offset:1px;}
 
-/* ---------- Tabs ---------- */
-.tabs{
-  display:flex; gap:4px; margin-bottom:26px; border-bottom:1px solid var(--line);
-  overflow-x:auto; scrollbar-width:none;
-}
-.tabs::-webkit-scrollbar{display:none;}
-.tab-btn{
-  font-family:var(--font-display); font-size:15px; font-weight:500; color:var(--text-dim);
-  background:transparent; border:none; padding:11px 18px 13px; cursor:pointer;
-  border-bottom:2px solid transparent; white-space:nowrap; position:relative; top:1px;
-  transition:color .15s ease;
-}
-.tab-btn:hover{color:var(--text);}
-.tab-btn.active{color:var(--gold-soft); border-bottom-color:var(--gold);}
-.tab-btn .tab-index{font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-right:6px;}
-
 .panel{display:none; animation:fadein .25s ease;}
 .panel.active{display:block;}
 @keyframes fadein{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
+
+/* ---------- Sidebar responsive behavior ---------- */
+@media(max-width:860px){
+  .sidebar-toggle-mobile{ display:flex; }
+  .sidebar{
+    position:fixed; top:0; left:0; width:250px; height:100vh;
+    transform:translateX(-100%); transition:transform .22s ease; box-shadow:0 0 32px rgba(0,0,0,.5);
+  }
+  .sidebar.collapsed{ width:250px; } /* the desktop-only collapse rail is meaningless as an overlay drawer */
+  .sidebar.collapsed .sidebar-brand-text,
+  .sidebar.collapsed .tab-label,
+  .sidebar.collapsed .collapse-label{ display:flex; }
+  .sidebar.collapsed .sidebar-brand{ justify-content:flex-start; padding:20px 18px 16px; }
+  .sidebar.collapsed .side-nav .tab-btn{ justify-content:flex-start; padding:10px 12px; border-radius:0 8px 8px 0; }
+  .sidebar.mobile-open{ transform:translateX(0); }
+  .sidebar-collapse-btn{ display:none; } /* collapsing doesn't make sense for an overlay drawer â€” close it instead */
+  .main-col{ width:100%; }
+  .wrap{ padding-top:64px; } /* room for the fixed hamburger button */
+}
+@media(max-width:480px){
+  .masthead{ flex-direction:column; align-items:stretch; }
+  .controls{ width:100%; }
+  .selectbox{ flex:1; }
+  .selectbox select{ width:100%; min-width:0; }
+}
 
 /* ---------- Section headers ---------- */
 .section-title{

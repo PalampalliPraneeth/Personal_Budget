@@ -1,13 +1,13 @@
 const TABS = [
-  {id:'overview', label:'Overview'},
-  {id:'cashflow', label:'Cash Flow'},
-  {id:'income', label:'Income'},
-  {id:'expenses', label:'Expenses'},
-  {id:'savings', label:'Savings'},    
-  {id:'investments', label:'Investments'},
-  {id:'holdings', label:'Holdings'},
-  {id:'debt', label:'Debt Payoff'},
-  {id:'data', label:'Data & Import'}
+  {id:'overview', label:'Overview', icon:'🧭'},
+  {id:'cashflow', label:'Cash Flow', icon:'💵'},
+  {id:'income', label:'Income', icon:'💰'},
+  {id:'expenses', label:'Expenses', icon:'🧾'},
+  {id:'savings', label:'Savings', icon:'🏦'},
+  {id:'investments', label:'Investments', icon:'📈'},
+  {id:'holdings', label:'Holdings', icon:'📦'},
+  {id:'debt', label:'Debt Payoff', icon:'🎯'},
+  {id:'data', label:'Data & Import', icon:'📤'}
 ];
 
 function guardAndSwitch(doSwitch){
@@ -18,6 +18,50 @@ function guardAndSwitch(doSwitch){
     }
   }
   doSwitch();
+}
+
+const SIDEBAR_COLLAPSED_KEY = 'ledger:sidebarCollapsed';
+
+function closeMobileSidebar(){
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if(sidebar) sidebar.classList.remove('mobile-open');
+  if(backdrop) backdrop.classList.remove('show');
+}
+
+function initSidebar(){
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  const mobileToggle = document.getElementById('sidebarToggleMobile');
+  const collapseBtn = document.getElementById('sidebarCollapseBtn');
+  if(!sidebar) return;
+
+  // Desktop collapse — a plain UI preference (not ledger data), remembered
+  // across reloads via ordinary localStorage. Wrapped in try/catch since
+  // private-browsing modes can throw on access; falls back to expanded.
+  let collapsed = false;
+  try{ collapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; }catch(e){ /* default to expanded */ }
+  sidebar.classList.toggle('collapsed', collapsed);
+
+  if(collapseBtn){
+    collapseBtn.addEventListener('click', ()=>{
+      const nowCollapsed = !sidebar.classList.contains('collapsed');
+      sidebar.classList.toggle('collapsed', nowCollapsed);
+      try{ localStorage.setItem(SIDEBAR_COLLAPSED_KEY, nowCollapsed ? '1' : '0'); }catch(e){}
+    });
+  }
+
+  // Mobile off-canvas drawer — hamburger opens it, tapping the backdrop,
+  // pressing Escape, or picking a nav item (see the tab click handler above)
+  // all close it.
+  if(mobileToggle){
+    mobileToggle.addEventListener('click', ()=>{
+      sidebar.classList.add('mobile-open');
+      if(backdrop) backdrop.classList.add('show');
+    });
+  }
+  if(backdrop) backdrop.addEventListener('click', closeMobileSidebar);
+  document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeMobileSidebar(); });
 }
 
 async function renderActivityDropdown(){
@@ -90,8 +134,10 @@ function initShell(){
     const b = document.createElement('button');
     b.className='tab-btn'+(i===0?' active':'');
     b.dataset.tab=t.id;
-    b.innerHTML = `<span class="tab-index">0${i+1}</span>${t.label}`;
+    b.title = t.label;
+    b.innerHTML = `<span class="tab-icon">${t.icon}</span><span class="tab-label">${t.label}</span>`;
     b.addEventListener('click', ()=>{
+      closeMobileSidebar(); // tapping any item closes the off-canvas drawer, regardless of the guard outcome below
       guardAndSwitch(()=>{
         document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
         document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
@@ -106,6 +152,8 @@ function initShell(){
     p.id='panel-'+t.id;
     panelsEl.appendChild(p);
   });
+
+  initSidebar();
 
   document.getElementById('exportBtn').addEventListener('click', ()=>{
     const blob = new Blob([JSON.stringify(DATA,null,2)], {type:'application/json'});

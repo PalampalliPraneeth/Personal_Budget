@@ -9,33 +9,56 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="wrap">
+<div class="app-shell">
 
-  <div class="masthead">
-    <div>
-      <div class="brand-eyebrow">Personal Finance · Ledger</div>
-      <h1 class="brand-title">The Ledger <em>2026</em></h1>
-      <div class="today-line">Today is <b id="todayStr">—</b> · showing <b id="scopeStr">—</b></div>
+  <button class="sidebar-toggle-mobile" id="sidebarToggleMobile" aria-label="Open menu">☰</button>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="sidebar-brand-icon">📒</span>
+      <span class="sidebar-brand-text">
+        <span class="brand-eyebrow">Personal Finance</span>
+        <span class="sidebar-brand-title">The Ledger</span>
+      </span>
     </div>
-    <div class="controls">
-      <div class="selectbox">
-        <select id="yearSelect"></select>
+
+    <nav class="side-nav" id="tabs"></nav>
+
+    <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Collapse sidebar">
+      <span class="collapse-arrow">‹</span><span class="collapse-label">Collapse</span>
+    </button>
+  </aside>
+
+  <div class="main-col">
+    <div class="wrap">
+
+      <div class="masthead">
+        <div>
+          <div class="brand-eyebrow">Personal Finance · Ledger</div>
+          <h1 class="brand-title">The Ledger <em>2026</em></h1>
+          <div class="today-line">Today is <b id="todayStr">—</b> · showing <b id="scopeStr">—</b></div>
+        </div>
+        <div class="controls">
+          <div class="selectbox">
+            <select id="yearSelect"></select>
+          </div>
+          <div class="selectbox">
+            <select id="monthSelect"></select>
+          </div>
+          <button class="btn" id="headerSaveBtn" title="Save all changes now">Save</button>
+          <button class="btn" id="exportBtn" title="Download your current data as JSON">Export data</button>
+          <button class="btn ghost" id="activityBell" title="Activity logs" style="display:none;">🔔</button>
+          <button class="btn ghost" id="lockBtn" title="Lock the ledger">🔒</button>
+        </div>
       </div>
-      <div class="selectbox">
-        <select id="monthSelect"></select>
-      </div>
-      <button class="btn" id="headerSaveBtn" title="Save all changes now">Save</button>
-      <button class="btn" id="exportBtn" title="Download your current data as JSON">Export data</button>
-      <button class="btn ghost" id="activityBell" title="Activity logs" style="display:none;">🔔</button>
-      <button class="btn ghost" id="lockBtn" title="Lock the ledger">🔒</button>
+
+      <div id="panels"></div>
+
+      <div class="footer-note">Every figure here lives in your browser's private storage for this ledger — edit a cell, add a category, or drop in a new spreadsheet any time.</div>
     </div>
   </div>
 
-  <div class="tabs" id="tabs"></div>
-
-  <div id="panels"></div>
-
-  <div class="footer-note">Every figure here lives in your browser's private storage for this ledger — edit a cell, add a category, or drop in a new spreadsheet any time.</div>
 </div>
 
 <div class="save-bar" id="saveBar">
