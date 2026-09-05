@@ -407,11 +407,13 @@ function openEditLotsModal(h){
     <div class="modal-card" style="width:540px;">
       <h3>📝 Edit lots — ${h.symbol}</h3>
       <p class="modal-sub">Correct the date, quantity, or price of any past purchase or sale — this is what fixes a holding that got dated "today" when you first entered it, even though you'd actually owned it for a while. Affects cost basis and XIRR immediately.</p>
-      <div class="lot-edit-header">
-        <span>Type</span><span>Qty</span><span>Price</span><span>Date</span><span></span>
-      </div>
-      <div style="max-height:300px; overflow-y:auto; margin-bottom:16px;">
-        ${rowsHtml || '<div class="section-sub" style="text-align:center; padding:14px 0;">No lots recorded for this holding.</div>'}
+      <div class="lot-edit-scroll">
+        <div class="lot-edit-header">
+          <span>Type</span><span>Qty</span><span>Price</span><span>Date</span><span></span>
+        </div>
+        <div class="lot-edit-body">
+          ${rowsHtml || '<div class="section-sub" style="text-align:center; padding:14px 0;">No lots recorded for this holding.</div>'}
+        </div>
       </div>
       <div class="modal-actions" style="justify-content:space-between;">
         <button class="btn" id="editLotsCancelBtn">Cancel</button>
