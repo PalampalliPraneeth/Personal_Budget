@@ -820,9 +820,50 @@ async function _wireEmailReminderBtn(){
   btn.onclick = ()=> _openEmailReminderModal(email);
 }
 
+/* Scans every active recurring buy across every year and returns the
+   soonest one, plus the date its reminder email actually goes out (the day
+   before it's due — see send-recurring-reminders.ts). Reuses the exact same
+   nextRecurringDateForPlan() the Holdings tab uses, so this always matches
+   what's shown there. Returns null if nothing recurring is set up yet. */
+function _nextReminderInfo(){
+  if(typeof nextRecurringDateForPlan !== 'function') return null;
+  const todayISO = toLocalISODate(new Date());
+  let earliest = null;
+  for(const yearKey of Object.keys(DATA)){
+    if(!/^\d+$/.test(yearKey)) continue;
+    for(const inv of (DATA[yearKey]?.investments || [])){
+      for(const h of (inv.holdings || [])){
+        if(!h.recurring?.active) continue;
+        const dueISO = nextRecurringDateForPlan(h.recurring);
+        // Skip anything due today or earlier — there's no future reminder
+        // to show for those (a same-day due date means its reminder,
+        // sent "the day before," would already have gone out yesterday).
+        if(!dueISO || dueISO <= todayISO) continue;
+        if(!earliest || dueISO < earliest.dueISO){
+          earliest = { dueISO, symbol: h.symbol || h.name || 'a holding', platform: inv.name || 'a platform' };
+        }
+      }
+    }
+  }
+  if(!earliest) return null;
+  const dueDate = new Date(earliest.dueISO+'T00:00:00');
+  const sendDate = new Date(dueDate); sendDate.setDate(sendDate.getDate()-1);
+  const fmt = (d)=> d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
+  return { ...earliest, sendLabel: fmt(sendDate), dueLabel: fmt(dueDate) };
+}
+
 function _openEmailReminderModal(currentEmail){
   const old = document.getElementById('emailReminderOverlay');
   if(old) old.remove();
+
+  const nextInfo = _nextReminderInfo();
+  const nextReminderHtml = currentEmail
+    ? `<p class="section-sub" style="margin:0 0 16px;">${
+        nextInfo
+          ? `Next reminder: <b>${nextInfo.sendLabel}</b> — for ${nextInfo.symbol} on ${nextInfo.platform} (due ${nextInfo.dueLabel}).`
+          : `No recurring buys are scheduled yet, so there's nothing to remind you about.`
+      }</p>`
+    : '';
 
   const overlay = document.createElement('div');
   overlay.id = 'emailReminderOverlay';
@@ -833,9 +874,14 @@ function _openEmailReminderModal(currentEmail){
       <p class="modal-sub">Get an email the day before any recurring buy is due — one summary email, not one per plan.</p>
       <div class="modal-field">
         <label>Email address</label>
+        <div id="reminderEmailDisplayRow" style="display:${currentEmail ? 'flex' : 'none'}; align-items:center; justify-content:space-between; gap:10px; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          <span id="reminderEmailDisplayText" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${currentEmail||''}</span>
+          <button class="btn ghost small" id="reminderEmailEditBtn" style="flex:none;">Edit</button>
+        </div>
         <input type="email" id="reminderEmailInput" placeholder="you@example.com" value="${currentEmail||''}"
-          style="width:100%; box-sizing:border-box; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          style="display:${currentEmail ? 'none' : 'block'}; width:100%; box-sizing:border-box; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
       </div>
+      ${nextReminderHtml}
       <div class="modal-actions" style="justify-content:space-between;">
         ${currentEmail ? '<button class="btn ghost" id="reminderEmailRemoveBtn">Turn off</button>' : '<span></span>'}
         <div style="display:flex; gap:10px;">
@@ -849,6 +895,17 @@ function _openEmailReminderModal(currentEmail){
   const close = ()=> overlay.remove();
   overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
   document.getElementById('reminderEmailCancelBtn').addEventListener('click', close);
+
+  const editBtn = document.getElementById('reminderEmailEditBtn');
+  if(editBtn){
+    editBtn.addEventListener('click', ()=>{
+      document.getElementById('reminderEmailDisplayRow').style.display = 'none';
+      const input = document.getElementById('reminderEmailInput');
+      input.style.display = 'block';
+      input.focus();
+      input.select();
+    });
+  }
 
   const removeBtn = document.getElementById('reminderEmailRemoveBtn');
   if(removeBtn){
@@ -868,6 +925,9 @@ function _openEmailReminderModal(currentEmail){
       close();
       _wireEmailReminderBtn();
     } else if(result.reason === 'invalid'){
+      input.style.display = 'block';
+      const displayRow = document.getElementById('reminderEmailDisplayRow');
+      if(displayRow) displayRow.style.display = 'none';
       input.style.borderColor = 'var(--danger)';
       input.focus();
     } else {

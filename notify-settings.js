@@ -15,7 +15,15 @@ function isValidEmail(str){
 async function getNotifyEmail(){
   try{
     const result = await window.storage.get(NOTIFY_EMAIL_KEY, false);
-    return result ? JSON.parse(result.value) : null;
+    if(!result) return null;
+    // Supabase's jsonb column auto-decodes on the way back out, so a value
+    // saved as JSON.stringify('user@example.com') can come back as the
+    // ALREADY-UNWRAPPED plain string user@example.com instead of the
+    // quoted JSON form — JSON.parse() on that throws. Fall back to the raw
+    // value in that case rather than losing the email. (Same defensive
+    // pattern send-recurring-reminders.ts's loadKey() already uses.)
+    try { return JSON.parse(result.value); }
+    catch(e){ return result.value; }
   }catch(e){
     return null; // key doesn't exist yet — not an error
   }
