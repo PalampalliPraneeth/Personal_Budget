@@ -657,7 +657,13 @@ function renderUpcomingRecurringCard(y){
 
   return `
   <div class="card">
-    <div class="card-head"><h3>Upcoming recurring investments</h3><span class="section-sub" style="margin:0;">${fmt$(data.grandTotalUsd,2)} scheduled across ${data.platformTotals.length} platform${data.platformTotals.length===1?'':'s'}</span></div>
+    <div class="card-head">
+      <h3>Upcoming recurring investments</h3>
+      <span class="section-sub" style="margin:0; display:flex; align-items:center; gap:10px;">
+        ${fmt$(data.grandTotalUsd,2)} scheduled across ${data.platformTotals.length} platform${data.platformTotals.length===1?'':'s'}
+        <button class="btn ghost small" id="emailReminderBtn" title="Get an email the day before a recurring buy is due">✉️ Reminders</button>
+      </span>
+    </div>
     <div class="recur-chips">${chips}</div>
     <div class="recur-list">${rowsHtml}</div>
     <div class="section-sub" style="margin:10px 0 0;">Click any plan to open it in Holdings.</div>
@@ -795,6 +801,81 @@ function renderDebtPayoffWidget(debts){
   `;
 }
 
+/* Reflects current email-reminder status on the button and opens the
+   set/change modal on click. Entirely optional/best-effort — if
+   notify-settings.js didn't load, the button just says so and does nothing
+   destructive. */
+async function _wireEmailReminderBtn(){
+  const btn = document.getElementById('emailReminderBtn');
+  if(!btn) return;
+  if(typeof getNotifyEmail !== 'function'){ btn.title = 'Notifications module not loaded'; return; }
+
+  const email = await getNotifyEmail();
+  btn.textContent = email ? `✉️ ${email}` : '✉️ Reminders';
+  btn.classList.toggle('active', !!email);
+  btn.title = email
+    ? 'Click to change or turn off email reminders'
+    : 'Get an email the day before a recurring buy is due';
+
+  btn.onclick = ()=> _openEmailReminderModal(email);
+}
+
+function _openEmailReminderModal(currentEmail){
+  const old = document.getElementById('emailReminderOverlay');
+  if(old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'emailReminderOverlay';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-card" style="width:380px;">
+      <h3 style="margin:0 0 6px;">Email reminders</h3>
+      <p class="modal-sub">Get an email the day before any recurring buy is due — one summary email, not one per plan.</p>
+      <div class="modal-field">
+        <label>Email address</label>
+        <input type="email" id="reminderEmailInput" placeholder="you@example.com" value="${currentEmail||''}"
+          style="width:100%; box-sizing:border-box; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+      </div>
+      <div class="modal-actions" style="justify-content:space-between;">
+        ${currentEmail ? '<button class="btn ghost" id="reminderEmailRemoveBtn">Turn off</button>' : '<span></span>'}
+        <div style="display:flex; gap:10px;">
+          <button class="btn ghost" id="reminderEmailCancelBtn">Cancel</button>
+          <button class="btn" id="reminderEmailSaveBtn">Save</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = ()=> overlay.remove();
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  document.getElementById('reminderEmailCancelBtn').addEventListener('click', close);
+
+  const removeBtn = document.getElementById('reminderEmailRemoveBtn');
+  if(removeBtn){
+    removeBtn.addEventListener('click', async ()=>{
+      await clearNotifyEmail();
+      showToast('Email reminders turned off');
+      close();
+      _wireEmailReminderBtn();
+    });
+  }
+
+  document.getElementById('reminderEmailSaveBtn').addEventListener('click', async ()=>{
+    const input = document.getElementById('reminderEmailInput');
+    const result = await setNotifyEmail(input.value);
+    if(result.ok){
+      showToast("Reminders on — you'll get an email the day before a recurring buy is due");
+      close();
+      _wireEmailReminderBtn();
+    } else if(result.reason === 'invalid'){
+      input.style.borderColor = 'var(--danger)';
+      input.focus();
+    } else {
+      showToast("Couldn't save that — try again in a moment");
+    }
+  });
+}
+
 function renderOverview(){
   const y = state.year;
   const prevY = y-1;
@@ -919,6 +1000,8 @@ function renderOverview(){
   </div>
   `;
   document.getElementById('panel-overview').innerHTML = html;
+
+  _wireEmailReminderBtn();
 
   document.querySelectorAll('#panel-overview [data-goto]').forEach(el=>{
     el.addEventListener('click', ()=>{

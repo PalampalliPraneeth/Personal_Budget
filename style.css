@@ -686,3 +686,45 @@ td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decora
 @media(max-width:480px){
   .lot-edit-header, .lot-edit-row{ min-width:400px; }
 }
+
+/* ---------- Budget tab ---------- */
+.good{ color:var(--good); }
+.bad{ color:var(--danger); }
+
+.budget-row{
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px 16px;
+  padding:10px 4px; border-top:1px solid var(--line-soft);
+}
+.card > .budget-row:first-child{ border-top:none; }
+.budget-row-name{ flex:2 1 140px; font-size:13px; font-weight:600; color:var(--text); }
+.budget-row-field{ flex:1 1 80px; display:flex; flex-direction:column; gap:3px; }
+.budget-row-field label{ font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint); }
+.budget-row-field.readout span{ font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--text); }
+.budget-input{
+  background:var(--bg); border:1px solid var(--line); color:var(--gold-soft); font-weight:600;
+  border-radius:6px; padding:6px 8px; font-family:var(--font-mono); font-size:12.5px; width:100%; box-sizing:border-box;
+}
+.budget-input:focus{ outline:none; border-color:var(--gold); }
+.budget-row-bar-wrap{ flex:1 1 100%; order:99; }
+.budget-row-bar-wrap .runway{ height:5px; margin:0; }
+
+.runway.over .runway-fill{ background:var(--danger); }
+
+.budget-type-select{
+  appearance:none; -webkit-appearance:none; font-family:var(--font-mono); font-size:10.5px;
+  background:var(--bg-card-hi); color:var(--text-dim); border:1px solid var(--line); border-radius:12px;
+  padding:3px 10px; cursor:pointer;
+}
+
+.budget-hero-card{ text-align:center; padding:24px 16px; }
+.budget-hero-value{ font-family:var(--font-display); font-size:34px; font-weight:700; }
+
+.budget-side-type{ padding:10px 2px; border-top:1px solid var(--line-soft); }
+.budget-side-type:first-child{ border-top:none; padding-top:2px; }
+.budget-side-type-head{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; font-size:13px; font-weight:600; color:var(--text); }
+.budget-side-type-foot{ display:flex; align-items:center; gap:6px; margin-top:6px; font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); }
+.budget-side-type-foot b{ color:var(--text); }
+
+/* ---------- Email reminder toggle (Overview) ---------- */
+#emailReminderBtn{ padding:4px 10px; font-size:11px; }
+#emailReminderBtn.active{ border-color:var(--good); color:var(--good); }

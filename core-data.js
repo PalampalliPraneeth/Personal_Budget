@@ -684,6 +684,25 @@ function currentSnapshotMonth(y){
 }
 
 /* =========================================================================
+   BUDGET: a target per category, per month — separate from (and never
+   overwriting) the actual amounts Income/Expenses already track. Adds
+   `budget:[12]` to every income/expense category the first time it's touched,
+   and `budgetType` ('fixed'|'flexible'|'nonmonthly') to every expense group
+   so the Budget tab can roll spending up the same way Monarch-style budget
+   views do. Existing data is never modified beyond adding these new fields.
+   ========================================================================= */
+function ensureBudgetMigration(y){
+  const yd = yearData(y);
+  (yd.income||[]).forEach(c=>{ if(!Array.isArray(c.budget)) c.budget = n12(); });
+  (yd.expenseGroups||[]).forEach(g=>{
+    if(g.budgetType !== 'fixed' && g.budgetType !== 'flexible' && g.budgetType !== 'nonmonthly'){
+      g.budgetType = 'flexible';
+    }
+    (g.categories||[]).forEach(c=>{ if(!Array.isArray(c.budget)) c.budget = n12(); });
+  });
+}
+
+/* =========================================================================
    CASH FLOW: income minus categorized spend minus card bill payments minus
    debt payments, carried month to month (and year to year). Every figure
    can be overridden per month directly in the Cash Flow table.
