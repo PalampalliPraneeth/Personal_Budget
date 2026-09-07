@@ -426,26 +426,29 @@ function bankHasTransactionLog(bank){
   return !!(bank && bank.transactions && bank.transactions.length);
 }
 /* DISPLAY VALUE — what every card, table, modal, and reconciliation row
-   should show. A month with nothing explicitly entered (no direct edit, no
-   logged transaction) is exactly $0 — never silently pulled forward from an
-   earlier month. This always returns a number (never null) so callers don't
-   need a `|| 0` fallback. */
+   should show. A month with nothing explicitly entered carries forward the
+   last real balance (same as a bank statement would) IF this account has
+   ever had a logged transaction (bankHasTransactionLog) — otherwise it's a
+   genuine $0 (a brand-new account with nothing typed in yet has no balance
+   to carry). This always returns a number (never null) so callers don't
+   need a `|| 0` fallback. Currency-agnostic — applies the same to INR and
+   USD accounts alike. */
 function bankDisplayValueAt(bank, monthIdx){
-  const arr = bank && bank.m;
-  const v = arr ? arr[monthIdx] : null;
-  return (v===null || v===undefined) ? 0 : v;
+  return bankCarryValueAt(bank, monthIdx);
 }
 function bankDisplayUsdAt(bank, year, monthIdx){
   return nativeMonthToUsd(bankDisplayValueAt(bank, monthIdx), bank.currency, year, monthIdx);
 }
 
 /* ---------------------------------------------------------------------
-   Cash accounts and credit cards behave differently for a blank month, and
+   Cash accounts and credit cards both carry forward for a blank month —
    every shared render path (summary cards, Advanced table, detail modal,
    Add money) should go through THESE dispatchers rather than picking a
    bank-only or credit-only helper directly:
-     - Cash (checking/savings/other): a blank month is a real $0 — you
-       either added money or you didn't, nothing to infer.
+     - Cash (checking/savings/other): a blank month carries the last real
+       balance forward, same as a bank statement, as long as the account
+       has at least one logged transaction to justify it (bankCarryValueAt);
+       a fresh account with nothing entered yet is a genuine $0.
      - Credit card: debt doesn't reset itself. A blank month carries the
        real owed balance forward from the last month you logged a charge
        or payment — exactly like a bank statement would.
@@ -515,6 +518,21 @@ function fmt$(v, decimals){
   const neg = v<0;
   const s = Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:decimals, maximumFractionDigits:decimals});
   return (neg? '-$':'$')+s;
+}
+/* Format a value in ITS OWN native currency with the correct symbol (₹ for
+   INR, $ for everything else) — for anywhere we're showing an account's own
+   number (bank balance, credit limit, a logged transaction amount) rather
+   than a cross-currency total. Using fmt$() on a native INR figure was
+   showing "$1,149.87" for an INR account — right number, wrong symbol,
+   and misleading since it looked like (but wasn't) a USD amount. */
+function fmtNative(v, currency){
+  if(v===null || v===undefined) v = 0;
+  if(currency === 'INR'){
+    const neg = v<0;
+    const s = Math.abs(v).toLocaleString('en-IN',{minimumFractionDigits:2, maximumFractionDigits:2});
+    return (neg? '-₹':'₹')+s;
+  }
+  return fmt$(v, 2);
 }
 function pct(v){ return (v*100).toFixed(1)+'%'; }
 function monthRange(){

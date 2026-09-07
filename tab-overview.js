@@ -717,12 +717,12 @@ function renderCashCreditMiniCard(y){
   const banks = accounts.filter(b=>b.type!=='credit');
   const creditCards = accounts.filter(b=>b.type==='credit');
   const snapIdx = currentSnapshotMonth(y);
-  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: $0 if blank · credit: carries real owed balance
+  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: carries last real balance forward (once it has any transaction) · credit: carries real owed balance
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, snapIdx) || 0));
   const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, snapIdx) || 0)));
 
   const row = (b, isCredit) => {
-    const bal = bankUsdAt(b, snapIdx);
+    const bal = accountDisplayValueAt(b, snapIdx); // native currency, carried forward
     const owed = isCredit ? Math.max(0, -(bal||0)) : null;
     const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
     return `
@@ -733,7 +733,7 @@ function renderCashCreditMiniCard(y){
         <div class="bank-row-sub">${isCredit ? 'Credit Card' : (BANK_TYPE_LABELS[b.type]||'Checking')}</div>
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance" style="${isCredit && owed>0?'color:var(--rust-soft);':''}">${bal===null?'—':(isCredit?(owed>0?fmt$(owed,2)+' owed':'Paid off'):fmt$(bal,2))}</div>
+        <div class="bank-row-balance" style="${isCredit && owed>0?'color:var(--rust-soft);':''}">${bal===null?'—':(isCredit?(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off'):fmtNative(bal,b.currency))}</div>
       </div>
     </div>`;
   };

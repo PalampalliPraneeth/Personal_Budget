@@ -10,11 +10,17 @@ function ensureBanksMigration(){
   // Migrate old banks (balance/lastUpdated) to new format (m array)
   yearData(y).banks.forEach(b => {
     if(!b.m) b.m = n12();
-    // If old single balance exists, stuff it into current month as a starting point
+    // If old single balance exists, stuff it into current month as a starting
+    // point — but only if it's a REAL balance. A legacy `balance: 0` on an
+    // account that simply never had data yet must NOT become an explicit
+    // override, or it silently blocks carry-forward forever (the exact bug
+    // that caused a brand-new-looking account to show $0 instead of carrying
+    // its most recent real balance).
     if(b.balance !== undefined && b.balance !== null && b.m.every(v => v === null)){
       const today = new Date();
       const cm = today.getMonth();
-      b.m[cm] = num(b.balance);
+      const legacyBal = num(b.balance);
+      if(legacyBal !== 0) b.m[cm] = legacyBal;
       delete b.balance;
       delete b.lastUpdated;
     }
@@ -134,7 +140,7 @@ function renderCashFlow(){
   const creditCards = allAccounts.filter(b=>b.type==='credit'); // liabilities, tracked separately
 
   /* ---- Cash summary card + clickable bank list (Monarch-style) ---- */
-  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: $0 if blank · credit: carries real owed balance
+  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: carries last real balance forward (once it has any transaction) · credit: carries real owed balance
   const cashSnapIdx = currentSnapshotMonth(y);
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx) || 0));
   const cashPrevTotal = cashSnapIdx>0 ? sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx-1) || 0)) : null;
@@ -155,7 +161,7 @@ function renderCashFlow(){
   const cashPctOfAssets = totalAssets>0 ? (cashTotal/totalAssets)*100 : null;
 
   const bankRows = banks.map(b=>{
-    const bal = bankUsdAt(b, cashSnapIdx);
+    const bal = accountDisplayValueAt(b, cashSnapIdx); // native currency, carried forward
     const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
     return `
     <div class="bank-row" data-bank-open="${b.id}">
@@ -165,14 +171,14 @@ function renderCashFlow(){
         <div class="bank-row-sub">${BANK_TYPE_LABELS[b.type]||'Checking'}</div>
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance">${bal===null?'—':fmt$(bal,2)}</div>
+        <div class="bank-row-balance">${bal===null?'—':fmtNative(bal,b.currency)}</div>
         <div class="bank-row-sub">${timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
   }).join('');
 
   const creditRows = creditCards.map(b=>{
-    const bal = bankUsdAt(b, cashSnapIdx);
+    const bal = accountDisplayValueAt(b, cashSnapIdx); // native currency, carried forward
     const owed = bal===null ? 0 : Math.max(0,-bal);
     const hasLimit = b.creditLimit!=null && b.creditLimit>0;
     const pctUsed = hasLimit ? (owed/b.creditLimit)*100 : null;
@@ -183,11 +189,11 @@ function renderCashFlow(){
       <div class="bank-row-icon">${initial}</div>
       <div class="bank-row-main">
         <div class="bank-row-name">${b.name} <span class="row-del" data-editlimit="${b.id}" title="edit credit limit">✎</span></div>
-        <div class="bank-row-sub">${hasLimit ? `${fmt$(b.creditLimit,0)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'}</div>
+        <div class="bank-row-sub">${hasLimit ? `${fmtNative(b.creditLimit,b.currency)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'}</div>
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmt$(owed,2)+' owed':'Paid off')}</div>
-        <div class="bank-row-sub">${hasLimit ? fmt$(Math.max(0,b.creditLimit-owed),2)+' available' : timeAgo(b.lastUpdatedAt)}</div>
+        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')}</div>
+        <div class="bank-row-sub">${hasLimit ? fmtNative(Math.max(0,b.creditLimit-owed),b.currency)+' available' : timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
   }).join('');
@@ -302,9 +308,9 @@ function renderCashFlow(){
     return list.map(b=>{
       const isCreditRow = b.type==='credit';
       const cells = monthsToShow.map(i=>{
-        const val = accountDisplayValueAt(b, i); // cash: 0 if blank · credit: real carried owed balance
+        const val = accountDisplayValueAt(b, i); // cash: carried balance (or 0 if never touched) · credit: real carried owed balance
         const explicit = (b.m||[])[i];
-        const isCarried = isCreditRow && (explicit===null || explicit===undefined) && val!==0;
+        const isCarried = (explicit===null || explicit===undefined) && val!==0;
         const tip = isCarried ? 'Carried forward from an earlier month — start typing to log a charge or payment for this month' : '';
         return `<td class="editable ${!val?'zero':''} ${isCarried?'carried-cell':''}" contenteditable="true" data-bfield="m" data-bid="${b.id}" data-idx="${i}" title="${tip}">${val}</td>`;
       }).join('');
@@ -312,7 +318,7 @@ function renderCashFlow(){
       return `<tr data-bank-id="${b.id}">
         <td style="font-weight:600;">${b.name} <span class="row-del" data-delbank="${b.id}">✕</span></td>
         ${cells}
-        <td style="font-weight:700;">${fmt$(total,2)}</td>
+        <td style="font-weight:700;">${fmtNative(total,b.currency)}</td>
         <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
       </tr>`;
     }).join('');
@@ -374,7 +380,7 @@ function renderCashFlow(){
     ${creditCard}
 
     <div class="card">
-      <div class="card-head"><h3>Advanced: bank accounts, month by month</h3><span class="section-sub" style="margin:0;">Direct editing for any month — the card above only touches the current month via "Add money." A month left blank counts as $0 here and everywhere else (the card, the reconciliation total) — it's never silently carried forward from an earlier month.</span></div>
+      <div class="card-head"><h3>Advanced: bank accounts, month by month</h3><span class="section-sub" style="margin:0;">Direct editing for any month — the card above only touches the current month via "Add money." A month left blank carries the last real balance forward (the card, the reconciliation total, and this table all agree) as long as the account has at least one logged transaction — a brand-new account with nothing entered yet is a genuine $0. Type a value directly into any cell to override the carried number for that month.</span></div>
       <div class="table-scroll">
         <table class="ledger">
           <thead><tr><th>Bank / Account</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Currency</th></tr></thead>
@@ -599,9 +605,9 @@ function openBankDetailModal(bank, y, monthIdxArg){
 
   const isCredit = bank.type==='credit';
   const monthIdx = monthIdxArg!=null ? monthIdxArg : (state.month==='ALL' ? currentSnapshotMonth(y) : Number(state.month));
-  const balUsd = accountDisplayUsdAt(bank, y, monthIdx);
-  const prevBalUsd = monthIdx>0 ? accountDisplayUsdAt(bank, y, monthIdx-1) : null;
-  const delta = prevBalUsd===null ? null : balUsd - prevBalUsd;
+  const bal = accountDisplayValueAt(bank, monthIdx); // native currency, carried forward
+  const prevBal = monthIdx>0 ? accountDisplayValueAt(bank, monthIdx-1) : null;
+  const delta = prevBal===null ? null : bal - prevBal;
   const txns = [...(bank.transactions||[])]
     .filter(t=>t.monthIdx===undefined || t.monthIdx===monthIdx)
     .sort((a,b)=> (b.date||'').localeCompare(a.date||''))
@@ -616,7 +622,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
         <div class="bank-txn-cat">${catLabel}${t.note?' · '+t.note:''}</div>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
-        <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmt$(t.amount,2)}</div>
+        <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmtNative(t.amount,bank.currency)}</div>
         <span class="row-del" data-edittxn="${t.id}" title="edit this transaction">✎</span>
         <span class="row-del" data-deltxn="${t.id}" title="delete this transaction">✕</span>
       </div>
@@ -635,12 +641,12 @@ function openBankDetailModal(bank, y, monthIdxArg){
       </div>
       <div class="modal-preview">
         <span class="label">${isCredit?'Owed':'Balance'} (${MONTHS[monthIdx]})</span>
-        <span class="value">${isCredit ? fmt$(Math.max(0,-balUsd),2) : fmt$(balUsd,2)}</span>
+        <span class="value">${isCredit ? fmtNative(Math.max(0,-bal),bank.currency) : fmtNative(bal,bank.currency)}</span>
       </div>
       ${!isCredit ? '' : (bank.creditLimit!=null && bank.creditLimit>0
-          ? `<div class="section-sub" style="margin:-8px 0 10px;">${fmt$(Math.max(0,bank.creditLimit-Math.max(0,-balUsd)),2)} available of ${fmt$(bank.creditLimit,0)} limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ edit limit</span></div>`
+          ? `<div class="section-sub" style="margin:-8px 0 10px;">${fmtNative(Math.max(0,bank.creditLimit-Math.max(0,-bal)),bank.currency)} available of ${fmtNative(bank.creditLimit,bank.currency)} limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ edit limit</span></div>`
           : `<div class="section-sub" style="margin:-8px 0 10px;">No preset limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ set a limit</span></div>`)}
-      ${delta===null ? '' : `<div class="section-sub" style="margin:4px 0 14px;">${delta>=0?'↑':'↓'} ${fmt$(Math.abs(delta),2)} vs ${MONTHS[monthIdx-1]}</div>`}
+      ${delta===null ? '' : `<div class="section-sub" style="margin:4px 0 14px;">${delta>=0?'↑':'↓'} ${fmtNative(Math.abs(delta),bank.currency)} vs ${MONTHS[monthIdx-1]}</div>`}
       <div style="max-height:220px; overflow-y:auto; margin-bottom:18px;">
         ${txnRows || `<div class="section-sub" style="text-align:center; padding:14px 0;">No transactions logged for ${MONTHS[monthIdx]} — anything you add here will show up in this list, each with an ✕ to remove it.</div>`}
       </div>
