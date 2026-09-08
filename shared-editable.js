@@ -16,12 +16,12 @@ function evalExpr(s){
   const f = parseFloat(cleaned);
   return isNaN(f) ? null : f;
 }
-function formatTip(raw){
+function formatTip(raw, currency){
   if(!raw) return null;
   const parts = raw.replace(/\s+/g,'').split('+').filter(Boolean);
   if(parts.length<2) return null;
   const total = parts.reduce((a,b)=>a+(parseFloat(b)||0),0);
-  return parts.join(' + ') + ' = ' + fmt$(total,2);
+  return parts.join(' + ') + ' = ' + fmtNative(total, currency);
 }
 
 function makeEditableRow(item, monthsToShow, opts){
@@ -29,6 +29,7 @@ function makeEditableRow(item, monthsToShow, opts){
   monthsToShow = monthsToShow || [0,1,2,3,4,5,6,7,8,9,10,11];
   if(!item.raw) item.raw = n12();
   if(item.notes===undefined) item.notes = '';
+  if(!item.currency) item.currency = 'USD';
   const locked = !!opts.locked;
   const cells = monthsToShow.map(i=>{
     const v = item.m[i];
@@ -37,7 +38,7 @@ function makeEditableRow(item, monthsToShow, opts){
     if(locked){
       return `<td class="locked-cell ${!val?'zero':''}" title="${(opts.lockedTip||'Auto-calculated').replace(/"/g,'&quot;')}">${displayVal===''?'–':displayVal}</td>`;
     }
-    const tip = formatTip(item.raw[i]);
+    const tip = formatTip(item.raw[i], item.currency);
     return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-field="m" data-idx="${i}" data-id="${item.id}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
   }).join('');
   const total = sumArr(item.m);
@@ -47,8 +48,9 @@ function makeEditableRow(item, monthsToShow, opts){
   return `<tr data-row-id="${item.id}">
     <td>${nameLabel} <span class="row-del" data-del="${item.id}" title="remove">✕</span></td>
     ${cells}
-    <td style="font-weight:600;">${fmt$(total,2)}</td>
+    <td style="font-weight:600;">${fmtNative(total, item.currency)}</td>
     <td class="editable notes-cell" contenteditable="true" data-field="notes" data-id="${item.id}">${item.notes||''}</td>
+    <td style="color:var(--text-dim); font-size:11px;">${item.currency}</td>
   </tr>`;
 }
 
@@ -89,7 +91,7 @@ function attachEditableHandlers(container, items, onChange, tabName){
       item.raw[idx] = hasBreakdown ? entered : null;
       td.textContent = v===null ? '–' : roundCents(v);
       td.classList.toggle('zero', !v);
-      const tip = formatTip(item.raw[idx]);
+      const tip = formatTip(item.raw[idx], item.currency);
       if(tip){ td.dataset.tip = tip; td.classList.add('has-tip'); }
       else { td.removeAttribute('data-tip'); td.classList.remove('has-tip'); }
       markDirty(tabName, {tab: tabName, action: 'edit', target: item.name, field: MONTHS[idx], oldVal: prevDisplay || 'empty', newVal: v});

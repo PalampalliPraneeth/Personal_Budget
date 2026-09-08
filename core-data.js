@@ -79,6 +79,20 @@ async function loadData(){
             if(!d.currency) d.currency = 'USD';
           });
         }
+        // Same migration for income sources and expense categories — these
+        // never had a currency field at all before, so every entry was
+        // silently treated as USD even when it was really an INR figure
+        // (e.g. an INR paycheck typed as "10000" got counted as $10,000).
+        // Defaulting missing currency to USD preserves existing totals
+        // exactly; going forward, new entries can be tagged INR.
+        if(DATA[y].income){
+          DATA[y].income.forEach(it=>{ if(!it.currency) it.currency = 'USD'; });
+        }
+        if(DATA[y].expenseGroups){
+          DATA[y].expenseGroups.forEach(g=>{
+            (g.categories||[]).forEach(c=>{ if(!c.currency) c.currency = 'USD'; });
+          });
+        }
         // Older saved data won't have these arrays yet at all.
         if(!DATA[y].savingsAccounts) DATA[y].savingsAccounts = [];
         if(!DATA[y].retirementAccounts) DATA[y].retirementAccounts = [];
@@ -475,6 +489,23 @@ function nativeMonthToUsd(v, currency, year, monthIdx){
   if(currency !== 'INR') return n;
   return n / fxRateForMonth(year, monthIdx);
 }
+/* General native-currency-to-native-currency conversion, routed through USD
+   as the common unit (same rate fxRateForMonth already uses everywhere
+   else). Needed anywhere a figure moves from ONE account's currency into
+   a DIFFERENT record that has its own (possibly different) currency — e.g.
+   an "Add money" transaction on an INR bank that's linked to an Income-tab
+   source, which might itself be USD or INR. Without this, linking always
+   copied the raw number across untouched, so ₹10,000 tagged as income
+   landed in the Income tab as a flat $10,000. */
+function convertCurrency(v, fromCurrency, toCurrency, year, monthIdx){
+  const from = fromCurrency || 'USD', to = toCurrency || 'USD';
+  const n = num(v);
+  if(from === to) return n;
+  const usd = nativeMonthToUsd(n, from, year, monthIdx);
+  if(to === 'USD') return roundCents(usd);
+  const rate = fxRateForMonth(year, monthIdx);
+  return roundCents(usd * rate);
+}
 /* Same idea for a full 12-slot monthly array — sums each month's own USD
    conversion rather than summing native values first and applying one
    blanket rate to the total. */
@@ -540,20 +571,26 @@ function monthRange(){
 }
 function yearData(y){ return DATA[y] || DATA[state.year]; }
 
-function groupTotals(group){ // sum across categories per month -> array[12]
+function groupTotals(group, y){ // sum across categories per month -> array[12], converted to USD
   const out = n12().map(()=>0);
-  group.categories.forEach(c=>{ c.m.forEach((v,i)=> out[i]+=num(v)); });
+  group.categories.forEach(c=>{
+    if(!c.currency) c.currency = 'USD';
+    c.m.forEach((v,i)=> out[i]+=nativeMonthToUsd(v, c.currency, y, i));
+  });
   return out;
 }
 function incomeTotals(y){
   const out = n12().map(()=>0);
-  yearData(y).income.forEach(c=> c.m.forEach((v,i)=> out[i]+=num(v)));
+  yearData(y).income.forEach(c=>{
+    if(!c.currency) c.currency = 'USD';
+    c.m.forEach((v,i)=> out[i]+=nativeMonthToUsd(v, c.currency, y, i));
+  });
   return out;
 }
 function expenseTotalsAllGroups(y){
   const out = n12().map(()=>0);
   yearData(y).expenseGroups.forEach(g=>{
-    const gt = groupTotals(g);
+    const gt = groupTotals(g, y);
     gt.forEach((v,i)=> out[i]+=v);
   });
   return out;
@@ -562,7 +599,7 @@ function expenseTotalsCounted(y){
   const out = n12().map(()=>0);
   yearData(y).expenseGroups.forEach(g=>{
     if(g.excludeFromTotal) return;
-    const gt = groupTotals(g);
+    const gt = groupTotals(g, y);
     gt.forEach((v,i)=> out[i]+=v);
   });
   return out;
@@ -571,7 +608,7 @@ function expenseTotalsExcluded(y){
   const out = n12().map(()=>0);
   yearData(y).expenseGroups.forEach(g=>{
     if(!g.excludeFromTotal) return;
-    const gt = groupTotals(g);
+    const gt = groupTotals(g, y);
     gt.forEach((v,i)=> out[i]+=v);
   });
   return out;

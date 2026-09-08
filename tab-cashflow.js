@@ -118,6 +118,13 @@ function stripAdditiveTerm(raw, term){
   if(raw === String(term)) return null;
   return null; // chain doesn't match exactly (e.g. hand-edited since) — safest fallback is to clear it
 }
+function linkDescription(category, name){
+  if(category==='income') return 'to '+name+' income';
+  if(category==='expense') return 'under '+name;
+  if(category==='debt') return 'toward '+name;
+  if(category==='investment') return 'into '+name;
+  return 'under '+name;
+}
 
 let cashflowFullYearView = false;
 
@@ -565,13 +572,34 @@ function reverseTransactionEffects(bank, y, txn){
       if(found.cat.raw) found.cat.raw[idx] = term>0 ? stripAdditiveTerm(found.cat.raw[idx], term) : null;
     }
   }
+  if(txn.category==='debt' && txn.refId){
+    const debt = (yearData(y).debts||[]).find(d=>d.id===txn.refId);
+    if(debt && debt.m){
+      const term = txn.refDelta!=null ? txn.refDelta : (txn.amount<0 ? Math.abs(txn.amount) : -Math.abs(txn.amount));
+      debt.m[idx] = roundCents(num(debt.m[idx]) - term);
+    }
+  }
+  if(txn.category==='investment' && txn.refId){
+    const invest = (yearData(y).investments||[]).find(inv=>inv.id===txn.refId);
+    if(invest && invest.m){
+      const term = txn.refDelta!=null ? txn.refDelta : txn.amount;
+      invest.m[idx] = roundCents(num(invest.m[idx]) - term);
+      invest.invested = roundCents(num(invest.invested) - term);
+      if(invest.investedRaw) invest.investedRaw = stripAdditiveTerm(invest.investedRaw, term);
+    }
+  }
 
   // 3. Reverse the paired leg of a transfer, and delete that mirrored transaction too.
+  //    Uses the MIRRORED transaction's own stored amount (already in the other
+  //    account's currency) rather than re-deriving it from this transaction's
+  //    amount, which is in THIS account's currency and may not match.
   if(txn.category==='transfer' && txn.transferPairBankId){
     const otherBank = (yearData(y).banks||[]).find(b=>b.id===txn.transferPairBankId);
     if(otherBank){
+      const mirrored = (otherBank.transactions||[]).find(t=>t.id===txn.transferPairTxnId);
+      const otherDelta = mirrored ? num(mirrored.amount) : -num(txn.amount); // fallback for older same-currency-only transactions
       if(otherBank.m && otherBank.m[idx]!=null){
-        otherBank.m[idx] = roundCents(num(otherBank.m[idx]) + num(txn.amount));
+        otherBank.m[idx] = roundCents(num(otherBank.m[idx]) - otherDelta);
       }
       otherBank.transactions = (otherBank.transactions||[]).filter(t=>t.id!==txn.transferPairTxnId);
     }
@@ -581,6 +609,8 @@ function reverseTransactionEffects(bank, y, txn){
 function deleteBankTransaction(bank, y, txn){
   const warnExtra = txn.category==='income' ? ' and that income entry'
     : txn.category==='expense' ? ' and that expense category'
+    : txn.category==='debt' ? ' and that debt\u2019s cleared amount'
+    : txn.category==='investment' ? ' and that investment\u2019s contribution total'
     : txn.category==='transfer' ? ' and the other account it moved to/from'
     : '';
   if(!confirm('Delete this transaction? This will undo its effect on the balance'+warnExtra+'.')) return;
@@ -614,7 +644,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
     .slice(0,10);
 
   const txnRows = txns.map(t=>{
-    const catLabel = t.category==='income' ? '💰 Income' : t.category==='expense' ? '🧾 Expense' : t.category==='transfer' ? '🔁 Transfer' : '📝 Other';
+    const catLabel = t.category==='income' ? '💰 Income' : t.category==='expense' ? '🧾 Expense' : t.category==='debt' ? '🏦 Debt' : t.category==='investment' ? '📈 Investment' : t.category==='transfer' ? '🔁 Transfer' : '📝 Other';
     const color = num(t.amount)>=0 ? 'var(--good)' : 'var(--danger)';
     return `<div class="bank-txn-row">
       <div class="bank-txn-main">
@@ -723,6 +753,8 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
   const isCredit = bank.type==='credit';
   const incomeSources = yearData(y).income || [];
   const expenseGroups = yearData(y).expenseGroups || [];
+  const debts = yearData(y).debts || [];
+  const investments = yearData(y).investments || [];
   const otherAccounts = (yearData(y).banks||[]).filter(b=>b.id!==bank.id);
   const hasCreditDestination = otherAccounts.some(b=>b.type==='credit');
   const today = new Date();
@@ -778,6 +810,8 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
         <select id="amCategory" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
           <option value="income" ${prefillCategory==='income'?'selected':''}>💰 Income (adds to your Income tab too)</option>
           <option value="expense" ${prefillCategory==='expense'?'selected':''}>${expenseLabel}</option>
+          <option value="debt" ${prefillCategory==='debt'?'selected':''}>🏦 Debt payment (also clears it on the Debt tab)</option>
+          <option value="investment" ${prefillCategory==='investment'?'selected':''}>📈 Investment (adds to that holding too)</option>
           <option value="transfer" ${prefillCategory==='transfer'?'selected':''}>${transferLabel}</option>
           <option value="other" ${prefillCategory==='other'?'selected':''}>${otherLabel}</option>
         </select>
@@ -792,6 +826,28 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       <div class="modal-field" id="amNewIncomeNameWrap" style="display:none;">
         <label>New income source name</label>
         <input type="text" id="amNewIncomeName" placeholder="e.g. Paycheck, Freelance, Side gig…">
+      </div>
+      <div class="modal-field" id="amDebtWrap">
+        <label>Which debt? <span class="hint">uses the month from the date above</span></label>
+        <select id="amDebt" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          ${debts.map(d=>`<option value="${d.id}" ${isEdit && editingTxn.category==='debt' && editingTxn.refId===d.id?'selected':''}>${d.name}</option>`).join('')}
+          <option value="__new__">+ New debt…</option>
+        </select>
+      </div>
+      <div class="modal-field" id="amNewDebtNameWrap" style="display:none;">
+        <label>New debt name</label>
+        <input type="text" id="amNewDebtName" placeholder="e.g. Car loan, Student loan…">
+      </div>
+      <div class="modal-field" id="amInvestWrap">
+        <label>Which investment? <span class="hint">uses the month from the date above</span></label>
+        <select id="amInvest" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          ${investments.map(inv=>`<option value="${inv.id}" ${isEdit && editingTxn.category==='investment' && editingTxn.refId===inv.id?'selected':''}>${inv.name}</option>`).join('')}
+          <option value="__new__">+ New investment…</option>
+        </select>
+      </div>
+      <div class="modal-field" id="amNewInvestNameWrap" style="display:none;">
+        <label>New investment name</label>
+        <input type="text" id="amNewInvestName" placeholder="e.g. Zerodha, Vanguard, Real Estate…">
       </div>
       <div class="modal-field" id="amExpenseGroupWrap">
         <label>Which group?</label>
@@ -845,6 +901,12 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
   const incomeSrcWrap = overlay.querySelector('#amIncomeSrcWrap');
   const incomeSrcSelect = overlay.querySelector('#amIncomeSrc');
   const newIncomeNameWrap = overlay.querySelector('#amNewIncomeNameWrap');
+  const debtWrap = overlay.querySelector('#amDebtWrap');
+  const debtSelect = overlay.querySelector('#amDebt');
+  const newDebtNameWrap = overlay.querySelector('#amNewDebtNameWrap');
+  const investWrap = overlay.querySelector('#amInvestWrap');
+  const investSelect = overlay.querySelector('#amInvest');
+  const newInvestNameWrap = overlay.querySelector('#amNewInvestNameWrap');
   const expenseGroupWrap = overlay.querySelector('#amExpenseGroupWrap');
   const expenseGroupSelect = overlay.querySelector('#amExpenseGroup');
   const newExpenseGroupNameWrap = overlay.querySelector('#amNewExpenseGroupNameWrap');
@@ -882,6 +944,8 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     if(cat==='expense'){ depositLabel = 'Refund received (+)'; withdrawLabel = 'Purchase / spent (−)'; defaultDir = 'withdraw'; }
     else if(cat==='transfer'){ depositLabel = 'Received from the other account (+)'; withdrawLabel = 'Sent to the other account (−)'; defaultDir = 'withdraw'; }
     else if(cat==='income'){ depositLabel = 'Received (+)'; withdrawLabel = 'Correction (−)'; defaultDir = 'deposit'; }
+    else if(cat==='debt'){ depositLabel = 'Refund / correction (+)'; withdrawLabel = 'Payment made (−)'; defaultDir = 'withdraw'; }
+    else if(cat==='investment'){ depositLabel = 'Contributed (+)'; withdrawLabel = 'Withdrew / sold (−)'; defaultDir = 'deposit'; }
     directionSelect.options[0].textContent = depositLabel;
     directionSelect.options[1].textContent = withdrawLabel;
     if(!directionTouched) directionSelect.value = defaultDir;
@@ -898,6 +962,12 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     newExpenseGroupNameWrap.style.display = addingNewGroup ? 'block' : 'none';
     newExpenseNameWrap.style.display = (cat==='expense' && expenseCatSelect.value==='__new__') ? 'block' : 'none';
 
+    debtWrap.style.display = cat==='debt' ? 'block' : 'none';
+    newDebtNameWrap.style.display = (cat==='debt' && debtSelect.value==='__new__') ? 'block' : 'none';
+
+    investWrap.style.display = cat==='investment' ? 'block' : 'none';
+    newInvestNameWrap.style.display = (cat==='investment' && investSelect.value==='__new__') ? 'block' : 'none';
+
     transferWrap.style.display = cat==='transfer' ? 'block' : 'none';
 
     otherModeWrap.style.display = cat==='other' ? 'block' : 'none';
@@ -911,6 +981,8 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
   categorySelect.addEventListener('change', syncVisibility);
   incomeSrcSelect.addEventListener('change', syncVisibility);
   expenseCatSelect.addEventListener('change', syncVisibility);
+  debtSelect.addEventListener('change', syncVisibility);
+  investSelect.addEventListener('change', syncVisibility);
   otherModeSelect.addEventListener('change', syncVisibility);
   syncVisibility();
 
@@ -978,13 +1050,16 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     // 2. If tagged Income, ADD to that income source's month too, extending its
     //    hover breakdown chain (e.g. "1000+200" → "1000+200+1000") instead of
     //    wiping it, so the newest top-up is visible on hover just like manual edits.
+    //    Converted from THIS bank's currency into the income source's own
+    //    currency first — otherwise a ₹10,000 deposit on an INR bank landed
+    //    in the (USD-assumed) Income tab as a flat $10,000.
     if(category==='income' && amount>0){
       let srcId = incomeSrcSelect.value;
       const incomeList = yearData(y).income;
       if(srcId==='__new__'){
         const newName = overlay.querySelector('#amNewIncomeName').value.trim();
         if(!newName){ overlay.querySelector('#amNewIncomeName').focus(); return; }
-        const newSrc = {id:uid(), name:newName, m:n12(), raw:n12()};
+        const newSrc = {id:uid(), name:newName, m:n12(), raw:n12(), currency: bank.currency || 'USD'};
         incomeList.push(newSrc);
         srcId = newSrc.id;
         linkedName = newName;
@@ -992,16 +1067,19 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       const src = incomeList.find(s=>s.id===srcId);
       if(src){
         if(!src.raw) src.raw = n12();
+        if(!src.currency) src.currency = 'USD';
+        const amountInSrcCurrency = convertCurrency(amount, bank.currency, src.currency, y, monthIdx);
         const prevVal = num(src.m[monthIdx]);
-        src.m[monthIdx] = roundCents(prevVal + amount);
-        src.raw[monthIdx] = appendAdditiveTerm(src.raw[monthIdx], prevVal, amount);
-        refType = 'income'; refId = srcId; refDelta = amount;
+        src.m[monthIdx] = roundCents(prevVal + amountInSrcCurrency);
+        src.raw[monthIdx] = appendAdditiveTerm(src.raw[monthIdx], prevVal, amountInSrcCurrency);
+        refType = 'income'; refId = srcId; refDelta = amountInSrcCurrency;
         linkedName = linkedName || src.name;
       }
     }
 
     // 3. If tagged Expense, ADD (or, on a refund, subtract) from that category's
     //    month too — same breakdown-chain treatment on a genuine purchase.
+    //    Same cross-currency conversion as the Income link above.
     if(category==='expense'){
       let groupId = expenseGroupSelect.value;
       let groups = yearData(y).expenseGroups;
@@ -1018,7 +1096,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       if(catId==='__new__'){
         const newCatName = overlay.querySelector('#amNewExpenseName').value.trim();
         if(!newCatName){ overlay.querySelector('#amNewExpenseName').focus(); return; }
-        const newCat = {id:uid(), name:newCatName, m:n12(), raw:n12(), notes:''};
+        const newCat = {id:uid(), name:newCatName, m:n12(), raw:n12(), notes:'', currency: bank.currency || 'USD'};
         group.categories.push(newCat);
         catId = newCat.id;
         linkedName = newCatName;
@@ -1028,9 +1106,11 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
         const cat = found.cat;
         if(!cat.m) cat.m = n12();
         if(!cat.raw) cat.raw = n12();
+        if(!cat.currency) cat.currency = 'USD';
+        const amountInCatCurrency = convertCurrency(amount, bank.currency, cat.currency, y, monthIdx);
         const prevVal = num(cat.m[monthIdx]);
         // Purchase/withdraw (amount<0) adds spend. Refund/deposit (amount>0) removes spend.
-        const delta = amount<0 ? Math.abs(amount) : -Math.abs(amount);
+        const delta = amountInCatCurrency<0 ? Math.abs(amountInCatCurrency) : -Math.abs(amountInCatCurrency);
         cat.m[monthIdx] = roundCents(prevVal + delta);
         cat.raw[monthIdx] = delta>0 ? appendAdditiveTerm(cat.raw[monthIdx], prevVal, delta) : null;
         refType = 'expense'; refId = catId; refDelta = delta;
@@ -1038,20 +1118,82 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       }
     }
 
-    // 4. If tagged Transfer, apply the opposite delta to the other account,
-    //    and log a mirrored transaction there so either side can be deleted cleanly.
+    // 3b. If tagged Debt payment, ADD (or, on a refund/correction, subtract)
+    //     from that debt's month too — same pattern as Expense above, and the
+    //     same cross-currency conversion (a payment from an INR bank toward a
+    //     USD-denominated loan converts first).
+    if(category==='debt'){
+      const debtList = yearData(y).debts || (yearData(y).debts = []);
+      let debtId = debtSelect.value;
+      if(debtId==='__new__'){
+        const newDebtName = overlay.querySelector('#amNewDebtName').value.trim();
+        if(!newDebtName){ overlay.querySelector('#amNewDebtName').focus(); return; }
+        const newDebt = {id:uid(), name:newDebtName, total:0, cleared:0, interest:0, emi:0, currency: bank.currency || 'USD', m:n12()};
+        debtList.push(newDebt);
+        debtId = newDebt.id;
+        linkedName = newDebtName;
+      }
+      const debt = debtList.find(d=>d.id===debtId);
+      if(debt){
+        if(!debt.m) debt.m = n12();
+        if(!debt.currency) debt.currency = 'USD';
+        const amountInDebtCurrency = convertCurrency(amount, bank.currency, debt.currency, y, monthIdx);
+        const prevVal = num(debt.m[monthIdx]);
+        // Withdraw (amount<0) = a payment made, raises what's cleared. Deposit (amount>0) = a refund/correction, lowers it.
+        const delta = amountInDebtCurrency<0 ? Math.abs(amountInDebtCurrency) : -Math.abs(amountInDebtCurrency);
+        debt.m[monthIdx] = roundCents(prevVal + delta);
+        refType = 'debt'; refId = debtId; refDelta = delta;
+        linkedName = linkedName || debt.name;
+      }
+    }
+
+    // 3c. If tagged Investment, ADD (or, on a withdrawal/sale, subtract) from
+    //     that holding's month AND its running "Invested" total — again
+    //     converted from this bank's currency into the investment's own.
+    if(category==='investment'){
+      const investList = yearData(y).investments || (yearData(y).investments = []);
+      let investId = investSelect.value;
+      if(investId==='__new__'){
+        const newInvestName = overlay.querySelector('#amNewInvestName').value.trim();
+        if(!newInvestName){ overlay.querySelector('#amNewInvestName').focus(); return; }
+        const newInvest = {id:uid(), name:newInvestName, category:'Other', currency: bank.currency || 'USD', m:n12(), currentValue:0, invested:0};
+        investList.push(newInvest);
+        investId = newInvest.id;
+        linkedName = newInvestName;
+      }
+      const invest = investList.find(inv=>inv.id===investId);
+      if(invest){
+        if(!invest.m) invest.m = n12();
+        if(!invest.currency) invest.currency = 'USD';
+        const amountInInvCurrency = convertCurrency(amount, bank.currency, invest.currency, y, monthIdx);
+        const prevMonthVal = num(invest.m[monthIdx]);
+        invest.m[monthIdx] = roundCents(prevMonthVal + amountInInvCurrency);
+        const prevInvested = num(invest.invested);
+        invest.invested = roundCents(prevInvested + amountInInvCurrency);
+        invest.investedRaw = appendAdditiveTerm(invest.investedRaw, prevInvested, amountInInvCurrency);
+        refType = 'investment'; refId = investId; refDelta = amountInInvCurrency;
+        linkedName = linkedName || invest.name;
+      }
+    }
+
+    // 4. If tagged Transfer, apply the opposite delta to the other account —
+    //    converted into THAT account's own currency, since the two sides of
+    //    a transfer can be denominated differently (e.g. moving money from
+    //    an INR bank to a USD one) — and log a mirrored transaction there
+    //    (in its own currency) so either side can be deleted cleanly.
     const txnId = uid();
     if(category==='transfer'){
       transferBankId = overlay.querySelector('#amTransferBank').value;
       const otherBank = otherAccounts.find(b=>b.id===transferBankId);
       if(otherBank){
         if(!otherBank.m) otherBank.m = n12();
-        otherBank.m[monthIdx] = roundCents(num(otherBank.m[monthIdx]) - amount);
+        const amountInOtherCurrency = convertCurrency(amount, bank.currency, otherBank.currency, y, monthIdx);
+        otherBank.m[monthIdx] = roundCents(num(otherBank.m[monthIdx]) - amountInOtherCurrency);
         otherBank.lastUpdatedAt = Date.now();
         transferPairTxnId = uid();
         if(!otherBank.transactions) otherBank.transactions = [];
         otherBank.transactions.push({
-          id: transferPairTxnId, date: dateStr, amount: -amount, category:'transfer',
+          id: transferPairTxnId, date: dateStr, amount: -amountInOtherCurrency, category:'transfer',
           note: (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+bank.name, userNote: note,
           monthIdx, transferPairBankId: bank.id, transferPairTxnId: txnId
         });
@@ -1075,11 +1217,11 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     renderCashFlow();
 
     if(isSetMode){
-      showToast(bank.name+' '+(isCredit?'owed balance set to '+fmt$(Math.abs(bank.m[monthIdx]),2):'balance set to '+fmt$(bank.m[monthIdx],2)));
+      showToast(bank.name+' '+(isCredit?'owed balance set to '+fmtNative(Math.abs(bank.m[monthIdx]),bank.currency):'balance set to '+fmtNative(bank.m[monthIdx],bank.currency)));
     } else if(isEdit){
-      showToast('Transaction updated — '+bank.name+' now '+(amount>=0?'+':'')+fmt$(Math.abs(amount),2)+(linkedName && category!=='transfer'?' · '+(category==='income'?'to '+linkedName+' income':'under '+linkedName):''));
+      showToast('Transaction updated — '+bank.name+' now '+(amount>=0?'+':'')+fmtNative(Math.abs(amount),bank.currency)+(linkedName && category!=='transfer'?' · '+linkDescription(category, linkedName):''));
     } else {
-      showToast((amount>=0?'+':'')+fmt$(Math.abs(amount),2)+' '+(amount>=0?'added to':'withdrawn from')+' '+bank.name+(linkedName && category!=='transfer'?' · '+(category==='income'?'added to '+linkedName+' income':'logged under '+linkedName):''));
+      showToast((amount>=0?'+':'')+fmtNative(Math.abs(amount),bank.currency)+' '+(amount>=0?'added to':'withdrawn from')+' '+bank.name+(linkedName && category!=='transfer'?' · '+linkDescription(category, linkedName):''));
     }
     if(isEdit) openBankDetailModal(bank, y, monthIdx); // return to the transaction list, refreshed
   });

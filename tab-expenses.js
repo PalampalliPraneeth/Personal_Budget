@@ -30,7 +30,7 @@ function renderExpenses(){
   // Data for the pie chart (current scope only, excludes "counted out" groups)
   let pieGroups = groups
     .filter(g => !g.excludeFromTotal)
-    .map(g => ({ name: g.name, total: sumRange(groupTotals(g), scopeMonths) }))
+    .map(g => ({ name: g.name, total: sumRange(groupTotals(g, y), scopeMonths) }))
     .filter(g => g.total > 0)
     .sort((a,b) => b.total - a.total);
   // Add debt payments as a category in pie chart if any
@@ -44,7 +44,7 @@ function renderExpenses(){
   const lastUpdated = yearData(y).expensesLastUpdated;
 
   let groupsHtml = groups.map((g, gi)=>{
-    const totalsAll = groupTotals(g);
+    const totalsAll = groupTotals(g, y);
     const totalsShown = monthsToShow.map(i=>totalsAll[i]);
     const collapsed = collapsedGroups[g.id];
     const isEditing = editingGroupId === g.id;
@@ -73,15 +73,19 @@ function renderExpenses(){
       <div class="group-body">
         <div class="table-scroll">
           <table class="ledger">
-            <thead><tr><th>Category</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Notes</th></tr></thead>
+            <thead><tr><th>Category</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Notes</th><th>Currency</th></tr></thead>
             <tbody id="grpbody-${g.id}">
               ${g.categories.map(c=>makeEditableRow(c, monthsToShow)).join('')}
-              <tr class="total-row"><td>Total</td>${totalsShown.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totalsAll))}</td><td></td></tr>
+              <tr class="total-row"><td>Total</td>${totalsShown.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totalsAll))}</td><td></td><td></td></tr>
             </tbody>
           </table>
         </div>
         <div class="addcat-row">
           <input type="text" placeholder="New category in ${g.name}…" data-newcat="${g.id}">
+          <select data-newcatcurrency="${g.id}" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+            <option value="USD">USD</option>
+            <option value="INR">INR</option>
+          </select>
           <button class="btn small" data-addcat="${g.id}">+ Add category</button>
         </div>
       </div>
@@ -102,7 +106,7 @@ function renderExpenses(){
     return `<tr data-debt-id="${d.id}">
       <td>${d.name} ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
       ${cells}
-      <td style="font-weight:600;">${fmt$(sumArr(d.m),2)}</td>
+      <td style="font-weight:600;">${fmtNative(sumArr(d.m), d.currency)}</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}" style="cursor:pointer;">${d.interest}</b>%</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="emi" data-id="${d.id}" style="cursor:pointer;">${d.emi||0}</b></td>
       <td><span class="row-del" data-deldebt="${d.id}" title="remove debt" style="cursor:pointer;">✕</span></td>
@@ -176,6 +180,10 @@ function renderExpenses(){
       <div class="card-head"><h3>Add a new expense group</h3></div>
       <div class="addcat-row">
         <input type="text" id="newGroupName" placeholder="e.g. Pets, Childcare, Side Hustle…">
+        <select id="newGroupCurrency" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+          <option value="USD">USD</option>
+          <option value="INR">INR</option>
+        </select>
         <button class="btn primary small" id="addGroupBtn">+ Add group</button>
       </div>
     </div>
@@ -192,6 +200,10 @@ function renderExpenses(){
         <input type="text" id="newDebtNameExp" placeholder="New loan / debt name…">
         <input type="number" id="newDebtTotalExp" placeholder="Total owed" style="width:110px;">
         <input type="number" id="newDebtInterestExp" placeholder="Interest %" step="0.1" style="width:90px;">
+        <select id="newDebtCurrencyExp" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+          <option value="USD">USD</option>
+          <option value="INR">INR</option>
+        </select>
         <button class="btn primary small" id="addDebtExpBtn">+ Add debt</button>
       </div>
     </div>
@@ -268,6 +280,7 @@ function renderExpenses(){
     const nameInp = document.getElementById('newDebtNameExp');
     const totalInp = document.getElementById('newDebtTotalExp');
     const intInp = document.getElementById('newDebtInterestExp');
+    const currencySel = document.getElementById('newDebtCurrencyExp');
     const name = nameInp.value.trim();
     if(!name){ nameInp.focus(); return; }
     
@@ -277,7 +290,7 @@ function renderExpenses(){
       cleared:0,
       interest: parseFloat(intInp.value)||0,
       emi:0,
-      currency:'USD',
+      currency: currencySel.value || 'USD',
       m:n12()
     });
     
@@ -361,18 +374,21 @@ function renderExpenses(){
     btn.addEventListener('click', ()=>{
       const gid = btn.dataset.addcat;
       const inp = document.querySelector(`[data-newcat="${gid}"]`);
+      const currencySel = document.querySelector(`[data-newcatcurrency="${gid}"]`);
       const name = inp.value.trim();
       if(!name){ inp.focus(); return; }
       const g = groups.find(x=>x.id===gid);
-      g.categories.push({id:uid(), name, m:n12(), raw:n12(), notes:''});
+      g.categories.push({id:uid(), name, m:n12(), raw:n12(), notes:'', currency: (currencySel && currencySel.value) || 'USD'});
       markDirty(); renderExpenses();
     });
   });
   document.getElementById('addGroupBtn').addEventListener('click', ()=>{
     const inp = document.getElementById('newGroupName');
+    const currencySel = document.getElementById('newGroupCurrency');
     const name = inp.value.trim();
     if(!name){ inp.focus(); return; }
-    groups.push({id:uid(), name, excludeFromTotal:/credit card/i.test(name), categories:[{id:uid(), name:'General', m:n12(), raw:n12(), notes:''}]});
+    const currency = (currencySel && currencySel.value) || 'USD';
+    groups.push({id:uid(), name, excludeFromTotal:/credit card/i.test(name), categories:[{id:uid(), name:'General', m:n12(), raw:n12(), notes:'', currency}]});
     markDirty(); renderExpenses();
   });
 

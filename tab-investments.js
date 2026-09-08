@@ -1,7 +1,15 @@
 /* =========================================================================
    INVESTMENTS TAB  —  with live USD/INR conversion
    ========================================================================= */
+/* Built-in categories are always shown first, in this order. Custom ones the
+   user adds (e.g. "Real Estate") live in DATA.customInvestCategories — a
+   top-level list (not per-year) since a category taxonomy naturally spans
+   years, same as the built-ins do. */
 const INVEST_CATS = ['Indian Stocks','US Stocks','Crypto','Angel Investing','Other'];
+function allInvestCategories(){
+  if(!DATA.customInvestCategories) DATA.customInvestCategories = [];
+  return INVEST_CATS.concat(DATA.customInvestCategories.filter(c=>!INVEST_CATS.includes(c)));
+}
 
 /* ---------- FX helpers ---------- */
 let fxRates = null;
@@ -138,7 +146,8 @@ function renderInvestments(){
   });
 
   const items = [...yearData(y).investments].sort((a,b)=>{
-    const ai = INVEST_CATS.indexOf(a.category), bi = INVEST_CATS.indexOf(b.category);
+    const cats = allInvestCategories();
+    const ai = cats.indexOf(a.category), bi = cats.indexOf(b.category);
     return (ai===-1?99:ai) - (bi===-1?99:bi);
   });
 
@@ -229,7 +238,8 @@ function renderInvestments(){
       <td>${nameLink} <span class="row-del" data-del="${it.id}">✕</span></td>
       <td>
         <select data-catsel="${it.id}" style="background:var(--bg-card-hi); color:var(--gold-soft); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11.5px; padding:3px 4px;">
-          ${INVEST_CATS.map(c => `<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}
+          ${allInvestCategories().map(c => `<option value="${c}" ${it.category===c?'selected':''}>${c}</option>`).join('')}
+          <option value="__new__">+ New category…</option>
         </select>
       </td>
       <td>
@@ -287,6 +297,10 @@ function renderInvestments(){
       </div>
       <div class="addcat-row">
         <input type="text" id="newInvestName" placeholder="New holding name…">
+        <select id="newInvestCategory" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+          ${allInvestCategories().map(c=>`<option value="${c}">${c}</option>`).join('')}
+          <option value="__new__">+ New category…</option>
+        </select>
         <button class="btn primary small" id="addInvestBtn">+ Add holding</button>
       </div>
     </div>
@@ -351,7 +365,16 @@ function renderInvestments(){
   document.getElementById('investBody').querySelectorAll('[data-catsel]').forEach(sel=>{
     sel.addEventListener('change', ()=>{
       const item = items.find(x=>x.id===sel.dataset.catsel);
-      item.category = sel.value;
+      if(sel.value==='__new__'){
+        const name = prompt('New investment category name (e.g. Real Estate, Gold, NFTs)…');
+        const trimmed = (name||'').trim();
+        if(!trimmed){ renderInvestments(); return; } // cancelled — snap the dropdown back
+        if(!DATA.customInvestCategories) DATA.customInvestCategories = [];
+        if(!allInvestCategories().includes(trimmed)) DATA.customInvestCategories.push(trimmed);
+        item.category = trimmed;
+      } else {
+        item.category = sel.value;
+      }
       if (item.category==='Indian Stocks' && !item.currency) item.currency = 'INR';
       markDirty(); renderInvestments();
     });
@@ -377,11 +400,21 @@ function renderInvestments(){
 
   document.getElementById('addInvestBtn').addEventListener('click', ()=>{
     const inp = document.getElementById('newInvestName');
+    const catSel = document.getElementById('newInvestCategory');
     const name = inp.value.trim();
     if (!name){ inp.focus(); return; }
-    const isIndian = /india|zerodha|groww|angel/i.test(name);
+    let category = catSel.value;
+    if(category==='__new__'){
+      const newCat = prompt('New investment category name (e.g. Real Estate, Gold, NFTs)…');
+      const trimmed = (newCat||'').trim();
+      if(!trimmed){ return; } // cancelled — leave the form as-is, don't add a holding with no category
+      if(!DATA.customInvestCategories) DATA.customInvestCategories = [];
+      if(!allInvestCategories().includes(trimmed)) DATA.customInvestCategories.push(trimmed);
+      category = trimmed;
+    }
+    const isIndian = /india|zerodha|groww|angel/i.test(name) || category==='Indian Stocks' || category==='Angel Investing';
     yearData(y).investments.push({
-      id: uid(), name, category: isIndian ? 'Indian Stocks' : 'Other',
+      id: uid(), name, category,
       currency: isIndian ? 'INR' : 'USD',
       m: n12(), currentValue: 0, invested: 0
     });

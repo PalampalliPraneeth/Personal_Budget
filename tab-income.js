@@ -16,6 +16,7 @@ function syncAutoIncomeRows(y){
     if((it.name||'').trim().toLowerCase()==='retirement'){
       it.m = retTotals.map(v=>roundCents(num(v)));
       it.raw = n12();
+      it.currency = 'USD'; // retirementSelfContribTotals() already returns USD-converted figures
     }
   });
 }
@@ -39,18 +40,22 @@ function renderIncome(){
       <div class="card-head"><h3>Income sources</h3><span class="section-sub" style="margin:0;">Year total: <b style="color:var(--gold-soft)">${fmt$(sumArr(totals),2)}</b></span></div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Source</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Notes</th></tr></thead>
+          <thead><tr><th>Source</th>${monthHeaderCells(monthsToShow)}<th>Year</th><th>Notes</th><th>Currency</th></tr></thead>
           <tbody id="incomeBody">
             ${items.map(it=>{
               const isAutoRetirement = (it.name||'').trim().toLowerCase()==='retirement';
               return makeEditableRow(it, monthsToShow, isAutoRetirement ? {locked:true, lockedTip:'Auto-filled from Savings → Retirement → "Your contributions" — edit it there, not here.'} : undefined);
             }).join('')}
-            <tr class="total-row"><td>Total</td>${totalsShown.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totals))}</td><td></td></tr>
+            <tr class="total-row"><td>Total</td>${totalsShown.map(t=>`<td>${fmt$(t)}</td>`).join('')}<td>${fmt$(sumArr(totals))}</td><td></td><td></td></tr>
           </tbody>
         </table>
       </div>
       <div class="addcat-row">
         <input type="text" id="newIncomeName" placeholder="New income source name…">
+        <select id="newIncomeCurrency" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
+          <option value="USD">USD</option>
+          <option value="INR">INR</option>
+        </select>
         <button class="btn primary small" id="addIncomeBtn">+ Add income source</button>
       </div>
     </div>
@@ -69,9 +74,10 @@ function renderIncome(){
 
   document.getElementById('addIncomeBtn').addEventListener('click', ()=>{
     const inp = document.getElementById('newIncomeName');
+    const currencySel = document.getElementById('newIncomeCurrency');
     const name = inp.value.trim();
     if(!name){ inp.focus(); return; }
-    items.push({id:uid(), name, m:n12()});
+    items.push({id:uid(), name, m:n12(), currency: currencySel.value || 'USD'});
     markDirty(); renderIncome();
   });
 
@@ -79,7 +85,9 @@ function renderIncome(){
   charts.incomeTrend = safeChart(document.getElementById('chartIncomeTrend'), {
     type:'line',
     data:{ labels:MONTHS, datasets: items.map((it,i)=>({
-      label: it.name, data: it.m, borderColor: PALETTE[i%PALETTE.length], backgroundColor:'transparent', tension:.3, spanGaps:true
+      // Charted in USD so every source shares one axis — a raw INR figure
+      // plotted next to a raw USD figure would silently mislead here.
+      label: it.name, data: it.m.map((v,mi)=>nativeMonthToUsd(v, it.currency, y, mi)), borderColor: PALETTE[i%PALETTE.length], backgroundColor:'transparent', tension:.3, spanGaps:true
     })).concat([{label:'Total', data:totals, borderColor:'#EEE7D8', borderDash:[4,3], tension:.3}]) },
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{legend:{labels:{boxWidth:10,boxHeight:10, font:{size:10}}}},
