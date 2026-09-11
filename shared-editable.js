@@ -42,9 +42,10 @@ function makeEditableRow(item, monthsToShow, opts){
     return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-field="m" data-idx="${i}" data-id="${item.id}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
   }).join('');
   const total = sumArr(item.m);
+  const safeName = (item.name||'').replace(/"/g,'&quot;');
   const nameLabel = locked
-    ? `${item.name} <span class="tag-auto" title="${(opts.lockedTip||'Auto-calculated').replace(/"/g,'&quot;')}">🔗 auto</span>`
-    : item.name;
+    ? `<span class="ledger-name-text" title="${safeName}">${item.name}</span> <span class="tag-auto" title="${(opts.lockedTip||'Auto-calculated').replace(/"/g,'&quot;')}">🔗 auto</span>`
+    : `<span class="ledger-name-text" title="${safeName}">${item.name}</span>`;
   return `<tr data-row-id="${item.id}">
     <td>${nameLabel} <span class="row-del" data-del="${item.id}" title="remove">✕</span></td>
     ${cells}

@@ -95,7 +95,7 @@ function renderExpenses(){
   const activeDebts = debts.filter(d => debtPendingCalc(d) > 0);
   const paidOffDebts = debts.filter(d => debtPendingCalc(d) <= 0);
 
-  function debtRowHtml(d){
+  function debtRowHtml(d, extraClass){
     const cells = monthsToShow.map(i=>{
       const v = d.m[i];
       const val = v===null||v===undefined ? '' : v;
@@ -103,8 +103,8 @@ function renderExpenses(){
       const tip = monthCellFxTip(v, d.currency, y, i);
       return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
     }).join('');
-    return `<tr data-debt-id="${d.id}">
-      <td>${d.name} ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
+    return `<tr data-debt-id="${d.id}" class="${extraClass||''}">
+      <td><span class="ledger-name-text" title="${(d.name||'').replace(/"/g,'&quot;')}">${d.name}</span> ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
       ${cells}
       <td style="font-weight:600;">${fmtNative(sumArr(d.m), d.currency)}</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}" style="cursor:pointer;">${d.interest}</b>%</td>
@@ -113,8 +113,14 @@ function renderExpenses(){
     </tr>`;
   }
 
-  const activeDebtRows = activeDebts.map(debtRowHtml).join('');
-  const paidOffRows = paidOffDebts.map(debtRowHtml).join('');
+  const activeDebtRows = activeDebts.map(d=>debtRowHtml(d)).join('');
+  // Paid-off rows are plain sibling <tr>s in the SAME <table> (tagged
+  // .paid-off-row for the show/hide CSS below) — NOT a nested <table> inside
+  // a colspan cell. A nested table gets its own independently-computed
+  // column widths, so its Jan/Feb/Mar/... cells never lined up with the
+  // header or the active-debt rows above it, which is exactly the
+  // misalignment this was causing.
+  const paidOffRows = paidOffDebts.map(d=>debtRowHtml(d,'paid-off-row')).join('');
 
   // Total row — sums every loan's payments in USD (converting any INR-currency
   // debts first) so the row is never a mix of currencies.
@@ -132,11 +138,7 @@ function renderExpenses(){
         <span class="g-caret" style="transition:transform .18s ease;">▾</span> Paid Off (${paidOffDebts.length} loan${paidOffDebts.length===1?'':'s'})
       </span>
     </td></tr>
-    <tr class="paid-off-row"><td colspan="${monthsToShow.length + 5}" style="padding:0;border:none;">
-      <table class="ledger" style="width:100%;border-collapse:collapse;">
-        <tbody>${paidOffRows}</tbody>
-      </table>
-    </td></tr>
+    ${paidOffRows}
   ` : '');
 
   const html = `

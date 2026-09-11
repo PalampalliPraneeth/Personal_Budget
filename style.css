@@ -153,7 +153,7 @@ a{color:var(--gold-soft);}
   .sidebar.collapsed .sidebar-brand{ justify-content:flex-start; padding:20px 18px 16px; }
   .sidebar.collapsed .side-nav .tab-btn{ justify-content:flex-start; padding:10px 12px; border-radius:0 8px 8px 0; }
   .sidebar.mobile-open{ transform:translateX(0); }
-  .sidebar-collapse-btn{ display:none; } /* collapsing doesn't make sense for an overlay drawer â€” close it instead */
+  .sidebar-collapse-btn{ display:none; } /* collapsing doesn't make sense for an overlay drawer Ã¢â‚¬â€ close it instead */
   .main-col{ width:100%; }
   .wrap{ padding-top:64px; } /* room for the fixed hamburger button */
 }
@@ -415,6 +415,13 @@ table.ledger th{
 table.ledger th:first-child{text-align:left;}
 table.ledger td{padding:7px 8px; text-align:right; border-bottom:1px solid var(--line-soft); white-space:nowrap; color:var(--text);}
 table.ledger td:first-child{text-align:left; font-family:var(--font-body); color:var(--text); white-space:normal; min-width:180px;}
+table.ledger td{vertical-align:middle;}
+/* Every row's height should come from the same source (line-height + padding),
+   never from how long one category's name happens to be â€” a 2-line name
+   made just that row taller than its neighbors, which is what looked like
+   the grid "not lining up" row to row. Truncating the name with an ellipsis
+   (full name still available on hover) keeps every row exactly one line. */
+.ledger-name-text{ display:inline-block; max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
 table.ledger tr.total-row td{font-weight:700; color:var(--gold-soft); border-top:1px solid var(--line); border-bottom:2px solid var(--line);}
 table.ledger tr:hover td{background:rgba(201,169,97,0.04);}
 table.ledger td.editable{cursor:text; border-radius:4px;}

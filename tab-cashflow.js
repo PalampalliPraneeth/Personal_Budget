@@ -323,7 +323,7 @@ function renderCashFlow(){
       }).join('');
       const total = sumArr(b.m||[]);
       return `<tr data-bank-id="${b.id}">
-        <td style="font-weight:600;">${b.name} <span class="row-del" data-delbank="${b.id}">✕</span></td>
+        <td style="font-weight:600;"><span class="ledger-name-text" title="${(b.name||'').replace(/"/g,'&quot;')}">${b.name}</span> <span class="row-del" data-delbank="${b.id}">✕</span></td>
         ${cells}
         <td style="font-weight:700;">${fmtNative(total,b.currency)}</td>
         <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
