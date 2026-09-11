@@ -794,24 +794,13 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
         <label>Amount (${bank.currency||'USD'})</label>
         <input type="number" id="amAmount" min="0" step="any" placeholder="0.00" value="${prefillAmount}">
       </div>
-      <div class="modal-field" id="amDirectionWrap">
-        <label>Direction</label>
-        <select id="amDirection" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          <option value="deposit" ${prefillDirection==='deposit'?'selected':''}>Deposit (+)</option>
-          <option value="withdraw" ${prefillDirection==='withdraw'?'selected':''}>Withdraw (−)</option>
-        </select>
-      </div>
-      <div class="modal-field">
-        <label>Date</label>
-        <input type="date" id="amDate" value="${todayISO}">
-      </div>
       <div class="modal-field">
         <label>Category</label>
         <select id="amCategory" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
           <option value="income" ${prefillCategory==='income'?'selected':''}>💰 Income (adds to your Income tab too)</option>
           <option value="expense" ${prefillCategory==='expense'?'selected':''}>${expenseLabel}</option>
           <option value="debt" ${prefillCategory==='debt'?'selected':''}>🏦 Debt payment (also clears it on the Debt tab)</option>
-          <option value="investment" ${prefillCategory==='investment'?'selected':''}>📈 Investment (adds to that holding too)</option>
+          <option value="investment" ${prefillCategory==='investment'?'selected':''}>📈 Investment contribution (adds to that holding too)</option>
           <option value="transfer" ${prefillCategory==='transfer'?'selected':''}>${transferLabel}</option>
           <option value="other" ${prefillCategory==='other'?'selected':''}>${otherLabel}</option>
         </select>
@@ -882,6 +871,17 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
           <option value="set">Set the exact ${isCredit?'balance owed':'balance'} for this month</option>
         </select>
       </div>
+      <div class="modal-field" id="amDirectionWrap">
+        <label>Direction</label>
+        <select id="amDirection" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
+          <option value="deposit" ${prefillDirection==='deposit'?'selected':''}>Deposit (+)</option>
+          <option value="withdraw" ${prefillDirection==='withdraw'?'selected':''}>Withdraw (−)</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label>Date</label>
+        <input type="date" id="amDate" value="${todayISO}">
+      </div>
       <div class="section-sub" id="amAmountHint" style="margin:-8px 0 14px; display:none;"></div>
       <div class="modal-field">
         <label>Note <span class="hint">optional</span></label>
@@ -945,7 +945,6 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     else if(cat==='transfer'){ depositLabel = 'Received from the other account (+)'; withdrawLabel = 'Sent to the other account (−)'; defaultDir = 'withdraw'; }
     else if(cat==='income'){ depositLabel = 'Received (+)'; withdrawLabel = 'Correction (−)'; defaultDir = 'deposit'; }
     else if(cat==='debt'){ depositLabel = 'Refund / correction (+)'; withdrawLabel = 'Payment made (−)'; defaultDir = 'withdraw'; }
-    else if(cat==='investment'){ depositLabel = 'Contributed (+)'; withdrawLabel = 'Withdrew / sold (−)'; defaultDir = 'deposit'; }
     directionSelect.options[0].textContent = depositLabel;
     directionSelect.options[1].textContent = withdrawLabel;
     if(!directionTouched) directionSelect.value = defaultDir;
@@ -972,11 +971,25 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
 
     otherModeWrap.style.display = cat==='other' ? 'block' : 'none';
     const setMode = cat==='other' && otherModeSelect.value==='set';
-    directionWrap.style.display = setMode ? 'none' : 'block';
-    amountHint.style.display = setMode ? 'block' : 'none';
-    amountHint.textContent = setMode ? `Enter the exact ${isCredit?'amount you currently owe':'balance you currently have'} — this replaces this month's number instead of adding to it.` : '';
+    directionWrap.style.display = (setMode || cat==='investment') ? 'none' : 'block';
+    amountHint.style.display = (setMode || cat==='investment') ? 'block' : 'none';
+    amountHint.textContent = setMode
+      ? `Enter the exact ${isCredit?'amount you currently owe':'balance you currently have'} — this replaces this month's number instead of adding to it.`
+      : cat==='investment'
+        ? `This amount leaves ${bank.name} and is added as a contribution to the investment.`
+        : '';
 
     updateDirectionForCategory(cat);
+    // Investment is contribution-only — no direction choice shown. Money
+    // always leaves this bank and goes into the holding. This MUST run
+    // after updateDirectionForCategory(), not before: that function's own
+    // "if(!directionTouched) directionSelect.value = defaultDir" would
+    // otherwise silently overwrite this back to the default 'deposit' on
+    // every fresh (non-edit) transaction — which was exactly the bug where
+    // a brand-new investment contribution added to the bank balance instead
+    // of subtracting, but editing the same transaction fixed it (editing
+    // sets directionTouched=true, which skips that overwrite).
+    if(cat==='investment') directionSelect.value = 'withdraw';
   }
   categorySelect.addEventListener('change', syncVisibility);
   incomeSrcSelect.addEventListener('change', syncVisibility);
@@ -1165,13 +1178,16 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       if(invest){
         if(!invest.m) invest.m = n12();
         if(!invest.currency) invest.currency = 'USD';
-        const amountInInvCurrency = convertCurrency(amount, bank.currency, invest.currency, y, monthIdx);
+        // Contribution-only: this amount always LEAVES the bank (see the
+        // forced 'withdraw' direction above) and always ADDS to the holding —
+        // no sign branching needed since there's only one meaning here now.
+        const contribution = Math.abs(convertCurrency(amount, bank.currency, invest.currency, y, monthIdx));
         const prevMonthVal = num(invest.m[monthIdx]);
-        invest.m[monthIdx] = roundCents(prevMonthVal + amountInInvCurrency);
+        invest.m[monthIdx] = roundCents(prevMonthVal + contribution);
         const prevInvested = num(invest.invested);
-        invest.invested = roundCents(prevInvested + amountInInvCurrency);
-        invest.investedRaw = appendAdditiveTerm(invest.investedRaw, prevInvested, amountInInvCurrency);
-        refType = 'investment'; refId = investId; refDelta = amountInInvCurrency;
+        invest.invested = roundCents(prevInvested + contribution);
+        invest.investedRaw = appendAdditiveTerm(invest.investedRaw, prevInvested, contribution);
+        refType = 'investment'; refId = investId; refDelta = contribution;
         linkedName = linkedName || invest.name;
       }
     }
