@@ -26,6 +26,8 @@ function ensureBanksMigration(){
     }
     if(!b.type) b.type = 'checking';
     if(b.type==='credit' && b.creditLimit===undefined) b.creditLimit = null;
+    if(b.type==='credit' && b.billingCycleDay===undefined) b.billingCycleDay = null;
+    if(b.type==='credit' && b.paymentDueDay===undefined) b.paymentDueDay = null;
     if(!b.transactions) b.transactions = [];
     if(b.lastUpdatedAt===undefined) b.lastUpdatedAt = null;
     repairBankBalancesFromTransactions(b);
@@ -128,6 +130,70 @@ function linkDescription(category, name){
 
 let cashflowFullYearView = false;
 
+/* Given a day-of-month (1-31) that a card's cycle closes on, find the actual
+   calendar dates of the CURRENT, in-progress cycle — e.g. if it closes on
+   the 27th and today is Sep 15, that's "Aug 28 – Sep 27": started the day
+   after the last close, runs through the upcoming one. Clamps to the real
+   last day of shorter months (day 31 in a 30-day month closes on the 30th)
+   instead of overflowing into the next month. */
+function dayInMonthClamped(year, month, day){ // month is 0-indexed
+  const lastDay = new Date(year, month+1, 0).getDate();
+  return new Date(year, month, Math.min(day, lastDay));
+}
+function currentBillingCycleRange(billingCycleDay, refDate){
+  const day = Number(billingCycleDay);
+  if(!day || day<1 || day>31) return null;
+  refDate = refDate || new Date();
+  const y = refDate.getFullYear(), m = refDate.getMonth();
+  let close = dayInMonthClamped(y, m, day);
+  if(close < refDate){
+    // Already closed this month — the ACTIVE cycle is this close through next month's.
+    const nm = m===11?0:m+1, ny = m===11?y+1:y;
+    const nextClose = dayInMonthClamped(ny, nm, day);
+    const start = new Date(close); start.setDate(start.getDate()+1);
+    return {start, end: nextClose};
+  }
+  // Hasn't closed yet this month — the ACTIVE cycle started at last month's close.
+  const pm = m===0?11:m-1, py = m===0?y-1:y;
+  const prevClose = dayInMonthClamped(py, pm, day);
+  const start = new Date(prevClose); start.setDate(start.getDate()+1);
+  return {start, end: close};
+}
+/* Next upcoming due date on/after a given date (usually the cycle's end). */
+function nextDueDateOnOrAfter(dueDay, onOrAfter){
+  const day = Number(dueDay);
+  if(!day || day<1 || day>31) return null;
+  let y = onOrAfter.getFullYear(), m = onOrAfter.getMonth();
+  let candidate = dayInMonthClamped(y, m, day);
+  if(candidate < onOrAfter){
+    m = m===11?0:m+1; y = m===0?y+1:y;
+    candidate = dayInMonthClamped(y, m, day);
+  }
+  return candidate;
+}
+function fmtShortDate(d){ return d.toLocaleDateString('en-US',{month:'short', day:'numeric'}); }
+/* The display line used in both the row list and the bank detail modal —
+   real calculated dates, not just "bills on the 12th". */
+function billingCycleLabel(b, refDate){
+  refDate = refDate || new Date();
+  if(!b.billingCycleDay && !b.paymentDueDay) return null;
+  const parts = [];
+  if(b.billingCycleDay){
+    const range = currentBillingCycleRange(b.billingCycleDay, refDate);
+    if(range) parts.push(`Cycle ${fmtShortDate(range.start)} – ${fmtShortDate(range.end)}`);
+  } else {
+    parts.push('Billing date not set');
+  }
+  if(b.paymentDueDay){
+    const anchor = b.billingCycleDay ? currentBillingCycleRange(b.billingCycleDay, refDate).end : refDate;
+    const due = nextDueDateOnOrAfter(b.paymentDueDay, anchor);
+    if(due) parts.push(`due ${fmtShortDate(due)}`);
+  } else {
+    parts.push('due date not set');
+  }
+  return parts.join(' · ');
+}
+
 function renderCashFlow(){
   const y = state.year;
   const rows = computeCashFlow(y);
@@ -191,12 +257,14 @@ function renderCashFlow(){
     const pctUsed = hasLimit ? (owed/b.creditLimit)*100 : null;
     const pctColor = pctUsed===null ? 'var(--text-dim)' : pctUsed>=70 ? 'var(--rust-soft)' : pctUsed>=30 ? 'var(--gold-soft)' : 'var(--good)';
     const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
+    const cycleLabel = billingCycleLabel(b);
     return `
     <div class="bank-row" data-bank-open="${b.id}">
       <div class="bank-row-icon">${initial}</div>
       <div class="bank-row-main">
         <div class="bank-row-name">${b.name} <span class="row-del" data-editlimit="${b.id}" title="edit credit limit">✎</span></div>
         <div class="bank-row-sub">${hasLimit ? `${fmtNative(b.creditLimit,b.currency)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'}</div>
+        <div class="bank-row-sub">${cycleLabel ? cycleLabel : 'Billing cycle not set'} <span class="row-del" data-editcycle="${b.id}" title="edit billing cycle & due date">✎</span></div>
       </div>
       <div class="bank-row-right">
         <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')}</div>
@@ -499,9 +567,13 @@ function renderCashFlow(){
     const limitRaw = document.getElementById('newCreditLimit').value.trim();
     const creditLimit = limitRaw==='' ? null : Math.abs(parseFloat(limitRaw));
     if(!name){ inp.focus(); return; }
-    allAccounts.push({id:uid(), name, m:n12(), currency, type:'credit', creditLimit: isNaN(creditLimit)?null:creditLimit, transactions:[], lastUpdatedAt:null});
+    const newCard = {id:uid(), name, m:n12(), currency, type:'credit', creditLimit: isNaN(creditLimit)?null:creditLimit, billingCycleDay:null, paymentDueDay:null, transactions:[], lastUpdatedAt:null};
+    allAccounts.push(newCard);
     markDirty('cashflow', {tab:'cashflow', action:'add', target:'Credit card '+name});
     renderCashFlow();
+    // Prompt for the billing cycle right away — no need to add the card,
+    // then separately go find it again just to set this.
+    openBillingCycleModal(newCard, y);
   });
 
   /* ---- Edit an existing card's credit limit (leave blank for no preset limit, e.g. Amex Gold) ---- */
@@ -518,6 +590,16 @@ function renderCashFlow(){
       b.creditLimit = (newLimit===null || isNaN(newLimit)) ? null : newLimit;
       markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Credit card '+b.name, field:'credit limit', newVal: b.creditLimit===null?'no preset limit':b.creditLimit});
       renderCashFlow();
+    });
+  });
+
+  /* ---- Edit a card's billing cycle day and payment due day ---- */
+  document.querySelectorAll('[data-editcycle]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const b = allAccounts.find(x=>x.id===el.dataset.editcycle);
+      if(!b) return;
+      openBillingCycleModal(b, y);
     });
   });
 
@@ -625,6 +707,90 @@ function deleteBankTransaction(bank, y, txn){
 }
 
 /* ---------- Bank / credit-card detail modal (Monarch-style click-through) ---------- */
+/* ---------- Billing Cycle modal ----------
+   Replaces the old prompt()-based editing with a real modal: two day-of-month
+   inputs with a LIVE preview underneath showing the actual calculated dates
+   (e.g. "Jul 28 – Aug 27") as you type, instead of just echoing the number
+   back. `onDone` lets a caller (like "+ Add credit card") re-open whatever
+   should come after saving. */
+function openBillingCycleModal(bank, y, onDone){
+  const old = document.getElementById('billingCycleOverlay');
+  if(old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'billingCycleOverlay';
+  overlay.className = 'modal-overlay';
+
+  overlay.innerHTML = `
+    <div class="modal-card" style="width:400px;">
+      <h3>💳 ${bank.name}</h3>
+      <p class="modal-sub">Billing cycle & payment due date</p>
+      <div class="modal-field">
+        <label>Billing cycle closes on <span class="hint">day of month</span></label>
+        <input type="number" id="bcDay" min="1" max="31" placeholder="e.g. 27" value="${bank.billingCycleDay||''}">
+      </div>
+      <div class="modal-field">
+        <label>Payment due on <span class="hint">day of month</span></label>
+        <input type="number" id="bcDue" min="1" max="31" placeholder="e.g. 5" value="${bank.paymentDueDay||''}">
+      </div>
+      <div class="modal-preview" id="bcPreview" style="flex-direction:column; align-items:flex-start; gap:4px;"></div>
+      <div class="modal-actions" style="margin-top:14px;">
+        <button class="btn" id="bcCancelBtn">Cancel</button>
+        <button class="btn primary" id="bcSaveBtn">Save</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const dayInp = overlay.querySelector('#bcDay');
+  const dueInp = overlay.querySelector('#bcDue');
+  const preview = overlay.querySelector('#bcPreview');
+
+  function clampedDayOrNull(inp){
+    const raw = inp.value.trim();
+    if(raw==='') return null;
+    const n = Math.round(Math.abs(parseFloat(raw)));
+    return (isNaN(n) || n<1 || n>31) ? null : n;
+  }
+
+  function updatePreview(){
+    const day = clampedDayOrNull(dayInp), due = clampedDayOrNull(dueInp);
+    if(!day && !due){
+      preview.innerHTML = `<span class="label" style="color:var(--text-dim);">Set at least one to see the calculated dates.</span>`;
+      return;
+    }
+    const lines = [];
+    let anchorEnd = new Date();
+    if(day){
+      const range = currentBillingCycleRange(day, new Date());
+      anchorEnd = range.end;
+      lines.push(`<span class="label">Current cycle</span><span class="value" style="font-size:15px;">${fmtShortDate(range.start)} – ${fmtShortDate(range.end)}</span>`);
+    }
+    if(due){
+      const dueDate = nextDueDateOnOrAfter(due, anchorEnd);
+      lines.push(`<span class="label" style="margin-top:${day?'8px':'0'};">Next payment due</span><span class="value" style="font-size:15px;">${fmtShortDate(dueDate)}</span>`);
+    }
+    preview.innerHTML = lines.join('');
+  }
+  updatePreview();
+  dayInp.addEventListener('input', updatePreview);
+  dueInp.addEventListener('input', updatePreview);
+
+  function close(){ overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function onKey(e){ if(e.key==='Escape') close(); }
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
+  overlay.querySelector('#bcCancelBtn').addEventListener('click', close);
+  overlay.querySelector('#bcSaveBtn').addEventListener('click', ()=>{
+    bank.billingCycleDay = clampedDayOrNull(dayInp);
+    bank.paymentDueDay = clampedDayOrNull(dueInp);
+    markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Credit card '+bank.name, field:'billing cycle', newVal: `bills ${bank.billingCycleDay||'—'}, due ${bank.paymentDueDay||'—'}`});
+    close();
+    renderCashFlow();
+    if(onDone) onDone();
+  });
+}
+
 function openBankDetailModal(bank, y, monthIdxArg){
   const old = document.getElementById('bankDetailOverlay');
   if(old) old.remove();
@@ -676,6 +842,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
       ${!isCredit ? '' : (bank.creditLimit!=null && bank.creditLimit>0
           ? `<div class="section-sub" style="margin:-8px 0 10px;">${fmtNative(Math.max(0,bank.creditLimit-Math.max(0,-bal)),bank.currency)} available of ${fmtNative(bank.creditLimit,bank.currency)} limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ edit limit</span></div>`
           : `<div class="section-sub" style="margin:-8px 0 10px;">No preset limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ set a limit</span></div>`)}
+      ${!isCredit ? '' : `<div class="section-sub" style="margin:-4px 0 10px;">${billingCycleLabel(bank) || 'Billing cycle not set'} <span class="row-del" data-editcycle="${bank.id}" style="margin-left:4px;">✎ edit</span></div>`}
       ${delta===null ? '' : `<div class="section-sub" style="margin:4px 0 14px;">${delta>=0?'↑':'↓'} ${fmtNative(Math.abs(delta),bank.currency)} vs ${MONTHS[monthIdx-1]}</div>`}
       <div style="max-height:220px; overflow-y:auto; margin-bottom:18px;">
         ${txnRows || `<div class="section-sub" style="text-align:center; padding:14px 0;">No transactions logged for ${MONTHS[monthIdx]} — anything you add here will show up in this list, each with an ✕ to remove it.</div>`}
@@ -728,6 +895,14 @@ function openBankDetailModal(bank, y, monthIdxArg){
       markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Credit card '+bank.name, field:'credit limit', newVal: bank.creditLimit===null?'no preset limit':bank.creditLimit});
       renderCashFlow();
       openBankDetailModal(bank, y, monthIdx);
+    });
+  }
+  const editCycleLink = overlay.querySelector('[data-editcycle]');
+  if(editCycleLink){
+    editCycleLink.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      close();
+      openBillingCycleModal(bank, y, ()=> openBankDetailModal(bank, y, monthIdx));
     });
   }
 }
