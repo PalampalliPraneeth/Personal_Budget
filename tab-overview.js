@@ -725,14 +725,15 @@ function renderCashCreditMiniCard(y){
     const bal = accountDisplayValueAt(b, snapIdx); // native currency, carried forward
     const owed = isCredit ? Math.max(0, -(bal||0)) : null;
     const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
+    const cycleLabel = isCredit ? billingCycleLabel(b) : null;
     return `
-    <div class="bank-row" data-goto="cashflow">
-      <div class="bank-row-icon">${initial}</div>
-      <div class="bank-row-main">
+    <div class="bank-row">
+      <div class="bank-row-icon" data-goto="cashflow">${initial}</div>
+      <div class="bank-row-main" data-goto="cashflow">
         <div class="bank-row-name">${b.name}</div>
-        <div class="bank-row-sub">${isCredit ? 'Credit Card' : (BANK_TYPE_LABELS[b.type]||'Checking')}</div>
+        <div class="bank-row-sub">${isCredit ? (cycleLabel || 'Credit Card · cycle not set') : (BANK_TYPE_LABELS[b.type]||'Checking')} ${isCredit ? `<span class="row-del" data-editcycle-ov="${b.id}" title="edit billing cycle & due date">✎</span>` : ''}</div>
       </div>
-      <div class="bank-row-right">
+      <div class="bank-row-right" data-goto="cashflow">
         <div class="bank-row-balance" style="${isCredit && owed>0?'color:var(--rust-soft);':''}">${bal===null?'—':(isCredit?(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off'):fmtNative(bal,b.currency))}</div>
       </div>
     </div>`;
@@ -1068,6 +1069,13 @@ function renderOverview(){
       const sub = el.dataset.savingsGotoSub;
       if(sub && el.dataset.goto==='savings') state.savingsSubTab = sub;
       goToTab(el.dataset.goto);
+    });
+  });
+  document.querySelectorAll('#panel-overview [data-editcycle-ov]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation(); // don't also trigger the row's "go to Cash Flow" navigation
+      const b = (yearData(y).banks||[]).find(x=>x.id===el.dataset.editcycleOv);
+      if(b) openBillingCycleModal(b, y, renderOverview);
     });
   });
   document.querySelectorAll('#panel-overview [data-recur-goto]').forEach(el=>{
