@@ -345,14 +345,24 @@ function renderPlatformGroupsText(groups: PlatformGroup[]): string {
   }).join('\n\n');
 }
 
-type ForwardCalendar = { platform: string; currency: string; rows: { date: string; total: number }[] }[];
+type ForwardCalendar = {
+  platform: string; currency: string;
+  rows: { date: string; total: number; byAccount: { bankName: string; amount: number }[]; unlinkedAmount: number }[];
+}[];
 
 function renderForwardCalendarHtml(calendar: ForwardCalendar): string {
   if (!calendar.length) return '';
   const blocks = calendar.map(p => {
-    const rows = p.rows.map(r =>
-      `<tr><td style="padding:3px 16px 3px 0; color:#444;">${r.date}</td><td style="padding:3px 0; text-align:right;">${fmtMoney(r.total, p.currency)}</td></tr>`
-    ).join('');
+    const rows = p.rows.map(r => {
+      const fundingParts: string[] = r.byAccount.map(a => `${escapeHtml(a.bankName)}: ${fmtMoney(a.amount, p.currency)}`);
+      if (r.unlinkedAmount > 0.005) fundingParts.push(`no account linked: ${fmtMoney(r.unlinkedAmount, p.currency)}`);
+      const fundingLine = fundingParts.length
+        ? `<div style="color:#888; font-size:11px; margin-top:1px;">${fundingParts.join(' · ')}</div>` : '';
+      return `<tr>
+        <td style="padding:5px 16px 5px 0; color:#444; vertical-align:top;">${r.date}${fundingLine}</td>
+        <td style="padding:5px 0; text-align:right; vertical-align:top;">${fmtMoney(r.total, p.currency)}</td>
+      </tr>`;
+    }).join('');
     return `<div style="margin:10px 0;">
       <div style="font-weight:600; font-size:13.5px; margin-bottom:2px;">${escapeHtml(p.platform)}</div>
       <table style="border-collapse:collapse; font-size:13px;"><tr><th style="text-align:left; color:#888; font-weight:500; padding:2px 16px 2px 0;">Date</th><th style="text-align:right; color:#888; font-weight:500;">Total</th></tr>${rows}</table>
@@ -364,7 +374,12 @@ function renderForwardCalendarHtml(calendar: ForwardCalendar): string {
 function renderForwardCalendarText(calendar: ForwardCalendar): string {
   if (!calendar.length) return '';
   const blocks = calendar.map(p => {
-    const rows = p.rows.map(r => `  ${r.date}\t${fmtMoney(r.total, p.currency)}`).join('\n');
+    const rows = p.rows.map(r => {
+      const fundingParts: string[] = r.byAccount.map(a => `${a.bankName}: ${fmtMoney(a.amount, p.currency)}`);
+      if (r.unlinkedAmount > 0.005) fundingParts.push(`no account linked: ${fmtMoney(r.unlinkedAmount, p.currency)}`);
+      const fundingSuffix = fundingParts.length ? `  [${fundingParts.join(', ')}]` : '';
+      return `  ${r.date}\t${fmtMoney(r.total, p.currency)}${fundingSuffix}`;
+    }).join('\n');
     return `${p.platform}\n  Date\t\tTotal\n${rows}`;
   }).join('\n\n');
   return `\n\n📆 Next recurring investments\n${blocks}`;
@@ -372,24 +387,47 @@ function renderForwardCalendarText(calendar: ForwardCalendar): string {
 
 /* Builds the forward-looking calendar across EVERY active plan (not just
    the ones triggering today's email) — shared across all lead-time emails
-   sent in a single run. */
-function buildForwardCalendar(plans: { platform: string; symbol: string; amount: number; currency: string; recurring: any }[], today: Date): ForwardCalendar {
+   sent in a single run. Each date row also breaks down WHICH funding
+   account is on the hook for how much — a platform's Aug 18th buy might
+   pull $150 from Chase and $100 from Wells Fargo if different holdings on
+   the same platform are linked to different accounts. */
+function buildForwardCalendar(
+  plans: { platform: string; symbol: string; amount: number; currency: string; recurring: any; bankAccountId?: string | null; bank?: any }[],
+  today: Date
+): ForwardCalendar {
   const rangeEnd = new Date(today);
   rangeEnd.setUTCDate(rangeEnd.getUTCDate() + FORWARD_LOOKING_DAYS);
 
-  const byPlatform = new Map<string, { currency: string; dateTotals: Map<string, number> }>();
+  const byPlatform = new Map<string, {
+    currency: string;
+    dateEntries: Map<string, { total: number; byAccount: Map<string, number>; unlinked: number }>;
+  }>();
   for (const p of plans) {
     const dates = occurrencesInRange(p.recurring, today, rangeEnd, FORWARD_LOOKING_MAX_PER_PLAN);
     if (!dates.length) continue;
-    if (!byPlatform.has(p.platform)) byPlatform.set(p.platform, { currency: p.currency, dateTotals: new Map() });
+    if (!byPlatform.has(p.platform)) byPlatform.set(p.platform, { currency: p.currency, dateEntries: new Map() });
     const entry = byPlatform.get(p.platform)!;
-    dates.forEach(d => entry.dateTotals.set(d, (entry.dateTotals.get(d) || 0) + p.amount));
+    const bankName: string | null = p.bank?.name || null;
+    dates.forEach(d => {
+      if (!entry.dateEntries.has(d)) entry.dateEntries.set(d, { total: 0, byAccount: new Map(), unlinked: 0 });
+      const de = entry.dateEntries.get(d)!;
+      de.total += p.amount;
+      if (bankName) de.byAccount.set(bankName, (de.byAccount.get(bankName) || 0) + p.amount);
+      else de.unlinked += p.amount;
+    });
   }
 
   return Array.from(byPlatform.entries()).map(([platform, v]) => ({
     platform,
     currency: v.currency,
-    rows: Array.from(v.dateTotals.entries()).sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, total]) => ({ date, total })),
+    rows: Array.from(v.dateEntries.entries())
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([date, de]) => ({
+        date,
+        total: de.total,
+        byAccount: Array.from(de.byAccount.entries()).map(([bankName, amount]) => ({ bankName, amount })),
+        unlinkedAmount: de.unlinked,
+      })),
   }));
 }
 
@@ -559,8 +597,8 @@ function buildPreviewSample(today: Date) {
 
   // A couple of ongoing plans purely to populate the forward calendar section.
   const forwardPlans = [
-    { platform: 'Robinhood', symbol: 'VOO+QQQ', amount: 450, currency: 'USD', recurring: { frequencyType: 'monthly', startDate: iso(7) } },
-    { platform: 'Fidelity', symbol: 'VTI', amount: 150, currency: 'USD', recurring: { frequencyType: 'monthly', startDate: iso(7) } },
+    { platform: 'Robinhood', symbol: 'VOO+QQQ', amount: 450, currency: 'USD', recurring: { frequencyType: 'monthly', startDate: iso(7) }, bankAccountId: 'preview-checking', bank: checking },
+    { platform: 'Fidelity', symbol: 'VTI', amount: 150, currency: 'USD', recurring: { frequencyType: 'monthly', startDate: iso(7) }, bankAccountId: 'preview-savings', bank: savings },
   ];
 
   return { dueByLead, dueDateByLead, forwardPlans };
