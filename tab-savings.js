@@ -222,9 +222,30 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
     const nativeContributed = acc ? num((acc.m||[])[activeMonthIdx>=0?activeMonthIdx:0]) : sumArr(g.m||[]);
     const nativeTarget = num(g.targetAmount);
 
+    // Days/months left until the goal's own end date (independent of the
+    // pace-based ETA below, which only kicks in when there's no end date set).
+    let endDateNote = '';
+    if(g.endDate){
+      const end = new Date(g.endDate+'T00:00:00');
+      const today = new Date(); today.setHours(0,0,0,0);
+      const daysLeft = Math.round((end-today)/86400000);
+      const endLabel = end.toLocaleDateString('en-US',{month:'short', day:'numeric', year:'numeric'});
+      if(reached){
+        endDateNote = `<div class="section-sub" style="margin:4px 0 0;">Target date: <b class="editable-inline" contenteditable="true" data-goalfield="endDate" data-id="${g.id}">${g.endDate}</b> <span class="row-del" data-cleargoaldate="${g.id}" title="clear date">✕</span></div>`;
+      } else if(daysLeft < 0){
+        endDateNote = `<div class="section-sub" style="margin:4px 0 0; color:var(--rust-soft);">⚠ Target date was ${endLabel} (${Math.abs(daysLeft)} day${Math.abs(daysLeft)===1?'':'s'} ago) <b class="editable-inline" contenteditable="true" data-goalfield="endDate" data-id="${g.id}" style="color:var(--rust-soft);">${g.endDate}</b> <span class="row-del" data-cleargoaldate="${g.id}" title="clear date">✕</span></div>`;
+      } else {
+        endDateNote = `<div class="section-sub" style="margin:4px 0 0;">By ${endLabel} (${daysLeft} day${daysLeft===1?'':'s'} left) <b class="editable-inline" contenteditable="true" data-goalfield="endDate" data-id="${g.id}">${g.endDate}</b> <span class="row-del" data-cleargoaldate="${g.id}" title="clear date">✕</span></div>`;
+      }
+    } else {
+      endDateNote = `<div class="section-sub" style="margin:4px 0 0;">No target date set — <b class="editable-inline" contenteditable="true" data-goalfield="endDate" data-id="${g.id}" style="color:var(--gold-soft);">click to set (YYYY-MM-DD)</b></div>`;
+    }
+
     // A light "at this pace, done by ~" estimate from average monthly contribution so far.
+    // Only shown when there's no explicit end date — the end date is the
+    // person's own commitment and takes priority over a pace guess.
     let etaNote = '';
-    if(!reached && !acc){
+    if(!reached && !acc && !g.endDate){
       const monthsWithData = (g.m||[]).filter(v=>num(v)>0).length;
       const avgPerMonth = monthsWithData>0 ? sumArr(g.m||[])/monthsWithData : 0;
       if(avgPerMonth > 0){
@@ -268,6 +289,7 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
         </span>
       </div>
       ${etaNote}
+      ${endDateNote}
     </div>
     ${!acc ? `
     <div class="table-scroll" style="margin:6px 0 16px;">
@@ -297,6 +319,7 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
           <option value="USD">USD</option>
           <option value="INR">INR</option>
         </select>
+        <input type="date" id="newGoalEndDate" title="Target date (optional)" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
         <button class="btn primary small" id="addGoalBtn">+ Add goal</button>
       </div>
     </div>
@@ -339,6 +362,43 @@ function attachGoalsHandlers(y, goals, accounts){
     el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
   });
 
+  /* ---- Goal target/end date — typed as YYYY-MM-DD directly in the card ---- */
+  document.querySelectorAll('[data-goalfield="endDate"]').forEach(el=>{
+    el.addEventListener('focus', ()=>{
+      el.dataset.origRaw = el.textContent;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(el.textContent.trim())) el.textContent = ''; // clear the "click to set" placeholder text
+    });
+    el.addEventListener('blur', ()=>{
+      const g = goals.find(x=>x.id===el.dataset.id);
+      if(!g) return;
+      const raw = el.textContent.trim();
+      if(raw===''){
+        if(g.endDate){ g.endDate = null; markDirty('savings', {tab:'savings', action:'edit', target:'Goal '+g.name+' target date', newVal:'cleared'}); renderSavings(); }
+        else renderSavings(); // restore placeholder text if they cleared it without ever setting one
+        return;
+      }
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(new Date(raw+'T00:00:00').getTime())){
+        alert('Enter the date as YYYY-MM-DD, e.g. 2027-12-31.');
+        el.textContent = el.dataset.origRaw;
+        return;
+      }
+      if(g.endDate===raw) return;
+      g.endDate = raw;
+      markDirty('savings', {tab:'savings', action:'edit', target:'Goal '+g.name+' target date', newVal:raw});
+      renderSavings();
+    });
+    el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
+  });
+  document.querySelectorAll('[data-cleargoaldate]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const g = goals.find(x=>x.id===el.dataset.cleargoaldate);
+      if(!g || !g.endDate) return;
+      g.endDate = null;
+      markDirty('savings', {tab:'savings', action:'edit', target:'Goal '+g.name+' target date', newVal:'cleared'});
+      renderSavings();
+    });
+  });
+
   document.querySelectorAll('[data-goal-link]').forEach(sel=>{
     sel.addEventListener('change', ()=>{
       const g = goals.find(x=>x.id===sel.dataset.goalLink);
@@ -368,8 +428,9 @@ function attachGoalsHandlers(y, goals, accounts){
     const target = parseFloat(document.getElementById('newGoalTarget').value) || 0;
     const linkedAccountId = document.getElementById('newGoalLink').value || null;
     const currency = document.getElementById('newGoalCurrency').value;
+    const endDate = document.getElementById('newGoalEndDate').value || null;
     if(!name){ inp.focus(); return; }
-    goals.push({id:uid(), name, targetAmount:target, currency, linkedAccountId, m:n12(), icon:'🎯'});
+    goals.push({id:uid(), name, targetAmount:target, currency, linkedAccountId, endDate, m:n12(), icon:'🎯'});
     markDirty('savings', {tab:'savings', action:'add', target:'Goal '+name});
     renderSavings();
   });

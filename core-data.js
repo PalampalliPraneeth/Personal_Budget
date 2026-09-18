@@ -687,6 +687,7 @@ function ensureGoalsMigration(){
     if(!g.currency) g.currency = 'USD';
     if(g.linkedAccountId===undefined) g.linkedAccountId = null;
     if(!g.icon) g.icon = '🎯';
+    if(g.endDate===undefined) g.endDate = null;
   });
 }
 function goalLinkedAccount(goal, accounts){

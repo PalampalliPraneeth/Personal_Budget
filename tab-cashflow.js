@@ -209,12 +209,18 @@ function renderCashFlow(){
   /* ---- Banks & credit cards ---- */
   ensureBanksMigration();
   const allAccounts = yearData(y).banks;
-  const banks = allAccounts.filter(b=>b.type!=='credit');       // real cash accounts
-  const creditCards = allAccounts.filter(b=>b.type==='credit'); // liabilities, tracked separately
+  const cashSnapIdx = currentSnapshotMonth(y);
+  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: carries last real balance forward (once it has any transaction) · credit: carries real owed balance
+  // Sorted by how much money is actually involved (converted to USD so INR
+  // and USD accounts compare on equal footing) — biggest balance first for
+  // cash accounts, biggest amount owed first for credit cards — rather than
+  // creation order, so the accounts that matter most surface automatically.
+  const banks = allAccounts.filter(b=>b.type!=='credit')
+    .sort((a,b)=> (bankUsdAt(b, cashSnapIdx)||0) - (bankUsdAt(a, cashSnapIdx)||0));
+  const creditCards = allAccounts.filter(b=>b.type==='credit')
+    .sort((a,b)=> Math.max(0,-(bankUsdAt(b, cashSnapIdx)||0)) - Math.max(0,-(bankUsdAt(a, cashSnapIdx)||0)));
 
   /* ---- Cash summary card + clickable bank list (Monarch-style) ---- */
-  const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: carries last real balance forward (once it has any transaction) · credit: carries real owed balance
-  const cashSnapIdx = currentSnapshotMonth(y);
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx) || 0));
   const cashPrevTotal = cashSnapIdx>0 ? sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx-1) || 0)) : null;
   const cashDelta = cashPrevTotal===null ? null : cashTotal - cashPrevTotal;

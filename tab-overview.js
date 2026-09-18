@@ -692,7 +692,17 @@ function renderSavingsGoalsMiniCard(y){
     const target = goalTargetUsd(g, accounts);
     const contributed = goalContributedUsd(g, accounts, monthIdx);
     const pct = target>0 ? Math.min(100, (contributed/target)*100) : 0;
+    const reached = target>0 && contributed >= target;
     const color = PALETTE[i % PALETTE.length];
+    let dateLine = '';
+    if(g.endDate){
+      const end = new Date(g.endDate+'T00:00:00');
+      const today = new Date(); today.setHours(0,0,0,0);
+      const daysLeft = Math.round((end-today)/86400000);
+      const endLabel = end.toLocaleDateString('en-US',{month:'short', day:'numeric', year:'numeric'});
+      const overdue = !reached && daysLeft<0;
+      dateLine = `<div class="mini-goal-date" style="font-size:11px; color:${overdue?'var(--rust-soft)':'var(--text-dim)'};">${overdue?'⚠ was due '+endLabel:'By '+endLabel}</div>`;
+    }
     return `
     <div class="mini-goal-row" data-goto="savings" data-savings-goto-sub="goals">
       <div class="mini-goal-icon" style="background:${color}22; color:${color};">${g.icon||'🎯'}</div>
@@ -700,6 +710,7 @@ function renderSavingsGoalsMiniCard(y){
         <div class="mini-goal-name">${g.name}</div>
         <div class="mini-goal-amt">${fmt$(contributed,2)} of ${fmt$(target,2)}</div>
         <div class="runway"><div class="runway-fill" style="width:${pct}%; background:${color};"></div></div>
+        ${dateLine}
       </div>
     </div>`;
   }).join('');
@@ -714,10 +725,14 @@ function renderSavingsGoalsMiniCard(y){
 function renderCashCreditMiniCard(y){
   ensureBanksMigration();
   const accounts = yearData(y).banks || [];
-  const banks = accounts.filter(b=>b.type!=='credit');
-  const creditCards = accounts.filter(b=>b.type==='credit');
   const snapIdx = currentSnapshotMonth(y);
   const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: carries last real balance forward (once it has any transaction) · credit: carries real owed balance
+  // Same ordering as the Cash Flow tab — biggest balance / biggest owed
+  // first, in USD so currencies compare fairly — kept in sync here too.
+  const banks = accounts.filter(b=>b.type!=='credit')
+    .sort((a,b)=> (bankUsdAt(b, snapIdx)||0) - (bankUsdAt(a, snapIdx)||0));
+  const creditCards = accounts.filter(b=>b.type==='credit')
+    .sort((a,b)=> Math.max(0,-(bankUsdAt(b, snapIdx)||0)) - Math.max(0,-(bankUsdAt(a, snapIdx)||0)));
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, snapIdx) || 0));
   const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, snapIdx) || 0)));
 
