@@ -246,7 +246,7 @@ function renderCashFlow(){
     <div class="bank-row" data-bank-open="${b.id}">
       <div class="bank-row-icon">${initial}</div>
       <div class="bank-row-main">
-        <div class="bank-row-name">${b.name}</div>
+        <div class="bank-row-name editable-inline" contenteditable="true" data-renamebank="${b.id}">${b.name}</div>
         <div class="bank-row-sub">${BANK_TYPE_LABELS[b.type]||'Checking'}</div>
       </div>
       <div class="bank-row-right">
@@ -268,8 +268,8 @@ function renderCashFlow(){
     <div class="bank-row" data-bank-open="${b.id}">
       <div class="bank-row-icon">${initial}</div>
       <div class="bank-row-main">
-        <div class="bank-row-name">${b.name} <span class="row-del" data-editlimit="${b.id}" title="edit credit limit">✎</span></div>
-        <div class="bank-row-sub">${hasLimit ? `${fmtNative(b.creditLimit,b.currency)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'}</div>
+        <div class="bank-row-name editable-inline" contenteditable="true" data-renamebank="${b.id}">${b.name}</div>
+        <div class="bank-row-sub">${hasLimit ? `${fmtNative(b.creditLimit,b.currency)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'} <span class="row-del" data-editlimit="${b.id}" title="edit credit limit">✎</span></div>
         <div class="bank-row-sub">${cycleLabel ? cycleLabel : 'Billing cycle not set'} <span class="row-del" data-editcycle="${b.id}" title="edit billing cycle & due date">✎</span></div>
       </div>
       <div class="bank-row-right">
@@ -397,7 +397,7 @@ function renderCashFlow(){
       }).join('');
       const total = sumArr(b.m||[]);
       return `<tr data-bank-id="${b.id}">
-        <td style="font-weight:600;"><span class="ledger-name-text" title="${(b.name||'').replace(/"/g,'&quot;')}">${b.name}</span> <span class="row-del" data-delbank="${b.id}">✕</span></td>
+        <td style="font-weight:600;"><span class="ledger-name-text editable-inline" contenteditable="true" data-renamebank="${b.id}" title="${(b.name||'').replace(/"/g,'&quot;')}">${b.name}</span> <span class="row-del" data-delbank="${b.id}">✕</span></td>
         ${cells}
         <td style="font-weight:700;">${fmtNative(total,b.currency)}</td>
         <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
@@ -551,6 +551,26 @@ function renderCashFlow(){
       const b = allAccounts.find(x=>x.id===el.dataset.bankOpen);
       if(b) openBankDetailModal(b, y);
     });
+  });
+
+  /* ---- Rename a bank/card directly in place — click the name, type, click
+     away. stopPropagation keeps this from also triggering the row's
+     "open detail modal" click handler above. ---- */
+  document.querySelectorAll('[data-renamebank]').forEach(el=>{
+    el.addEventListener('click', (e)=> e.stopPropagation());
+    el.addEventListener('focus', ()=>{ el.dataset.origRaw = el.textContent; });
+    el.addEventListener('blur', ()=>{
+      const b = allAccounts.find(x=>x.id===el.dataset.renamebank);
+      if(!b) return;
+      const val = el.textContent.trim();
+      if(!val){ el.textContent = b.name; return; } // don't allow blanking the name
+      if(b.name===val) return;
+      const before = b.name;
+      b.name = val;
+      markDirty('cashflow', {tab:'cashflow', action:'edit', target:before, field:'name', oldVal:before, newVal:val});
+      renderCashFlow();
+    });
+    el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
   });
 
   /* ---- Add bank ---- */

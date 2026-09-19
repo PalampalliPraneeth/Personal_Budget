@@ -45,7 +45,7 @@ function makeEditableRow(item, monthsToShow, opts){
   const safeName = (item.name||'').replace(/"/g,'&quot;');
   const nameLabel = locked
     ? `<span class="ledger-name-text" title="${safeName}">${item.name}</span> <span class="tag-auto" title="${(opts.lockedTip||'Auto-calculated').replace(/"/g,'&quot;')}">🔗 auto</span>`
-    : `<span class="ledger-name-text" title="${safeName}">${item.name}</span>`;
+    : `<span class="ledger-name-text editable-inline" contenteditable="true" data-field="name" data-id="${item.id}" title="${safeName}">${item.name}</span>`;
   return `<tr data-row-id="${item.id}">
     <td>${nameLabel} <span class="row-del" data-del="${item.id}" title="remove">✕</span></td>
     ${cells}
@@ -112,6 +112,21 @@ function attachEditableHandlers(container, items, onChange, tabName){
       onChange && onChange();
     });
     td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
+  });
+  container.querySelectorAll('[data-field="name"]').forEach(el=>{
+    el.addEventListener('focus', ()=>{ el.dataset.origRaw = el.textContent; });
+    el.addEventListener('blur', ()=>{
+      const item = items.find(x=>x.id===el.dataset.id);
+      const val = el.textContent.trim();
+      if(!val){ el.textContent = item.name; return; } // don't allow blanking the name
+      if(item.name===val) return;
+      const before = item.name;
+      item.name = val;
+      el.title = val;
+      markDirty(tabName, {tab: tabName, action: 'edit', target: before, field: 'name', oldVal: before, newVal: val});
+      onChange && onChange();
+    });
+    el.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); el.blur(); } });
   });
   container.querySelectorAll('[data-del]').forEach(el=>{
     el.addEventListener('click', ()=>{
