@@ -250,7 +250,7 @@ function renderCashFlow(){
         <div class="bank-row-sub">${BANK_TYPE_LABELS[b.type]||'Checking'}</div>
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance">${bal===null?'—':fmtNative(bal,b.currency)}</div>
+        <div class="bank-row-balance">${bal===null?'—':fmtNative(bal,b.currency)} <span class="row-del" data-delbank="${b.id}" title="remove account">✕</span></div>
         <div class="bank-row-sub">${timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
@@ -273,7 +273,7 @@ function renderCashFlow(){
         <div class="bank-row-sub">${cycleLabel ? cycleLabel : 'Billing cycle not set'} <span class="row-del" data-editcycle="${b.id}" title="edit billing cycle & due date">✎</span></div>
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')}</div>
+        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')} <span class="row-del" data-delbank="${b.id}" title="remove card">✕</span></div>
         <div class="bank-row-sub">${hasLimit ? fmtNative(Math.max(0,b.creditLimit-owed),b.currency)+' available' : timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
@@ -534,9 +534,10 @@ function renderCashFlow(){
 
   /* ---- Delete bank / credit card ---- */
   document.querySelectorAll('[data-delbank]').forEach(el=>{
-    el.addEventListener('click', ()=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation(); // don't also trigger the row's "open detail modal" click handler
       const idx = allAccounts.findIndex(x=>x.id===el.dataset.delbank);
-      if(idx>-1 && confirm('Remove "'+allAccounts[idx].name+'"?')){
+      if(idx>-1 && confirm('Remove "'+allAccounts[idx].name+'"? This deletes its whole history — balances, transactions, everything.')){
         const name = allAccounts[idx].name;
         allAccounts.splice(idx,1);
         markDirty('cashflow', {tab:'cashflow', action:'delete', target:'Bank '+name});
