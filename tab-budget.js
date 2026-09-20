@@ -73,7 +73,7 @@ function renderBudget(){
   const leftToBudget = incomeBudgetTotal - totalExpenseBudget;
 
   const groupBlockHtml = (g)=>{
-    const collapsed = collapsedGroups[g.id]; // reuses the same collapse state Expenses uses — same group, same id
+    const collapsed = !!g.collapsed; // same field Expenses tab now persists — same group object, same id, same state
     const rollup = groupRollups.find(r=>r.group.id===g.id);
     return `
     <div class="group-block ${collapsed?'collapsed':''}" data-group-id="${g.id}">
@@ -145,7 +145,10 @@ function renderBudget(){
   document.querySelectorAll('[data-toggle]').forEach(el=>{
     el.addEventListener('click', ()=>{
       const id = el.dataset.toggle;
-      collapsedGroups[id] = !collapsedGroups[id];
+      const g = groups.find(x=>x.id===id);
+      if(!g) return;
+      g.collapsed = !g.collapsed;
+      markDirty('expenses', {tab:'expenses', action:'edit', target:'Group '+g.name, field:'collapsed', newVal:g.collapsed});
       renderBudget();
     });
   });

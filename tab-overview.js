@@ -4,7 +4,10 @@ function goToTab(tabId, highlightSelector){
     document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', p.id==='panel-'+tabId));
     if(tabId==='expenses' && highlightSelector){
       const m = highlightSelector.match(/data-group-id="([^"]+)"/);
-      if(m) collapsedGroups[m[1]] = false;
+      if(m){
+        const g = (yearData(state.year).expenseGroups||[]).find(x=>x.id===m[1]);
+        if(g) g.collapsed = false; // force-expand so the highlighted element is actually visible
+      }
     }
     renderActive();
     if(highlightSelector){
