@@ -457,6 +457,9 @@ table.ledger tr:hover td.pin-col-1, table.ledger tr:hover td.pin-col-2{ backgrou
 .group-block.collapsed .g-caret{transform:rotate(-90deg);}
 .group-body{padding:14px 16px 16px;}
 .group-block.collapsed .group-body{display:none;}
+.group-block.dragging{opacity:.4;}
+.group-block.drag-over{outline:2px dashed var(--gold-soft); outline-offset:-2px;}
+.group-drag-handle:active{cursor:grabbing;}
 .addcat-row{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;}
 .addcat-row input{
   background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:7px;

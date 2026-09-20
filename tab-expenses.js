@@ -1,10 +1,10 @@
 /* =========================================================================
    EXPENSES TAB
    ========================================================================= */
-let collapsedGroups = {};
 let expenseFullYearView = false;
 let expensePieShowAll = false;
 let editingGroupId = null; // tracks which group name is being edited
+let draggingGroupId = null; // tracks which group is mid-drag for reordering
 
 function renderExpenses(){
   const y = state.year;
@@ -46,13 +46,17 @@ function renderExpenses(){
   let groupsHtml = groups.map((g, gi)=>{
     const totalsAll = groupTotals(g, y);
     const totalsShown = monthsToShow.map(i=>totalsAll[i]);
-    const collapsed = collapsedGroups[g.id];
+    const collapsed = !!g.collapsed;
     const isEditing = editingGroupId === g.id;
+    const isFirst = gi===0, isLast = gi===groups.length-1;
 
     return `
     <div class="group-block ${collapsed?'collapsed':''}" data-group-id="${g.id}">
       <div class="group-head" data-toggle="${g.id}">
         <h4 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="group-drag-handle" draggable="true" data-draghandle="${g.id}" title="Drag to reorder" style="cursor:grab; opacity:.45; font-size:14px; user-select:none; touch-action:none;">⠿</span>
+          <span class="group-move" data-movegroup-up="${g.id}" title="Move up" style="cursor:${isFirst?'default':'pointer'}; opacity:${isFirst?'.2':'.6'}; font-size:11px; user-select:none; ${isFirst?'pointer-events:none;':''}">▲</span>
+          <span class="group-move" data-movegroup-down="${g.id}" title="Move down" style="cursor:${isLast?'default':'pointer'}; opacity:${isLast?'.2':'.6'}; font-size:11px; user-select:none; margin-right:2px; ${isLast?'pointer-events:none;':''}">▼</span>
           <span class="g-caret">▾</span>
           ${isEditing ? `
             <input type="text" class="group-name-input" value="${g.name.replace(/"/g,'&quot;')}" data-group-input="${g.id}" style="background:var(--bg);color:var(--text);border:1px solid var(--gold);border-radius:6px;padding:4px 10px;font-family:var(--font-display);font-size:15px;font-weight:600;min-width:120px;max-width:260px;">
@@ -309,9 +313,82 @@ function renderExpenses(){
   });
   document.querySelectorAll('[data-toggle]').forEach(el=>{
     el.addEventListener('click', (e)=>{
-      if(e.target.closest('[data-delgroup]') || e.target.closest('.group-edit') || e.target.closest('.group-save') || e.target.closest('.group-name-input')) return;
+      if(e.target.closest('[data-delgroup]') || e.target.closest('.group-edit') || e.target.closest('.group-save') || e.target.closest('.group-name-input')
+         || e.target.closest('.group-move') || e.target.closest('.group-drag-handle')) return;
       const id = el.dataset.toggle;
-      collapsedGroups[id] = !collapsedGroups[id];
+      const g = groups.find(x=>x.id===id);
+      if(!g) return;
+      g.collapsed = !g.collapsed;
+      markDirty('expenses', {tab:'expenses', action:'edit', target:'Group '+g.name, field:'collapsed', newVal:g.collapsed});
+      renderExpenses();
+    });
+  });
+
+  /* ---- Reorder groups: arrows (swap with neighbor) ---- */
+  document.querySelectorAll('[data-movegroup-up]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const arr = yearData(y).expenseGroups;
+      const idx = arr.findIndex(x=>x.id===el.dataset.movegroupUp);
+      if(idx>0){
+        [arr[idx-1], arr[idx]] = [arr[idx], arr[idx-1]];
+        markDirty('expenses', {tab:'expenses', action:'edit', target:'Reordered groups'});
+        renderExpenses();
+      }
+    });
+  });
+  document.querySelectorAll('[data-movegroup-down]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const arr = yearData(y).expenseGroups;
+      const idx = arr.findIndex(x=>x.id===el.dataset.movegroupDown);
+      if(idx>-1 && idx<arr.length-1){
+        [arr[idx+1], arr[idx]] = [arr[idx], arr[idx+1]];
+        markDirty('expenses', {tab:'expenses', action:'edit', target:'Reordered groups'});
+        renderExpenses();
+      }
+    });
+  });
+
+  /* ---- Reorder groups: drag-and-drop, initiated only from the ⠿ handle
+     (not the whole card) so it never fights with clicking to collapse,
+     renaming, or editing a cell — the handle sets the drag image to its
+     whole parent card so it still LOOKS like you're dragging the card. ---- */
+  document.querySelectorAll('[data-draghandle]').forEach(handle=>{
+    handle.addEventListener('dragstart', (e)=>{
+      const card = handle.closest('.group-block');
+      draggingGroupId = handle.dataset.draghandle;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', draggingGroupId); // Firefox requires real data to allow the drag
+      if(card) e.dataTransfer.setDragImage(card, 20, 20);
+      if(card) card.classList.add('dragging');
+    });
+    handle.addEventListener('dragend', ()=>{
+      document.querySelectorAll('.group-block.dragging').forEach(el=>el.classList.remove('dragging'));
+      document.querySelectorAll('.group-block.drag-over').forEach(el=>el.classList.remove('drag-over'));
+      draggingGroupId = null;
+    });
+  });
+  document.querySelectorAll('.group-block').forEach(card=>{
+    card.addEventListener('dragover', (e)=>{
+      if(!draggingGroupId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if(card.dataset.groupId !== draggingGroupId) card.classList.add('drag-over');
+    });
+    card.addEventListener('dragleave', ()=> card.classList.remove('drag-over'));
+    card.addEventListener('drop', (e)=>{
+      e.preventDefault();
+      card.classList.remove('drag-over');
+      const fromId = draggingGroupId, toId = card.dataset.groupId;
+      if(!fromId || fromId===toId) return;
+      const arr = yearData(y).expenseGroups;
+      const fromIdx = arr.findIndex(x=>x.id===fromId);
+      const toIdx = arr.findIndex(x=>x.id===toId);
+      if(fromIdx<0 || toIdx<0) return;
+      const [moved] = arr.splice(fromIdx,1);
+      arr.splice(toIdx,0,moved);
+      markDirty('expenses', {tab:'expenses', action:'edit', target:'Reordered groups'});
       renderExpenses();
     });
   });
