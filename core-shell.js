@@ -7,6 +7,7 @@ const TABS = [
   {id:'savings', label:'Savings', icon:'🏦'},
   {id:'investments', label:'Investments', icon:'📈'},
   {id:'holdings', label:'Holdings', icon:'📦'},
+  {id:'recurring', label:'Recurring', icon:'🔁'},
   {id:'debt', label:'Debt Payoff', icon:'🎯'},
   {id:'data', label:'Data & Import', icon:'📤'}
 ];
@@ -255,6 +256,7 @@ function renderActive(){
   if(active==='savings') renderSavings(); 
   if(active==='investments') renderInvestments();
   if(active==='holdings') renderHoldings();
+  if(active==='recurring') renderRecurring();
   if(active==='debt') renderDebt();
   if(active==='data') renderDataTab();
   applyReadOnlyGuard();
