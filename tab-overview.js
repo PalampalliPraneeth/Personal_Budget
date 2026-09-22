@@ -989,10 +989,15 @@ function renderOverview(){
     return acc.currency==='INR' ? bal/fx : bal;
   }));
   const retirementCurrent = sumArr((yearData(y).retirementAccounts||[]).map(r=>retirementAccountTotalBalance(r)));
+  // Real estate, vehicles, and anything else tracked on the Assets tab —
+  // full current value, since any linked mortgage/loan is already being
+  // subtracted below via the normal debt total regardless of the link.
+  const assetsMonthIdx = currentSnapshotMonth(y);
+  const assetsCurrent = sumArr((yearData(y).assets||[]).map(a=>nativeMonthToUsd(a.currentValue, a.currency, y, assetsMonthIdx)));
 
   const debts = yearData(y).debts;
   const debtPending = sumArr(debts.map(d=>debtPendingCalc(d)));
-  const netWorth = cashOnHand + invCurrent + savingsCurrent + retirementCurrent - debtPending;
+  const netWorth = cashOnHand + invCurrent + savingsCurrent + retirementCurrent + assetsCurrent - debtPending;
 
   const deltaHtml = (curr,prev,inverse)=>{
     if(!hasPrevYear) return `<div class="kpi-delta flat">no ${prevY} data to compare</div>`;
@@ -1012,7 +1017,7 @@ function renderOverview(){
     <div class="kpi-card ${netWorth>=0?'c-gold':'c-danger'}">
       <div class="kpi-label">Net Worth</div>
       <div class="kpi-value">${fmt$(netWorth)}</div>
-      <div class="kpi-delta flat">cash + investments + savings + retirement − debt</div>
+      <div class="kpi-delta flat">cash + investments + savings + retirement + assets − debt</div>
     </div>
 
     <div class="kpi-card c-gold clickable" data-goto="income">

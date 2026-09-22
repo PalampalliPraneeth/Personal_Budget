@@ -5,6 +5,7 @@ const TABS = [
   {id:'expenses', label:'Expenses', icon:'🧾'},
   {id:'budget', label:'Budget', icon:'📋'},
   {id:'savings', label:'Savings', icon:'🏦'},
+  {id:'assets', label:'Assets', icon:'🏡'},
   {id:'investments', label:'Investments', icon:'📈'},
   {id:'holdings', label:'Holdings', icon:'📦'},
   {id:'recurring', label:'Recurring', icon:'🔁'},
@@ -254,6 +255,7 @@ function renderActive(){
   if(active==='expenses') renderExpenses();
   if(active==='budget') renderBudget();
   if(active==='savings') renderSavings(); 
+  if(active==='assets') renderAssets();
   if(active==='investments') renderInvestments();
   if(active==='holdings') renderHoldings();
   if(active==='recurring') renderRecurring();

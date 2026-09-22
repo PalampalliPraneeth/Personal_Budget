@@ -43,8 +43,8 @@ const PALETTE = ['#C9A961','#6FA491','#C06A46','#8FC0AC','#D98C64','#7FAE79','#9
 
 function buildDefaultData(){
   return {
-    2026: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [] },
-    2025: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [] }
+    2026: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [], assets: [] },
+    2025: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [], assets: [] }
   };
 }
 
