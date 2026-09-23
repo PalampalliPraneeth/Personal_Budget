@@ -2,7 +2,7 @@
 // No npm install needed — Vercel auto-detects this file and runs it at the
 // edge before serving any page, for any project type (static sites included).
 
-const ALLOWED_COUNTRIES = ['IN']; // two-letter ISO codes, add/remove as needed
+const ALLOWED_COUNTRIES = ['US']; // two-letter ISO codes, add/remove as needed , 'IN'
 
 export const config = {
   // Runs on page requests, skips static assets so CSS/JS/images for an
