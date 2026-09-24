@@ -110,21 +110,52 @@ function renderRecurring(){
     </div>`;
   };
 
-  /* ---- Next 3 upcoming buys, chronologically across EVERY plan — not just
-     each plan's single next date, but the next 3 actual buy events, which
-     can include the same plan more than once if it recurs again soon. ---- */
-  const upcomingEvents = [];
+  /* ---- Next 3 upcoming DATES (not events) — every stock due on each of
+     the next 3 distinct calendar days, grouped together. Funding is
+     checked PER DATE PER BANK, not per stock: if two buys the same day
+     both draw from Wells Fargo, they're competing for the same balance,
+     so checking each one individually against the full balance would
+     understate the real shortfall. ---- */
+  const dateMap = {}; // date -> [entries]
   recurringRows.forEach(r=>{
     const inv = investments.find(i=>i.id===r.platformId);
     const h = inv && inv.holdings.find(x=>x.id===r.holdingId);
     if(!h || !h.recurring) return;
     const norm = _normalizedRecurring(h.recurring);
-    nextNOccurrences(norm, 3).forEach(date=>{
-      upcomingEvents.push({...r, nextDate: date});
+    nextNOccurrences(norm, 6).forEach(date=>{
+      if(!dateMap[date]) dateMap[date] = [];
+      dateMap[date].push(r);
     });
   });
-  upcomingEvents.sort((a,b)=> a.nextDate < b.nextDate ? -1 : a.nextDate > b.nextDate ? 1 : 0);
-  const next3 = upcomingEvents.slice(0,3);
+  const next3Dates = Object.keys(dateMap).sort().slice(0,3);
+
+  function fundingSummaryForDate(entries){
+    // Group by bank, summing what's actually needed from each one that day.
+    const byBank = new Map(); // bankId -> {bank, neededNative}
+    const unlinked = [];
+    entries.forEach(r=>{
+      if(!r.bankAccountId){ unlinked.push(r); return; }
+      const bank = (yearData(y).banks||[]).find(b=>b.id===r.bankAccountId);
+      if(!bank){ unlinked.push(r); return; }
+      const inv = investments.find(i=>i.id===r.platformId);
+      const investCurrency = (inv && inv.currency) || 'USD';
+      const neededInBankCurrency = convertCurrency(r.amount, investCurrency, bank.currency, y, cashSnapIdx);
+      if(!byBank.has(bank.id)) byBank.set(bank.id, {bank, neededNative:0});
+      byBank.get(bank.id).neededNative += neededInBankCurrency;
+    });
+    const lines = Array.from(byBank.values()).map(({bank, neededNative})=>{
+      const available = accountDisplayValueAt(bank, cashSnapIdx) || 0;
+      const ok = available >= neededNative;
+      return `<div style="font-size:11.5px; margin-top:2px;">
+        <b>${bank.name}</b> needs ${fmtNative(neededNative, bank.currency)} total ·
+        <span style="color:${ok?'var(--good)':'var(--rust-soft)'}; font-weight:600;">
+          ${ok ? '✅ has enough' : `⚠ short ${fmtNative(neededNative-available, bank.currency)}`}
+        </span>
+      </div>`;
+    });
+    if(unlinked.length) lines.push(`<div style="font-size:11.5px; color:var(--text-dim); margin-top:2px;">${unlinked.length} with no funding account linked</div>`);
+    return lines.join('');
+  }
 
   /* ---- This month's recurring investment mix, by platform — every
      occurrence (not just each plan's next one) that lands within the
@@ -168,25 +199,63 @@ function renderRecurring(){
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>Next 3 upcoming</h3></div>
-      ${!next3.length ? `
+      <div class="card-head"><h3>Next 3 upcoming days</h3></div>
+      ${!next3Dates.length ? `
         <div class="section-sub" style="padding:20px 0; text-align:center;">No upcoming buys scheduled.</div>
       ` : `
-      <div style="display:flex; flex-direction:column; gap:10px;">
-        ${next3.map(r=>{
-          const fc = fundingCheck(r);
+      <div style="display:flex; flex-direction:column; gap:16px;">
+        ${next3Dates.map(date=>{
+          const entries = dateMap[date];
+          const dayTotalsByCurrency = {};
+          entries.forEach(r=>{
+            const inv = investments.find(i=>i.id===r.platformId);
+            const cur = (inv && inv.currency) || 'USD';
+            dayTotalsByCurrency[cur] = (dayTotalsByCurrency[cur]||0) + r.amount;
+          });
+          const totalStr = Object.entries(dayTotalsByCurrency).map(([cur,amt])=>fmtNative(amt,cur)).join(' + ');
+          const prettyDate = new Date(date+'T00:00:00').toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'});
+
+          // Group this date's buys by platform, so 2+ platforms on the same
+          // day read as clearly separate blocks with their own subtotal,
+          // instead of one flat list where the platform name is buried.
+          const byPlatform = new Map();
+          entries.forEach(r=>{
+            if(!byPlatform.has(r.platformId)) byPlatform.set(r.platformId, {name:r.platformName, platformId:r.platformId, rows:[]});
+            byPlatform.get(r.platformId).rows.push(r);
+          });
+
+          const platformBlocks = Array.from(byPlatform.values()).map(p=>{
+            const inv = investments.find(i=>i.id===p.platformId);
+            const cur = (inv && inv.currency) || 'USD';
+            const platformTotal = sumArr(p.rows.map(r=>r.amount));
+            return `
+            <div style="padding:9px 12px; background:var(--bg); border-radius:8px;">
+              <div style="display:flex; justify-content:space-between; align-items:baseline;">
+                <span style="font-weight:600; color:var(--gold-soft); font-size:13px;">${p.name}</span>
+                <span style="font-size:12px; color:var(--text-dim);">${fmtNative(platformTotal,cur)} needed</span>
+              </div>
+              <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
+                ${p.rows.map(r=>`
+                  <div style="display:flex; justify-content:space-between; font-size:12.5px; color:var(--text);">
+                    <span>${r.symbol}</span>
+                    <span ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>`;
+          }).join('');
+
           return `
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:14px; background:var(--bg-card-hi); border-radius:10px; padding:12px 16px; flex-wrap:wrap;">
-            <div>
-              <div style="font-family:var(--font-mono); font-size:11px; color:var(--gold-soft); font-weight:600;">${r.nextDate}</div>
-              <div style="font-weight:600; margin-top:2px;">${r.symbol} <span style="color:var(--text-dim); font-weight:400;">on ${r.platformName}</span></div>
+          <div style="background:var(--bg-card-hi); border-radius:12px; padding:14px 16px;">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+              <div style="font-size:15px; font-weight:600; color:var(--text);">${prettyDate}</div>
+              <div style="font-size:12px; color:var(--text-dim);">${entries.length} buy${entries.length===1?'':'s'} · <b style="color:var(--gold-soft);">${totalStr}</b> total</div>
             </div>
-            <div style="text-align:right;">
-              <div ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''} style="font-weight:600;">${r.dAmount} needed</div>
-              ${!r.bankAccountId ? `<div style="font-size:11.5px; color:var(--text-dim);">— no funding account linked —</div>` :
-                !fc.bank ? `<div style="font-size:11.5px; color:var(--text-dim);">funding account not found</div>` :
-                `<div style="font-size:11.5px;">from ${fc.bank.name} · <span style="color:${fc.ok?'var(--good)':'var(--rust-soft)'}; font-weight:600;">${fc.ok?'✅ available':'⚠ short '+fmtNative(fc.shortBy, fc.bank.currency)}</span></div>`
-              }
+            <div style="display:flex; flex-direction:column; gap:8px;">
+              ${platformBlocks}
+            </div>
+            <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--line-soft);">
+              ${fundingSummaryForDate(entries)}
             </div>
           </div>`;
         }).join('')}

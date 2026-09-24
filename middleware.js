@@ -17,7 +17,7 @@ export default function middleware(request) {
   // Missing country (local dev, some corporate proxies) defaults to allowed,
   // so you don't accidentally lock yourself out while testing.
   if (country && !ALLOWED_COUNTRIES.includes(country)) {
-    return new Response('This site is not available in your region.', {
+    return new Response('Loading Error, Please try again later or contact support.', {
       status: 403,
       headers: { 'Content-Type': 'text/plain' },
     });
