@@ -134,7 +134,7 @@ function initShell(){
        this placeholder is never left "selected". */
     const addOpt = document.createElement('option');
     addOpt.value = ADD_YEAR_VALUE;
-    addOpt.textContent = '＋ Add a new year';
+    addOpt.textContent = '＋ New year';
     yearSel.appendChild(addOpt);
   }
   rebuildYearOptions();
