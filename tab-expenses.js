@@ -62,7 +62,7 @@ function renderExpenses(){
             <input type="text" class="group-name-input" value="${g.name.replace(/"/g,'&quot;')}" data-group-input="${g.id}" style="background:var(--bg);color:var(--text);border:1px solid var(--gold);border-radius:6px;padding:4px 10px;font-family:var(--font-display);font-size:15px;font-weight:600;min-width:120px;max-width:260px;">
             <span class="group-save" data-savegroup="${g.id}" title="Save name" style="cursor:pointer;color:var(--good);font-size:16px;user-select:none;">✓</span>
           ` : `
-            <span class="group-name-text">${g.name}</span>
+            <span class="group-name-text">${escapeHtml(g.name)}</span>
             <span class="group-edit" data-editgroup="${g.id}" title="Rename group" style="cursor:pointer;color:var(--text-faint);font-size:13px;opacity:0.55;user-select:none;">✏️</span>
           `}
           ${g.excludeFromTotal?'<span class="debt-tag" style="margin-left:8px;">excluded from totals</span>':''}
@@ -85,7 +85,7 @@ function renderExpenses(){
           </table>
         </div>
         <div class="addcat-row">
-          <input type="text" placeholder="New category in ${g.name}…" data-newcat="${g.id}">
+          <input type="text" placeholder="New category in ${escapeHtml(g.name)}…" data-newcat="${g.id}">
           <select data-newcatcurrency="${g.id}" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
             <option value="USD">USD</option>
             <option value="INR">INR</option>
@@ -108,7 +108,7 @@ function renderExpenses(){
       return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
     }).join('');
     return `<tr data-debt-id="${d.id}" class="${extraClass||''}">
-      <td><span class="ledger-name-text" title="${(d.name||'').replace(/"/g,'&quot;')}">${d.name}</span> ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
+      <td><span class="ledger-name-text" title="${(d.name||'').replace(/"/g,'&quot;')}">${escapeHtml(d.name)}</span> ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
       ${cells}
       <td style="font-weight:600;">${fmtNative(sumArr(d.m), d.currency)}</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}" style="cursor:pointer;">${d.interest}</b>%</td>
@@ -151,7 +151,7 @@ function renderExpenses(){
 
     <div class="last-updated-row">
       <span>Last updated:</span>
-      <input type="datetime-local" id="lastUpdatedInput" value="${lastUpdated ? lastUpdated.slice(0,16) : ''}">
+      <input type="datetime-local" id="lastUpdatedInput" value="${lastUpdated ? toLocalDateTimeInputValue(new Date(lastUpdated)) : ''}">
       <button class="btn small" id="lastUpdatedNowBtn">Set to now</button>
     </div>
 
@@ -505,7 +505,7 @@ function renderExpenses(){
       return `<div class="exp-pie-item" ${clickAttr}>
         <div class="exp-pie-dot" style="background:${PALETTE[i%PALETTE.length]};"></div>
         <div class="exp-pie-item-main">
-          <div class="exp-pie-item-name">${g.name}</div>
+          <div class="exp-pie-item-name">${escapeHtml(g.name)}</div>
           <div class="exp-pie-item-amt">${fmt$(g.total,2)} (${pct}%)</div>
         </div>
       </div>`;

@@ -329,9 +329,9 @@ function renderSankeySVG(data, y){
   /* "Other" buckets can't be expanded past col4 (no 5th column) — instead of
      a caret that does nothing, their tooltip just lists what's inside. */
   function nodeTitle(n){
-    if(n.kind !== 'other') return `${n.name}: ${fmt$(n.value,2)}`;
-    const list = n.children.map(c=>`${c.name} ${fmt$(c.value,2)}`).join('  ·  ');
-    return `${n.name} — ${fmt$(n.value,2)} total:  ${list}`;
+    if(n.kind !== 'other') return `${escapeHtml(n.name)}: ${fmt$(n.value,2)}`;
+    const list = n.children.map(c=>`${escapeHtml(c.name)} ${fmt$(c.value,2)}`).join('  ·  ');
+    return `${escapeHtml(n.name)} — ${fmt$(n.value,2)} total:  ${list}`;
   }
 
   // Long names ("College expenses (car, gas, coffee, flights...)") would run
@@ -480,8 +480,8 @@ function buildUpcomingRecurring(y){
   if(typeof ensureBanksMigration === 'function') ensureBanksMigration();
   const investments = yearData(y).investments || [];
   const allBanks = yearData(y).banks || [];
-  const fx = (typeof _ensureFx === 'function') ? (_ensureFx().INR || 95.0)
-    : ((typeof fxRates!=='undefined' && fxRates && fxRates.INR) ? fxRates.INR : 95.0);
+  const fx = (typeof _ensureFx === 'function') ? (_ensureFx().INR || FX_FALLBACK_INR)
+    : ((typeof fxRates!=='undefined' && fxRates && fxRates.INR) ? fxRates.INR : FX_FALLBACK_INR);
   const today = new Date(); today.setHours(0,0,0,0);
   const todayISO = toLocalISODate(today);
   const snapIdx = currentSnapshotMonth(y);
@@ -607,7 +607,7 @@ function renderUpcomingRecurringCard(y){
   const chips = data.platformTotals.map(p=>`
     <div class="recur-chip" style="border-color:${data.colorOf[p.platformId]}44;">
       <span class="recur-chip-dot" style="background:${data.colorOf[p.platformId]};"></span>
-      <span class="recur-chip-name">${p.name}</span>
+      <span class="recur-chip-name">${escapeHtml(p.name)}</span>
       <span class="recur-chip-amt">${fmt$(p.totalUsd,2)}</span>
       <span class="recur-chip-count">${p.count} buy${p.count===1?'':'s'}</span>
     </div>`).join('');
@@ -621,7 +621,7 @@ function renderUpcomingRecurringCard(y){
       <div class="recur-row" data-recur-goto="1" title="Open in Holdings">
         <span class="recur-row-dot" style="background:${color};"></span>
         <div class="recur-row-main">
-          <div class="recur-row-name">${r.symbol}${r.name && r.name!==r.symbol ? ` <span class="recur-row-sub">· ${r.name}</span>` : ''}${r.alreadyConfirmed ? ' <span class="recur-row-confirmed">✓ confirmed</span>' : ''}</div>
+          <div class="recur-row-name">${escapeHtml(r.symbol)}${r.name && r.name!==r.symbol ? ` <span class="recur-row-sub">· ${escapeHtml(r.name)}</span>` : ''}${r.alreadyConfirmed ? ' <span class="recur-row-confirmed">✓ confirmed</span>' : ''}</div>
           <div class="recur-row-platform">${r.platformName} · <span class="recur-row-schedule">${r.scheduleLabel}</span>${r.bankAccountName ? ` · <span class="recur-row-funding">from ${r.bankAccountName}</span>` : ''}</div>
         </div>
         <div class="recur-row-amt" ${tip}>${displayAmt}</div>
@@ -640,7 +640,7 @@ function renderUpcomingRecurringCard(y){
         ? `<span class="recur-funding-inline unlinked">${fmt$(p.unlinkedUsd,2)} not linked</span>` : '';
       return `
       <div class="recur-platform-funding">
-        <span class="recur-platform-funding-name">${p.name}</span>
+        <span class="recur-platform-funding-name">${escapeHtml(p.name)}</span>
         <span class="recur-platform-funding-amt">${fmt$(p.totalUsd,2)}</span>
         <span class="recur-platform-funding-count">${p.count} buy${p.count===1?'':'s'}</span>
         ${accountsInline}${unlinkedInline}
@@ -664,7 +664,7 @@ function renderUpcomingRecurringCard(y){
       <h3>Upcoming recurring investments</h3>
       <span class="section-sub" style="margin:0; display:flex; align-items:center; gap:10px;">
         ${fmt$(data.grandTotalUsd,2)} scheduled across ${data.platformTotals.length} platform${data.platformTotals.length===1?'':'s'}
-        <button class="btn ghost small" id="emailReminderBtn" title="Get an email the day before a recurring buy is due">✉️ Reminders</button>
+        <button class="btn ghost small" id="emailReminderBtn" title="Get emails 7, 3, and 1 day(s) before a recurring buy is due">✉️ Reminders</button>
       </span>
     </div>
     <div class="recur-chips">${chips}</div>
@@ -710,7 +710,7 @@ function renderSavingsGoalsMiniCard(y){
     <div class="mini-goal-row" data-goto="savings" data-savings-goto-sub="goals">
       <div class="mini-goal-icon" style="background:${color}22; color:${color};">${g.icon||'🎯'}</div>
       <div class="mini-goal-main">
-        <div class="mini-goal-name">${g.name}</div>
+        <div class="mini-goal-name">${escapeHtml(g.name)}</div>
         <div class="mini-goal-amt">${fmt$(contributed,2)} of ${fmt$(target,2)}</div>
         <div class="runway"><div class="runway-fill" style="width:${pct}%; background:${color};"></div></div>
         ${dateLine}
@@ -748,7 +748,7 @@ function renderCashCreditMiniCard(y){
     <div class="bank-row">
       <div class="bank-row-icon" data-goto="cashflow">${initial}</div>
       <div class="bank-row-main" data-goto="cashflow">
-        <div class="bank-row-name">${b.name}</div>
+        <div class="bank-row-name">${escapeHtml(b.name)}</div>
         <div class="bank-row-sub">${isCredit ? (cycleLabel || 'Credit Card · cycle not set') : (BANK_TYPE_LABELS[b.type]||'Checking')} ${isCredit ? `<span class="row-del" data-editcycle-ov="${b.id}" title="edit billing cycle & due date">✎</span>` : ''}</div>
       </div>
       <div class="bank-row-right" data-goto="cashflow">
@@ -787,7 +787,7 @@ function renderDebtPayoffWidget(debts){
 
   const heroBarSegments = debtsSorted.map((d,i)=>{
     const share = originalTotal>0 ? (debtClearedToDate(d)/originalTotal)*100 : 0;
-    return `<div style="background:${PALETTE[i%PALETTE.length]}; width:${share}%;" title="${d.name}"></div>`;
+    return `<div style="background:${PALETTE[i%PALETTE.length]}; width:${share}%;" title="${escapeHtml(d.name)}"></div>`;
   }).join('');
 
   const CIRC = 2*Math.PI*36; // r=36
@@ -804,7 +804,7 @@ function renderDebtPayoffWidget(debts){
         <circle cx="44" cy="44" r="36" fill="none" stroke="${color}" stroke-width="9" stroke-dasharray="${CIRC.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}" stroke-linecap="round" transform="rotate(-90 44 44)"/>
         <text x="44" y="49" text-anchor="middle" fill="var(--text)" font-size="17" font-weight="700" font-family="var(--font-mono)">${pct.toFixed(0)}%</text>
       </svg>
-      <div class="debt-ring-name">${d.name}</div>
+      <div class="debt-ring-name">${escapeHtml(d.name)}</div>
       <div class="debt-ring-paid" style="color:${color};">${fmt$(cleared,0)} paid</div>
       <div class="debt-ring-left">${fmt$(pending,0)} left</div>
     </div>`;
@@ -834,7 +834,7 @@ async function _wireEmailReminderBtn(){
   btn.classList.toggle('active', !!email);
   btn.title = email
     ? 'Click to change or turn off email reminders'
-    : 'Get an email the day before a recurring buy is due';
+    : 'Get emails 7, 3, and 1 day(s) before a recurring buy is due';
 
   btn.onclick = ()=> _openEmailReminderModal(email);
 }
@@ -844,29 +844,40 @@ async function _wireEmailReminderBtn(){
    before it's due — see send-recurring-reminders.ts). Reuses the exact same
    nextRecurringDateForPlan() the Holdings tab uses, so this always matches
    what's shown there. Returns null if nothing recurring is set up yet. */
+/* BUGFIX (#20): must match LEAD_DAYS in send-recurring-reminders.ts — the
+   server actually emails 7, 3, and 1 day(s) before a plan's due date (one
+   summary email per bucket), not a single email "the day before" as the
+   UI text and this function used to claim/assume. */
+const REMINDER_LEAD_DAYS = [7, 3, 1];
+
 function _nextReminderInfo(){
   if(typeof nextRecurringDateForPlan !== 'function') return null;
   const todayISO = toLocalISODate(new Date());
-  let earliest = null;
+  let earliest = null; // earliest upcoming SEND date across every plan and every lead-day bucket
   for(const yearKey of Object.keys(DATA)){
     if(!/^\d+$/.test(yearKey)) continue;
     for(const inv of (DATA[yearKey]?.investments || [])){
       for(const h of (inv.holdings || [])){
         if(!h.recurring?.active) continue;
         const dueISO = nextRecurringDateForPlan(h.recurring);
-        // Skip anything due today or earlier — there's no future reminder
-        // to show for those (a same-day due date means its reminder,
-        // sent "the day before," would already have gone out yesterday).
-        if(!dueISO || dueISO <= todayISO) continue;
-        if(!earliest || dueISO < earliest.dueISO){
-          earliest = { dueISO, symbol: h.symbol || h.name || 'a holding', platform: inv.name || 'a platform' };
+        if(!dueISO) continue;
+        const dueDate = new Date(dueISO+'T00:00:00');
+        for(const lead of REMINDER_LEAD_DAYS){
+          const sendDate = new Date(dueDate); sendDate.setDate(sendDate.getDate()-lead);
+          const sendISO = toLocalISODate(sendDate);
+          // Skip a bucket whose send date is today or earlier — that
+          // email would already have gone out (or isn't a future one).
+          if(sendISO <= todayISO) continue;
+          if(!earliest || sendISO < earliest.sendISO){
+            earliest = { sendISO, dueISO, symbol: h.symbol || h.name || 'a holding', platform: inv.name || 'a platform' };
+          }
         }
       }
     }
   }
   if(!earliest) return null;
   const dueDate = new Date(earliest.dueISO+'T00:00:00');
-  const sendDate = new Date(dueDate); sendDate.setDate(sendDate.getDate()-1);
+  const sendDate = new Date(earliest.sendISO+'T00:00:00');
   const fmt = (d)=> d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
   return { ...earliest, sendLabel: fmt(sendDate), dueLabel: fmt(dueDate) };
 }
@@ -890,7 +901,7 @@ function _openEmailReminderModal(currentEmail){
   overlay.innerHTML = `
     <div class="modal-card" style="width:380px;">
       <h3 style="margin:0 0 6px;">Email reminders</h3>
-      <p class="modal-sub">Get an email the day before any recurring buy is due — one summary email, not one per plan.</p>
+      <p class="modal-sub">Get an email 7, 3, and 1 day(s) before any recurring buy is due — one summary email per bucket, not one per plan.</p>
       <div class="modal-field">
         <label>Email address</label>
         <div id="reminderEmailDisplayRow" style="display:${currentEmail ? 'flex' : 'none'}; align-items:center; justify-content:space-between; gap:10px; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
@@ -940,7 +951,7 @@ function _openEmailReminderModal(currentEmail){
     const input = document.getElementById('reminderEmailInput');
     const result = await setNotifyEmail(input.value);
     if(result.ok){
-      showToast("Reminders on — you'll get an email the day before a recurring buy is due");
+      showToast("Reminders on — you'll get emails 7, 3, and 1 day(s) before a recurring buy is due");
       close();
       _wireEmailReminderBtn();
     } else if(result.reason === 'invalid'){
@@ -972,7 +983,7 @@ function renderOverview(){
   const cashOnHand = cfRows[cfIdx].carryOut;
   const cashPrevMonth = cfIdx>0 ? cfRows[cfIdx-1].carryOut : null;
 
-  const fx = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : 84.0;
+  const fx = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : FX_FALLBACK_INR;
   // Match the Investments tab exactly: a platform with Holdings tracked
   // gets its value from LIVE stock prices (platformHoldings), not the
   // static currentValue field, which goes stale the moment you fetch new

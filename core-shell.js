@@ -121,12 +121,70 @@ function initShell(){
   document.getElementById('todayStr').textContent = today.toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit'});
 
   const yearSel = document.getElementById('yearSelect');
-  Object.keys(DATA).filter(k=>/^\d+$/.test(k)).sort((a,b)=>b-a).forEach(y=>{
-    const o = document.createElement('option'); o.value=y; o.textContent=y; yearSel.appendChild(o);
-  });
-  state.year = Object.keys(DATA).includes('2026') ? 2026 : Number(Object.keys(DATA).filter(k=>/^\d+$/.test(k))[0]);
+  const ADD_YEAR_VALUE = '__add_year__';
+  function rebuildYearOptions(){
+    yearSel.innerHTML = '';
+    Object.keys(DATA).filter(k=>/^\d+$/.test(k)).sort((a,b)=>b-a).forEach(y=>{
+      const o = document.createElement('option'); o.value=y; o.textContent=y; yearSel.appendChild(o);
+    });
+    /* BUGFIX (#22): "add a year" now lives INSIDE the year dropdown itself
+       (as its own option, always last/oldest-looking in the list) instead
+       of a separate ＋ button next to it — selecting it runs the same
+       add-year flow below, then the dropdown resets to a real year so
+       this placeholder is never left "selected". */
+    const addOpt = document.createElement('option');
+    addOpt.value = ADD_YEAR_VALUE;
+    addOpt.textContent = '＋ Add a new year';
+    yearSel.appendChild(addOpt);
+  }
+  rebuildYearOptions();
+  /* BUGFIX (#22): this used to hardcode "prefer 2026, else the first year
+     found" — meaning 2027 (or any later year) would never be picked as
+     the default even after it existed, and there was no way to create it
+     in the first place. Default to the most recent year on file instead,
+     which works the same today and keeps working after a year is added. */
+  const yearKeysAtBoot = Object.keys(DATA).filter(k=>/^\d+$/.test(k)).map(Number);
+  state.year = yearKeysAtBoot.length ? Math.max(...yearKeysAtBoot) : new Date().getFullYear();
   yearSel.value = state.year;
-  yearSel.addEventListener('change', ()=>{ guardAndSwitch(()=>{ state.year = Number(yearSel.value); state.month='ALL'; refreshMonthOptions(); renderActive(); }); });
+  updateBrandYear();
+
+  /* BUGFIX (#22): adding the next year to the ledger — until now the only
+     years that could ever exist were the two hardcoded in
+     buildDefaultData() (2025/2026), so 2027 had no way to be added short
+     of editing source. Admin-only (guarded the same way other structural
+     edits are), inserts a properly-shaped empty year via emptyYearShape(),
+     and switches straight to it. */
+  function addNewYear(){
+    if(currentRole === 'readonly'){ yearSel.value = state.year; return; }
+    const existingYears = Object.keys(DATA).filter(k=>/^\d+$/.test(k)).map(Number);
+    const nextYear = (existingYears.length ? Math.max(...existingYears) : new Date().getFullYear()-1) + 1;
+    if(DATA[nextYear]){
+      showToast(`${nextYear} already exists`);
+      yearSel.value = state.year;
+      return;
+    }
+    if(!confirm(`Add ${nextYear} to the ledger? You'll be able to add income, budgets, and everything else for it right away.`)){
+      yearSel.value = state.year;
+      return;
+    }
+    DATA[nextYear] = emptyYearShape();
+    rebuildYearOptions();
+    state.year = nextYear;
+    yearSel.value = nextYear;
+    state.month = 'ALL';
+    refreshMonthOptions();
+    updateBrandYear();
+    markDirty('data', {tab:'data', action:'add-year', target:String(nextYear)});
+    renderActive();
+    showToast(`${nextYear} added — remember to Save`);
+  }
+  yearSel.addEventListener('change', ()=>{
+    if(yearSel.value === ADD_YEAR_VALUE){
+      guardAndSwitch(addNewYear);
+      return;
+    }
+    guardAndSwitch(()=>{ state.year = Number(yearSel.value); state.month='ALL'; refreshMonthOptions(); updateBrandYear(); renderActive(); });
+  });
 
   refreshMonthOptions();
   document.getElementById('monthSelect').addEventListener('change', (e)=>{ guardAndSwitch(()=>{ state.month = e.target.value; renderActive(); }); });
@@ -181,10 +239,20 @@ function initShell(){
   /* ---- Activity bell (admin only) ---- */
   const bell = document.getElementById('activityBell');
   const dropdown = document.getElementById('activityDropdown');
-  if(currentRole==='admin' && bell){
-    bell.style.display = '';
+  if(bell){
+    bell.style.display = currentRole==='admin' ? '' : 'none';
     bell.addEventListener('click', async (e)=>{
       e.stopPropagation();
+      /* BUGFIX (#19b): this handler used to open the dropdown
+         unconditionally — it only ever ran for admin because the whole
+         addEventListener call was inside `if(currentRole==='admin')`,
+         but that check happened once at bind time, not at click time. If
+         you locked and re-entered as readonly later, the *same* listener
+         (bound back when you were admin) was still attached and the bell
+         was still visible (see initShellReadonlyRefresh()), so readonly
+         could open it. Checking currentRole here too closes that gap even
+         if the bell's display style is ever left stale. */
+      if(currentRole !== 'admin') return;
       const isOpen = dropdown.style.display === 'block';
       if(!isOpen){
         await renderActivityDropdown(); // fresh fetch every open
@@ -198,8 +266,6 @@ function initShell(){
         dropdown.style.display = 'none';
       }
     });
-  } else if(bell){
-    bell.style.display = 'none';
   }
 
   window.addEventListener('beforeunload', (e)=>{
@@ -230,6 +296,19 @@ function initShellReadonlyRefresh(){
   } else {
     document.querySelector('.footer-note').textContent = "Every figure here lives in your browser's private storage for this ledger — edit a cell, add a category, or drop in a new spreadsheet any time.";
   }
+  /* BUGFIX (#19b): re-sync the bell's visibility on every role switch
+     (this runs right after re-entering a PIN), not just at initShell()'s
+     original one-time bind — see the comment on the bell's click handler
+     in initShell() for the full story. */
+  const bell = document.getElementById('activityBell');
+  const dropdown = document.getElementById('activityDropdown');
+  if(bell) bell.style.display = currentRole==='admin' ? '' : 'none';
+  if(dropdown && currentRole!=='admin') dropdown.style.display = 'none';
+}
+
+function updateBrandYear(){
+  const em = document.getElementById('brandYearEm');
+  if(em) em.textContent = state.year;
 }
 
 function refreshMonthOptions(){

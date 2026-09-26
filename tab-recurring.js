@@ -46,7 +46,9 @@ function nextNOccurrences(norm, count){
   const stepDays = norm.frequencyType==='weekly' ? 7 : norm.frequencyType==='biweekly' ? 14 : 1;
   let cursor = new Date(start);
   if(cursor < today){
-    const diffDays = Math.floor((today-cursor)/86400000);
+    // BUGFIX (#16): same DST drift as nextRecurringDateForPlan() in
+    // tab-holdings.js — see calendarDaysBetween()'s comment in core-data.js.
+    const diffDays = calendarDaysBetween(cursor, today);
     const steps = Math.ceil(diffDays/stepDays);
     cursor.setDate(cursor.getDate()+steps*stepDays);
   }
@@ -65,7 +67,7 @@ function renderRecurring(){
   const nextUpcoming = recurringRows[0] || null;
   const activeCount = recurringRows.length;
   const platformCount = new Set(recurringRows.map(r=>r.platformId)).size;
-  const fx = (typeof _ensureFx === 'function' ? _ensureFx().INR : null) || 95.0;
+  const fx = (typeof _ensureFx === 'function' ? _ensureFx().INR : null) || FX_FALLBACK_INR;
 
   // Rough "per month" total — daysOfMonth/monthly/quarterly plans count once
   // (quarterly divided by 3), weekly ~4.33x, biweekly ~2.17x. It's an
@@ -103,7 +105,7 @@ function renderRecurring(){
     if(!r.bankAccountId) return `<span style="color:var(--text-dim); font-size:11.5px;">— not linked —</span>`;
     if(!fc.bank) return `<span style="color:var(--text-dim); font-size:11.5px;">account not found</span>`;
     return `<div style="font-size:11.5px;">
-      <div>${fc.bank.name}</div>
+      <div>${escapeHtml(fc.bank.name)}</div>
       <div style="color:${fc.ok?'var(--good)':'var(--rust-soft)'}; font-weight:600;">
         ${fc.ok ? '✅ Ready' : `⚠ Short ${fmtNative(fc.shortBy, fc.bank.currency)}`}
       </div>
@@ -147,7 +149,7 @@ function renderRecurring(){
       const available = accountDisplayValueAt(bank, cashSnapIdx) || 0;
       const ok = available >= neededNative;
       return `<div style="font-size:11.5px; margin-top:2px;">
-        <b>${bank.name}</b> needs ${fmtNative(neededNative, bank.currency)} total ·
+        <b>${escapeHtml(bank.name)}</b> needs ${fmtNative(neededNative, bank.currency)} total ·
         <span style="color:${ok?'var(--good)':'var(--rust-soft)'}; font-weight:600;">
           ${ok ? '✅ has enough' : `⚠ short ${fmtNative(neededNative-available, bank.currency)}`}
         </span>
@@ -231,13 +233,13 @@ function renderRecurring(){
             return `
             <div style="padding:9px 12px; background:var(--bg); border-radius:8px;">
               <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                <span style="font-weight:600; color:var(--gold-soft); font-size:13px;">${p.name}</span>
+                <span style="font-weight:600; color:var(--gold-soft); font-size:13px;">${escapeHtml(p.name)}</span>
                 <span style="font-size:12px; color:var(--text-dim);">${fmtNative(platformTotal,cur)} needed</span>
               </div>
               <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
                 ${p.rows.map(r=>`
                   <div style="display:flex; justify-content:space-between; font-size:12.5px; color:var(--text);">
-                    <span>${r.symbol}</span>
+                    <span>${escapeHtml(r.symbol)}</span>
                     <span ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</span>
                   </div>
                 `).join('')}
@@ -283,7 +285,7 @@ function renderRecurring(){
           <tbody>${recurringRows.map(r => `
             <tr>
               <td><span class="debt-tag" style="font-size:10px;">${r.platformName}</span></td>
-              <td style="font-weight:600;">${r.symbol} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${r.name}</span>` : ''}</td>
+              <td style="font-weight:600;">${escapeHtml(r.symbol)} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${escapeHtml(r.name)}</span>` : ''}</td>
               <td ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</td>
               <td><span class="debt-tag">${r.scheduleLabel}</span></td>
               <td>${fundingHtml(r)}</td>

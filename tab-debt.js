@@ -98,7 +98,7 @@ function renderDebt(){
     return `
     <div class="debt-card" data-debt-id="${d.id}">
       <div class="debt-card-head">
-        <div><span class="debt-name">${d.name}</span>
+        <div><span class="debt-name">${escapeHtml(d.name)}</span>
           ${isPaid?'<span class="debt-tag" style="color:var(--good); border-color:var(--good);">paid off</span>':''}
           ${needsTotal?'<span class="debt-tag" style="color:var(--gold); border-color:var(--gold);">set total below</span>':''}
         </div>
@@ -117,7 +117,7 @@ function renderDebt(){
         <span>Pending: <b class="editable-inline" style="color:var(--rust-soft)" contenteditable="true" data-debtfield="pending" data-id="${d.id}">${fmt$(debtPendingCalc(d),2)}</b> USD</span>
         <span>Original: <b class="editable-inline" contenteditable="true" data-debtfield="total" data-id="${d.id}">${d.total}</b> ${d.currency||'USD'} ${isINR?`<span style="opacity:.55">(${fmt$(debtOriginalUsd(d),2)})</span>`:''}</span>
       </div>
-      ${d.note?`<div class="section-sub" style="margin-top:8px;">⚑ ${d.note}</div>`:''}
+      ${d.note?`<div class="section-sub" style="margin-top:8px;">⚑ ${escapeHtml(d.note)}</div>`:''}
     </div>`;
   }
 
@@ -141,7 +141,7 @@ function renderDebt(){
   /* ---- Payment plan table ---- */
   const hasPlan = plan.columns.length > 0 && plan.rows.length > 0;
   const colHeaders = plan.columns.map(c=>
-    `<th>${c.name}${c.kind==='memo'?' <span style="opacity:.6;">(memo)</span>':c.kind==='income'?' <span style="opacity:.6;">(income)</span>':''} <span class="row-del" data-delcol="${c.id}" title="remove column">✕</span></th>`
+    `<th>${escapeHtml(c.name)}${c.kind==='memo'?' <span style="opacity:.6;">(memo)</span>':c.kind==='income'?' <span style="opacity:.6;">(income)</span>':''} <span class="row-del" data-delcol="${c.id}" title="remove column">✕</span></th>`
   ).join('');
 
   const planRowsHtml = hasPlan ? plan.rows.map(r=>{

@@ -27,9 +27,17 @@ function savingsBalanceForInterest(acc, monthIdx){
 }
 
 function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
-  const balAt = (acc, i)=> num((acc.m||[])[i]);
+  /* BUGFIX (#14): balAt() used to return the raw native-currency balance
+     with no regard for acc.currency — fine for a single account, but
+     every cross-account total below (totalSavedLatest, the "Total across
+     accounts" row, its Year column) summed these raw numbers straight
+     across accounts, so one INR savings account got added to USD accounts
+     as if 1 INR == 1 USD. balAt now converts to USD via the app's
+     existing nativeMonthToUsd() helper; per-row cells still show the
+     native amount (via acc.m directly), only aggregates go through this. */
+  const balAt = (acc, i)=> nativeMonthToUsd(num((acc.m||[])[i]), acc.currency, y, i);
   const totalSavedLatest = accounts.reduce((a,acc)=>a+balAt(acc, activeMonthIdx>=0?activeMonthIdx:0),0);
-  const totalAnnualInterest = accounts.reduce((a,acc)=>a + savingsBalanceForInterest(acc, activeMonthIdx>=0?activeMonthIdx:0) * (num(acc.interestRate)/100), 0);
+  const totalAnnualInterest = accounts.reduce((a,acc)=>a + nativeMonthToUsd(savingsBalanceForInterest(acc, activeMonthIdx>=0?activeMonthIdx:0), acc.currency, y, activeMonthIdx>=0?activeMonthIdx:0) * (num(acc.interestRate)/100), 0);
   const avgRate = accounts.length ? (accounts.reduce((a,acc)=>a+num(acc.interestRate),0)/accounts.length) : 0;
 
   const rows = accounts.map(acc=>{
@@ -43,7 +51,7 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
     const effectiveBal = savingsBalanceForInterest(acc, activeMonthIdx>=0?activeMonthIdx:0);
     const estInterest = monthlyInterestEstimate(effectiveBal, acc.interestRate) * 12;
     return `<tr data-savings-id="${acc.id}">
-      <td style="font-weight:600;">${acc.name} <span class="row-del" data-delsavings="${acc.id}">✕</span></td>
+      <td style="font-weight:600;">${escapeHtml(acc.name)} <span class="row-del" data-delsavings="${acc.id}">✕</span></td>
       ${cells}
       <td style="font-weight:700;">${fmt$(total,2)}</td>
       <td class="editable" contenteditable="true" data-sfield="rate" data-sid="${acc.id}" style="text-align:center;">${num(acc.interestRate).toFixed(2)}%</td>
@@ -67,9 +75,11 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
           <thead><tr><th>Account</th>${monthHeaderCells()}<th>Year</th><th>Interest %</th><th>Currency</th><th>Est. interest</th></tr></thead>
           <tbody id="savingsBody">${rows}
             <tr class="total-row"><td>Total across accounts</td>${MONTHS.map((_,i)=>{
-              const t = accounts.reduce((a,acc)=>a+num((acc.m||[])[i]),0);
+              /* BUGFIX (#14): was a raw num() sum across accounts, mixing
+                 INR and USD balances as if they were the same currency. */
+              const t = accounts.reduce((a,acc)=>a+nativeMonthToUsd(num((acc.m||[])[i]), acc.currency, y, i),0);
               return `<td>${t>0?fmt$(t):'—'}</td>`;
-            }).join('')}<td>${fmt$(accounts.reduce((a,acc)=>a+sumArr(acc.m||[]),0))}</td><td></td><td></td><td>${fmt$(totalAnnualInterest)}</td></tr>
+            }).join('')}<td>${fmt$(accounts.reduce((a,acc)=>a+monthlyArrToUsd(acc.m||[], acc.currency, y),0))}</td><td></td><td></td><td>${fmt$(totalAnnualInterest)}</td></tr>
           </tbody>
         </table>
       </div>
@@ -209,7 +219,7 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
   const totalContributedUsd = sumArr(goals.map(g=>goalContributedUsd(g, accounts, activeMonthIdx)));
   const overallPct = totalTargetUsd>0 ? Math.min(100, (totalContributedUsd/totalTargetUsd)*100) : 0;
 
-  const accountOptions = accounts.map(a=>`<option value="${a.id}">${a.name} (${a.currency||'USD'})</option>`).join('');
+  const accountOptions = accounts.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} (${a.currency||'USD'})</option>`).join('');
 
   const cards = goals.map(g=>{
     const acc = goalLinkedAccount(g, accounts);
@@ -267,15 +277,15 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
     return `
     <div class="debt-card" data-goal-id="${g.id}">
       <div class="debt-card-head">
-        <div><span class="debt-name">${g.icon||'🎯'} ${g.name}</span>
+        <div><span class="debt-name">${g.icon||'🎯'} ${escapeHtml(g.name)}</span>
           ${reached?'<span class="debt-tag" style="color:var(--good); border-color:var(--good);">🎉 goal reached</span>':''}
-          ${acc?`<span class="debt-tag" style="color:var(--teal-soft); border-color:var(--teal-soft);">linked · ${acc.name}</span>`:'<span class="debt-tag">manual tracking</span>'}
+          ${acc?`<span class="debt-tag" style="color:var(--teal-soft); border-color:var(--teal-soft);">linked · ${escapeHtml(acc.name)}</span>`:'<span class="debt-tag">manual tracking</span>'}
         </div>
         <div class="debt-figs">
           <label style="display:flex;align-items:center;gap:4px;">Link
             <select data-goal-link="${g.id}" style="background:var(--bg-card-hi); color:var(--teal-soft); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11px; padding:2px 4px;">
               <option value="">— not linked —</option>
-              ${accounts.map(a=>`<option value="${a.id}" ${g.linkedAccountId===a.id?'selected':''}>${a.name}</option>`).join('')}
+              ${accounts.map(a=>`<option value="${a.id}" ${g.linkedAccountId===a.id?'selected':''}>${escapeHtml(a.name)}</option>`).join('')}
             </select>
           </label>
         </div>
@@ -293,7 +303,7 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
     </div>
     ${!acc ? `
     <div class="table-scroll" style="margin:6px 0 16px;">
-      <table class="ledger"><thead><tr><th style="width:140px;">${g.name} — monthly</th>${monthHeaderCells()}<th>Year</th></tr></thead>
+      <table class="ledger"><thead><tr><th style="width:140px;">${escapeHtml(g.name)} — monthly</th>${monthHeaderCells()}<th>Year</th></tr></thead>
       <tbody><tr>${monthCells}<td style="font-weight:700;">${fmt$(sumArr(g.m||[]),2)}</td></tr></tbody></table>
     </div>` : ''}`;
   }).join('');
@@ -466,7 +476,7 @@ function renderRetirementSection(y, retAccounts){
     const projGrowth = retirementProjectedAnnualGrowth(r);
     return `
     <tr data-ret-id="${r.id}" style="border-top:2px solid var(--line-soft);">
-      <td rowspan="2" style="font-weight:600; vertical-align:middle;">${r.name} <span class="row-del" data-delret="${r.id}">✕</span>
+      <td rowspan="2" style="font-weight:600; vertical-align:middle;">${escapeHtml(r.name)} <span class="row-del" data-delret="${r.id}">✕</span>
         <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">${r.currency||'USD'} · prior: <b class="editable-inline" contenteditable="true" data-retfield="priorSelf" data-id="${r.id}">${num(r.priorSelf)}</b> you / <b class="editable-inline" contenteditable="true" data-retfield="priorEmployer" data-id="${r.id}">${num(r.priorEmployer)}</b> employer</div>
       </td>
       <td style="color:var(--gold-soft); font-size:11px; font-weight:600;">You</td>

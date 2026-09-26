@@ -15,7 +15,8 @@ function allInvestCategories(){
 let fxRates = null;
 let fxLastFetch = 0;
 const FX_TTL = 60 * 60 * 1000; // cache 1 hour
-const FX_FALLBACK_INR = 84.0;
+// BUGFIX (#21): FX_FALLBACK_INR now lives in core-data.js (loaded before
+// this file) so every tab shares one fallback rate — see the comment there.
 
 async function ensureFxRates(){
   if (fxRates && (Date.now() - fxLastFetch) < FX_TTL) return fxRates;
@@ -218,7 +219,7 @@ function renderInvestments(){
 
     /* Name is clickable if holdings exist; Current/Invested are plain display */
     const nameLink = dyn
-      ? `<span style="cursor:pointer;color:var(--gold-soft);font-weight:500;" data-golink="${it.id}" data-tip="Click to view/edit ${it.name}'s positions in Holdings" class="has-tip">${it.name}</span>`
+      ? `<span style="cursor:pointer;color:var(--gold-soft);font-weight:500;" data-golink="${it.id}" data-tip="Click to view/edit ${escapeHtml(it.name)}'s positions in Holdings" class="has-tip">${escapeHtml(it.name)}</span>`
       : it.name;
 
     let cvCell, invCell;
@@ -256,8 +257,18 @@ function renderInvestments(){
   }).join('');
 
   /* ---- Allocation in USD ---- */
+  /* BUGFIX (#13): this used to always read the manually-typed
+     toUsd(it,'currentValue') field, even for a platform that has real
+     Holdings tracked — so once you started tracking actual positions,
+     the KPI cards above (which already prefer dynamicValuesFor()) moved
+     with live prices while this pie kept showing whatever stale number
+     was last typed into the old manual field. Use the same
+     holdings-derived value the KPI cards use whenever it's available. */
   const alloc = {};
-  items.forEach(it => { alloc[it.category] = (alloc[it.category]||0) + toUsd(it, 'currentValue'); });
+  items.forEach(it => {
+    const dyn = dynamicValuesFor(it);
+    alloc[it.category] = (alloc[it.category]||0) + (dyn ? dyn.currentValue : toUsd(it, 'currentValue'));
+  });
   const allocSorted = Object.entries(alloc).sort((a,b)=>b[1]-a[1]);
   const allocLabels = allocSorted.map(e=>e[0]);
   const allocVals   = allocSorted.map(e=>e[1]);

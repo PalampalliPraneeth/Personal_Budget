@@ -7,6 +7,19 @@ const SESSION_KEY = 'ledger:session:v1';
 const SESSION_TTL_MS = 0; // remembered for 12 hours, then re-prompts
 let currentRole = null;
 
+/* BUGFIX (#19a): there used to be no limit on wrong-PIN attempts at all —
+   someone (or a script) could sit there guessing all 10,000 four-digit
+   combinations with nothing slowing them down. This adds a simple
+   lockout: 5 wrong attempts in a row locks the keypad for 30 seconds.
+   It's in-memory only (resets on page reload) since this whole PIN is
+   already documented as a soft "casual glance" deterrent, not real
+   security — but "no limit at all" was strictly worse than a basic
+   cooldown, so this raises the floor a bit. */
+let failedPinAttempts = 0;
+let pinLockUntil = 0;
+const PIN_MAX_ATTEMPTS = 5;
+const PIN_LOCKOUT_MS = 30000;
+
 async function tryRememberedSession(){
   try{
     if(typeof window.storage === 'undefined') return null;
@@ -48,15 +61,44 @@ function showPinOverlay(onSuccess){
   `;
   document.body.appendChild(overlay);
   let entered = '';
+  let lockoutTimer = null;
   const dotsEl = ()=>overlay.querySelectorAll('.pin-dot');
   function updateDots(){ dotsEl().forEach((d,i)=> d.classList.toggle('filled', i<entered.length)); }
-  function cleanup(){ document.removeEventListener('keydown', onKeydown); overlay.remove(); }
+  function cleanup(){ document.removeEventListener('keydown', onKeydown); if(lockoutTimer) clearInterval(lockoutTimer); overlay.remove(); }
+  function setKeypadDisabled(disabled){
+    overlay.querySelectorAll('.pin-key').forEach(btn => btn.disabled = disabled);
+  }
+  function startLockoutCountdown(){
+    setKeypadDisabled(true);
+    entered=''; updateDots();
+    const tick = ()=>{
+      const msLeft = pinLockUntil - Date.now();
+      if(msLeft <= 0){
+        clearInterval(lockoutTimer); lockoutTimer = null;
+        setKeypadDisabled(false);
+        overlay.querySelector('#pinError').textContent = '\u00a0';
+        return;
+      }
+      overlay.querySelector('#pinError').textContent = `Too many wrong attempts — try again in ${Math.ceil(msLeft/1000)}s`;
+    };
+    tick();
+    lockoutTimer = setInterval(tick, 500);
+  }
+  if(Date.now() < pinLockUntil) startLockoutCountdown();
   function tryPin(){
-    if(entered===ADMIN_PIN){ cleanup(); rememberSession('admin'); onSuccess('admin'); }
-    else if(entered===READONLY_PIN){ cleanup(); rememberSession('readonly'); onSuccess('readonly'); }
+    if(Date.now() < pinLockUntil) return; // BUGFIX (#19a): ignore attempts submitted during lockout
+    if(entered===ADMIN_PIN){ failedPinAttempts=0; cleanup(); rememberSession('admin'); onSuccess('admin'); }
+    else if(entered===READONLY_PIN){ failedPinAttempts=0; cleanup(); rememberSession('readonly'); onSuccess('readonly'); }
     else{
-      overlay.querySelector('#pinError').textContent = 'Incorrect PIN — try again';
+      failedPinAttempts++;
       entered=''; updateDots();
+      if(failedPinAttempts >= PIN_MAX_ATTEMPTS){
+        pinLockUntil = Date.now() + PIN_LOCKOUT_MS;
+        failedPinAttempts = 0;
+        startLockoutCountdown();
+      } else {
+        overlay.querySelector('#pinError').textContent = `Incorrect PIN — try again (${PIN_MAX_ATTEMPTS - failedPinAttempts} attempt${PIN_MAX_ATTEMPTS - failedPinAttempts===1?'':'s'} left before a 30s lockout)`;
+      }
     }
   }
   overlay.querySelectorAll('[data-num]').forEach(btn=>{
@@ -72,6 +114,7 @@ function showPinOverlay(onSuccess){
 
   /* Physical keyboard: digits, Backspace, Escape (clear) */
   function onKeydown(e){
+    if(Date.now() < pinLockUntil) return; // BUGFIX (#19a): keyboard entry bypassed the disabled keypad buttons
     if(e.key >= '0' && e.key <= '9'){
       e.preventDefault();
       if(entered.length>=4) return;
@@ -98,6 +141,17 @@ function applyReadOnlyGuard(){
   document.querySelectorAll('#panels button, #panels input, #panels select').forEach(el=>{ el.disabled = true; el.style.opacity='0.45'; el.style.cursor='not-allowed'; });
   const hsb = document.getElementById('headerSaveBtn'); if(hsb) hsb.style.display='none';
   const bar = document.getElementById('saveBar'); if(bar) bar.classList.remove('show');
+  /* BUGFIX (#19b): the activity/change log is admin-only info (it can
+     reveal balances and edits via its change descriptions), but its bell
+     button's visibility was only ever set once, in initShell(), based on
+     whatever currentRole was AT PAGE LOAD. Locking and re-entering the
+     readonly PIN never re-ran that check, so a bell left visible from an
+     earlier admin session stayed visible (and clickable — its handler
+     didn't check role either) after switching to readonly. Belt-and-
+     suspenders fix: hide it and close any open dropdown here too, in
+     addition to the click-time role check now in core-shell.js. */
+  const bell = document.getElementById('activityBell'); if(bell) bell.style.display='none';
+  const dropdown = document.getElementById('activityDropdown'); if(dropdown) dropdown.style.display='none';
 }
 
 async function proceedAfterAuth(role){

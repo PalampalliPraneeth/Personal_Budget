@@ -38,13 +38,41 @@ const MONTH_ALIASES = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct
 function n12(){ return new Array(12).fill(null); }
 function uid(){ return 'id'+Math.random().toString(36).slice(2,10); }
 
+/* BUGFIX (#18 — security): user-entered text (holding/account/category
+   names, notes, etc.) gets interpolated straight into template strings
+   that are then assigned to innerHTML all over this app. Without
+   escaping, typing something like <img src=x onerror=alert(1)> into any
+   name field runs as real HTML/JS in the page. Combined with the public
+   anon Supabase key + open "allow anon full access" RLS policy (see
+   README), anyone who knows/guesses your LEDGER_ID could write a
+   malicious name/note into your data and have it execute in your browser
+   next time you open the app (stored XSS). escapeHtml() neutralizes the
+   five characters that matter for that (& < > " '); every place that
+   prints free-typed text as HTML (not as a contenteditable's live
+   textContent, which was already safe) now routes through this first. */
+function escapeHtml(str){
+  if(str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ---- category color palette (used across groups/investment types) ----
 const PALETTE = ['#C9A961','#6FA491','#C06A46','#8FC0AC','#D98C64','#7FAE79','#9BB6C9','#B98BC9','#E4CE94','#5F8C7A'];
 
+/* BUGFIX (#22): factored out of buildDefaultData() so the new "add a
+   year" button can create a properly-shaped empty year too, instead of
+   the year rollover being hardcoded to only ever know about 2025/2026. */
+function emptyYearShape(){
+  return { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [], assets: [] };
+}
 function buildDefaultData(){
   return {
-    2026: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [], assets: [] },
-    2025: { income: [], expenseGroups: [], investments: [], debts: [], savingsAccounts: [], retirementAccounts: [], savingsGoals: [], assets: [] }
+    2026: emptyYearShape(),
+    2025: emptyYearShape()
   };
 }
 
@@ -387,6 +415,32 @@ async function logAccess(role){
    HELPERS: numbers, sums, formatting
    ========================================================================= */
 function num(v){ return (typeof v === 'number' && !isNaN(v)) ? v : 0; }
+
+/* BUGFIX (#21): this used to be declared as its own `const FX_FALLBACK_INR
+   = 84.0` inside tab-investments.js, but several OTHER files (tab-holdings,
+   tab-overview, tab-recurring) each hardcoded their own literal fallback
+   (mostly 95.0, one spot 84.0) instead of referencing it — so when the
+   live rate fetch failed, different tabs silently used different USD/INR
+   rates for the same conversion, producing inconsistent totals across the
+   app. Declared once here, in the first file every tab depends on, and
+   every other fallback site below now references this instead of its own
+   literal. */
+const FX_FALLBACK_INR = 95.0;
+
+/* BUGFIX (#16 — DST): counting days between two local-midnight Date
+   objects by subtracting raw milliseconds and dividing by 86400000 is
+   wrong whenever a DST transition falls between them — the "spring
+   forward" day is only 23 hours and the "fall back" day is 25, so the
+   ms-based day count comes out fractional and Math.floor/Math.ceil then
+   round it to the wrong integer, shifting a daily/weekly/biweekly
+   recurring plan's computed next-due-date by a day right around the
+   change. Comparing the UTC-labeled *calendar* dates (year/month/day)
+   instead sidesteps DST entirely, since Date.UTC never observes it. */
+function calendarDaysBetween(a, b){
+  const utcA = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const utcB = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((utcB - utcA) / 86400000);
+}
 /* Display-time safety net for binary floating-point artifacts (590+69.82
    style additions can land on 659.8199999999999) — these are always
    currency amounts, so round to the cent before showing raw values in
@@ -440,6 +494,19 @@ function toLocalISODate(d){
 function todayDateStr(){
   return toLocalISODate(new Date());
 }
+/* BUGFIX (#15): a <input type="datetime-local"> value has no timezone of
+   its own — the browser treats whatever string you set as plain local
+   wall-clock time. expensesLastUpdated is stored as a UTC ISO string
+   (new Date().toISOString()), so displaying it via lastUpdated.slice(0,16)
+   handed the input a UTC clock-face reading while labeling it local. Any
+   edit that round-tripped through the field (even changing just the
+   minute) then got reinterpreted as local time and re-converted to UTC,
+   shifting the stored instant by your timezone offset. This converts a
+   Date to the local-wall-clock string the input actually expects. */
+function toLocalDateTimeInputValue(d){
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 /* Call this whenever a fresh LIVE rate comes back from the FX API (not on
    a fallback/failure — we don't want an outage's placeholder rate getting
    written into history as if it were real). */
@@ -479,7 +546,7 @@ function recordFxRateSample(rate){
      or the app simply wasn't opened that month) → live rate, same
      graceful fallback as today */
 function fxRateForMonth(year, monthIdx){
-  const liveRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : (typeof FX_FALLBACK_INR !== 'undefined' ? FX_FALLBACK_INR : 84.0);
+  const liveRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : (typeof FX_FALLBACK_INR !== 'undefined' ? FX_FALLBACK_INR : 95.0);
   if(year===undefined || year===null || monthIdx===undefined || monthIdx===null) return liveRate;
   const now = new Date();
   const curKey = fxMonthKey(now.getFullYear(), now.getMonth());

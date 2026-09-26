@@ -89,7 +89,7 @@ function renderAssets(){
     const gainUsd = hasCost ? assetCurrentUsd(a,y,monthIdx) - nativeMonthToUsd(a.purchasePrice, a.currency, y, monthIdx) : null;
 
     return catHeaderRow + `<tr data-row-id="${a.id}">
-      <td><span class="ledger-name-text editable-inline" contenteditable="true" data-field="name" data-id="${a.id}" title="${(a.name||'').replace(/"/g,'&quot;')}">${a.name}</span> <span class="row-del" data-delasset="${a.id}">✕</span></td>
+      <td><span class="ledger-name-text editable-inline" contenteditable="true" data-field="name" data-id="${a.id}" title="${(a.name||'').replace(/"/g,'&quot;')}">${escapeHtml(a.name)}</span> <span class="row-del" data-delasset="${a.id}">✕</span></td>
       <td>
         <select data-catsel="${a.id}" style="background:var(--bg-card-hi); color:var(--gold-soft); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11.5px; padding:3px 4px;">
           ${allAssetCategories().map(c => `<option value="${c}" ${a.category===c?'selected':''}>${c}</option>`).join('')}
@@ -108,7 +108,7 @@ function renderAssets(){
       <td>
         <select data-linkdebt="${a.id}" style="background:var(--bg-card-hi); color:var(--text); border:1px solid var(--line); border-radius:5px; font-family:var(--font-mono); font-size:11px; padding:3px 4px; max-width:150px;">
           <option value="">— none —</option>
-          ${debts.map(d=>`<option value="${d.id}" ${a.linkedDebtId===d.id?'selected':''}>${d.name}</option>`).join('')}
+          ${debts.map(d=>`<option value="${d.id}" ${a.linkedDebtId===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}
         </select>
       </td>
       <td style="${equityUsd===null?'color:var(--text-dim);':'font-weight:600;'}">${equityUsd===null?'—':fmt$(equityUsd,2)}</td>

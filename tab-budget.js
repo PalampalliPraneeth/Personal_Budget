@@ -9,19 +9,30 @@
 const BUDGET_TYPE_LABELS = { fixed:'Fixed', flexible:'Flexible', nonmonthly:'Non-Monthly' };
 const BUDGET_TYPE_ORDER = ['fixed','flexible','nonmonthly'];
 
-function budgetRowHtml(c, monthIdx, kind){
+function budgetRowHtml(c, monthIdx, kind, y){
   // kind: 'income' | 'expense' — only changes the color rule for "remaining"
-  const budget = num((c.budget||[])[monthIdx]);
-  const actual = num((c.m||[])[monthIdx]);
+  /* BUGFIX (#14): budget/actual are stored in the category's OWN native
+     currency (c.currency can be INR), but every readout here used to be
+     printed with fmt$ (a $ sign) straight from the raw native number, and
+     "remaining"/the progress bar compared native budget against native
+     actual as if they were guaranteed to be the same currency (true
+     within one row, but the totals built from these rows were not — see
+     renderBudget()). The input field still shows/accepts the native
+     amount so you keep typing "₹50,000" naturally; only the readouts
+     below are converted to USD for consistent display. */
+  const budgetNative = num((c.budget||[])[monthIdx]);
+  const actualNative = num((c.m||[])[monthIdx]);
+  const budget = nativeMonthToUsd(budgetNative, c.currency, y, monthIdx);
+  const actual = nativeMonthToUsd(actualNative, c.currency, y, monthIdx);
   const remaining = budget - actual;
   const pct = budget > 0 ? Math.min(100, Math.round((actual/budget)*100)) : (actual>0 ? 100 : 0);
   const over = kind==='expense' ? remaining < -0.005 : false;
   return `
   <div class="budget-row" data-budget-row="${c.id}">
-    <span class="budget-row-name">${c.name}</span>
+    <span class="budget-row-name">${escapeHtml(c.name)}${c.currency==='INR'?' <span class="section-sub" style="margin:0;">(₹)</span>':''}</span>
     <span class="budget-row-field">
       <label>Budget</label>
-      <input type="number" step="any" class="budget-input" data-budget-cat="${c.id}" data-budget-kind="${kind}" value="${budget || ''}" placeholder="0">
+      <input type="number" step="any" class="budget-input" data-budget-cat="${c.id}" data-budget-kind="${kind}" value="${budgetNative || ''}" placeholder="0">
     </span>
     <span class="budget-row-field readout">
       <label>Actual</label>
@@ -49,12 +60,17 @@ function renderBudget(){
   const incomeItems = yearData(y).income || [];
   const groups = yearData(y).expenseGroups || [];
 
-  const incomeBudgetTotal = sumArr(incomeItems.map(c=>num((c.budget||[])[monthIdx])));
-  const incomeActualTotal = sumArr(incomeItems.map(c=>num((c.m||[])[monthIdx])));
+  /* BUGFIX (#14): these totals used to sum raw native numbers straight
+     across income sources / categories regardless of currency — an INR
+     income source or expense category got added into the USD total as if
+     1 INR == 1 USD. Every total below now converts each item through its
+     own c.currency first via the app's existing nativeMonthToUsd(). */
+  const incomeBudgetTotal = sumArr(incomeItems.map(c=>nativeMonthToUsd(num((c.budget||[])[monthIdx]), c.currency, y, monthIdx)));
+  const incomeActualTotal = sumArr(incomeItems.map(c=>nativeMonthToUsd(num((c.m||[])[monthIdx]), c.currency, y, monthIdx)));
 
   const groupRollups = groups.map(g=>{
-    const catBudget = sumArr((g.categories||[]).map(c=>num((c.budget||[])[monthIdx])));
-    const catActual = sumArr((g.categories||[]).map(c=>num((c.m||[])[monthIdx])));
+    const catBudget = sumArr((g.categories||[]).map(c=>nativeMonthToUsd(num((c.budget||[])[monthIdx]), c.currency, y, monthIdx)));
+    const catActual = sumArr((g.categories||[]).map(c=>nativeMonthToUsd(num((c.m||[])[monthIdx]), c.currency, y, monthIdx)));
     return { group:g, budget:catBudget, actual:catActual };
   });
 
@@ -79,7 +95,7 @@ function renderBudget(){
     <div class="group-block ${collapsed?'collapsed':''}" data-group-id="${g.id}">
       <div class="group-head" data-toggle="${g.id}">
         <h4 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <span class="g-caret">▾</span>${g.name}
+          <span class="g-caret">▾</span>${escapeHtml(g.name)}
           <select class="budget-type-select" data-budget-type-group="${g.id}" title="How this group counts toward Left to budget">
             ${BUDGET_TYPE_ORDER.map(t=>`<option value="${t}" ${g.budgetType===t?'selected':''}>${BUDGET_TYPE_LABELS[t]}</option>`).join('')}
           </select>
@@ -87,7 +103,7 @@ function renderBudget(){
         <span class="g-total">${fmt$(rollup.actual,2)} <span style="color:var(--text-faint);">/ ${fmt$(rollup.budget,2)} budgeted</span></span>
       </div>
       <div class="group-body">
-        ${(g.categories||[]).length ? (g.categories||[]).map(c=>budgetRowHtml(c, monthIdx, 'expense')).join('') : '<div class="section-sub" style="margin:0;">No categories in this group yet — add one on the Expenses tab.</div>'}
+        ${(g.categories||[]).length ? (g.categories||[]).map(c=>budgetRowHtml(c, monthIdx, 'expense', y)).join('') : '<div class="section-sub" style="margin:0;">No categories in this group yet — add one on the Expenses tab.</div>'}
       </div>
     </div>`;
   };
@@ -120,7 +136,7 @@ function renderBudget(){
       <div>
         <div class="card">
           <div class="card-head"><h3>Income</h3><span class="section-sub" style="margin:0;">Budget total: <b style="color:var(--gold-soft)">${fmt$(incomeBudgetTotal,2)}</b></span></div>
-          ${incomeItems.length ? incomeItems.map(c=>budgetRowHtml(c, monthIdx, 'income')).join('') : '<div class="section-sub" style="margin:0;">No income sources yet — add one on the Income tab.</div>'}
+          ${incomeItems.length ? incomeItems.map(c=>budgetRowHtml(c, monthIdx, 'income', y)).join('') : '<div class="section-sub" style="margin:0;">No income sources yet — add one on the Income tab.</div>'}
         </div>
 
         <div class="card-head" style="margin:22px 0 4px;"><h3 style="font-size:15px;">Expenses</h3></div>

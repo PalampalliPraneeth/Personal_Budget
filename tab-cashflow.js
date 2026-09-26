@@ -246,7 +246,7 @@ function renderCashFlow(){
     <div class="bank-row" data-bank-open="${b.id}">
       <div class="bank-row-icon">${initial}</div>
       <div class="bank-row-main">
-        <div class="bank-row-name editable-inline" contenteditable="true" data-renamebank="${b.id}">${b.name}</div>
+        <div class="bank-row-name editable-inline" contenteditable="true" data-renamebank="${b.id}">${escapeHtml(b.name)}</div>
         <div class="bank-row-sub">${BANK_TYPE_LABELS[b.type]||'Checking'}</div>
       </div>
       <div class="bank-row-right">
@@ -268,7 +268,7 @@ function renderCashFlow(){
     <div class="bank-row" data-bank-open="${b.id}">
       <div class="bank-row-icon">${initial}</div>
       <div class="bank-row-main">
-        <div class="bank-row-name editable-inline" contenteditable="true" data-renamebank="${b.id}">${b.name}</div>
+        <div class="bank-row-name editable-inline" contenteditable="true" data-renamebank="${b.id}">${escapeHtml(b.name)}</div>
         <div class="bank-row-sub">${hasLimit ? `${fmtNative(b.creditLimit,b.currency)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'} <span class="row-del" data-editlimit="${b.id}" title="edit credit limit">✎</span></div>
         <div class="bank-row-sub">${cycleLabel ? cycleLabel : 'Billing cycle not set'} <span class="row-del" data-editcycle="${b.id}" title="edit billing cycle & due date">✎</span></div>
       </div>
@@ -397,7 +397,7 @@ function renderCashFlow(){
       }).join('');
       const total = sumArr(b.m||[]);
       return `<tr data-bank-id="${b.id}">
-        <td style="font-weight:600;"><span class="ledger-name-text editable-inline" contenteditable="true" data-renamebank="${b.id}" title="${(b.name||'').replace(/"/g,'&quot;')}">${b.name}</span> <span class="row-del" data-delbank="${b.id}">✕</span></td>
+        <td style="font-weight:600;"><span class="ledger-name-text editable-inline" contenteditable="true" data-renamebank="${b.id}" title="${(b.name||'').replace(/"/g,'&quot;')}">${escapeHtml(b.name)}</span> <span class="row-del" data-delbank="${b.id}">✕</span></td>
         ${cells}
         <td style="font-weight:700;">${fmtNative(total,b.currency)}</td>
         <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
@@ -750,7 +750,7 @@ function openBillingCycleModal(bank, y, onDone){
 
   overlay.innerHTML = `
     <div class="modal-card" style="width:400px;">
-      <h3>💳 ${bank.name}</h3>
+      <h3>💳 ${escapeHtml(bank.name)}</h3>
       <p class="modal-sub">Billing cycle & payment due date</p>
       <div class="modal-field">
         <label>Billing cycle closes on <span class="hint">day of month</span></label>
@@ -854,7 +854,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
 
   overlay.innerHTML = `
     <div class="modal-card" style="width:420px;">
-      <h3>${isCredit?'💳':'🏦'} ${bank.name}</h3>
+      <h3>${isCredit?'💳':'🏦'} ${escapeHtml(bank.name)}</h3>
       <p class="modal-sub">${isCredit?'Credit Card':(BANK_TYPE_LABELS[bank.type]||'Checking')} · ${bank.currency||'USD'}</p>
       <div class="modal-field" style="margin-bottom:10px;">
         <label>Month</label>
@@ -990,7 +990,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal-card" style="width:420px;">
-      <h3>${isEdit ? '✎ Edit transaction' : '+ Add money'} — ${bank.name}</h3>
+      <h3>${isEdit ? '✎ Edit transaction' : '+ Add money'} — ${escapeHtml(bank.name)}</h3>
       <p class="modal-sub">${isEdit ? 'Saving re-applies this from scratch: the old effect on the balance and any linked income/expense/transfer is undone first, then these values are applied fresh.' : "Adds to this account's balance for the month you pick — on top of anything already there, never replacing it. Tag it Income/Expense and the linked source or category updates too."}</p>
       <div class="modal-field">
         <label>Amount (${bank.currency||'USD'})</label>
@@ -1010,7 +1010,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       <div class="modal-field" id="amIncomeSrcWrap">
         <label>Which income source? <span class="hint">uses the month from the date above</span></label>
         <select id="amIncomeSrc" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${incomeSources.map(s=>`<option value="${s.id}" ${isEdit && editingTxn.category==='income' && editingTxn.refId===s.id?'selected':''}>${s.name}</option>`).join('')}
+          ${incomeSources.map(s=>`<option value="${s.id}" ${isEdit && editingTxn.category==='income' && editingTxn.refId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('')}
           <option value="__new__">+ New income source…</option>
         </select>
       </div>
@@ -1021,7 +1021,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       <div class="modal-field" id="amDebtWrap">
         <label>Which debt? <span class="hint">uses the month from the date above</span></label>
         <select id="amDebt" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${debts.map(d=>`<option value="${d.id}" ${isEdit && editingTxn.category==='debt' && editingTxn.refId===d.id?'selected':''}>${d.name}</option>`).join('')}
+          ${debts.map(d=>`<option value="${d.id}" ${isEdit && editingTxn.category==='debt' && editingTxn.refId===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}
           <option value="__new__">+ New debt…</option>
         </select>
       </div>
@@ -1032,7 +1032,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       <div class="modal-field" id="amInvestWrap">
         <label>Which investment? <span class="hint">uses the month from the date above</span></label>
         <select id="amInvest" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${investments.map(inv=>`<option value="${inv.id}" ${isEdit && editingTxn.category==='investment' && editingTxn.refId===inv.id?'selected':''}>${inv.name}</option>`).join('')}
+          ${investments.map(inv=>`<option value="${inv.id}" ${isEdit && editingTxn.category==='investment' && editingTxn.refId===inv.id?'selected':''}>${escapeHtml(inv.name)}</option>`).join('')}
           <option value="__new__">+ New investment…</option>
         </select>
       </div>
@@ -1043,7 +1043,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       <div class="modal-field" id="amExpenseGroupWrap">
         <label>Which group?</label>
         <select id="amExpenseGroup" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${expenseGroups.map(g=>`<option value="${g.id}" ${prefillExpenseGroupId===g.id?'selected':''}>${g.name}</option>`).join('')}
+          ${expenseGroups.map(g=>`<option value="${g.id}" ${prefillExpenseGroupId===g.id?'selected':''}>${escapeHtml(g.name)}</option>`).join('')}
           <option value="__newgroup__" ${expenseGroups.length?'':'selected'}>+ New group…</option>
         </select>
       </div>
@@ -1062,7 +1062,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       <div class="modal-field" id="amTransferWrap">
         <label>Transfer with which account?</label>
         <select id="amTransferBank" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
-          ${otherAccounts.map(b=>`<option value="${b.id}" ${isEdit && editingTxn.category==='transfer' && editingTxn.transferPairBankId===b.id?'selected':''}>${b.name}${b.type==='credit'?' (credit card)':''}</option>`).join('')}
+          ${otherAccounts.map(b=>`<option value="${b.id}" ${isEdit && editingTxn.category==='transfer' && editingTxn.transferPairBankId===b.id?'selected':''}>${escapeHtml(b.name)}${b.type==='credit'?' (credit card)':''}</option>`).join('')}
         </select>
         ${otherAccounts.length===0?'<div class="section-sub" style="margin-top:6px;">Add another bank or credit card first to transfer between accounts.</div>':''}
       </div>
@@ -1128,7 +1128,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     }
     const group = expenseGroups.find(g=>g.id===groupId);
     const cats = group ? (group.categories||[]) : [];
-    expenseCatSelect.innerHTML = cats.map(c=>`<option value="${c.id}">${c.name}</option>`).join('')
+    expenseCatSelect.innerHTML = cats.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')
       + `<option value="__new__">+ New category…</option>`;
   }
   populateCatSelect(expenseGroupSelect.value);
@@ -1178,7 +1178,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
     amountHint.textContent = setMode
       ? `Enter the exact ${isCredit?'amount you currently owe':'balance you currently have'} — this replaces this month's number instead of adding to it.`
       : cat==='investment'
-        ? `This amount leaves ${bank.name} and is added as a contribution to the investment.`
+        ? `This amount leaves ${escapeHtml(bank.name)} and is added as a contribution to the investment.`
         : '';
 
     updateDirectionForCategory(cat);

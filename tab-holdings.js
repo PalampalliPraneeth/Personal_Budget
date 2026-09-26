@@ -67,7 +67,9 @@ function nextRecurringDateForPlan(r){
   }
   const stepDays = norm.frequencyType === 'weekly' ? 7 : norm.frequencyType === 'biweekly' ? 14 : 1; // 'daily' falls through to 1
   if(start >= today) return toLocalISODate(start);
-  const diffDays = Math.floor((today - start) / (1000*60*60*24));
+  // BUGFIX (#16): was Math.floor((today-start)/(1000*60*60*24)) — see
+  // calendarDaysBetween()'s comment for why that drifts across DST.
+  const diffDays = calendarDaysBetween(start, today);
   const stepsNeeded = Math.ceil(diffDays / stepDays);
   const next = new Date(start);
   next.setDate(next.getDate() + stepsNeeded*stepDays);
@@ -78,7 +80,7 @@ function collectRecurringRows(y, platformId){ // platformId falsy = all platform
   if(typeof ensureBanksMigration === 'function') ensureBanksMigration();
   const investments = yearData(y).investments || [];
   const allBanks = yearData(y).banks || [];
-  const fx = _ensureFx().INR || 95.0;
+  const fx = _ensureFx().INR || FX_FALLBACK_INR;
   const out = [];
   investments.forEach(inv => {
     if(platformId && inv.id !== platformId) return;
@@ -125,7 +127,7 @@ function openRecurringModal(h, y, onSave, onRemove){
   if(typeof ensureBanksMigration === 'function') ensureBanksMigration();
   const fundingAccounts = (yearData(y).banks || []).filter(b => b.type !== 'credit');
   const bankOptionsHtml = fundingAccounts.map(b =>
-    `<option value="${b.id}" ${existing.bankAccountId===b.id?'selected':''}>${b.name}${b.currency && b.currency!=='USD' ? ' ('+b.currency+')' : ''}</option>`
+    `<option value="${b.id}" ${existing.bankAccountId===b.id?'selected':''}>${escapeHtml(b.name)}${b.currency && b.currency!=='USD' ? ' ('+b.currency+')' : ''}</option>`
   ).join('');
 
   const overlay = document.createElement('div');
@@ -471,7 +473,7 @@ function openEditLotsModal(h){
 
 function _ensureFx(){
   if(typeof fxRates !== 'undefined' && fxRates && fxRates.INR) return fxRates;
-  return { INR: 95.0 };
+  return { INR: FX_FALLBACK_INR };
 }
 
 function _isIndianPlatform(inv){
@@ -585,7 +587,7 @@ function _formatPriceRefreshTimestamp(){
 }
 function _toUsd(val, currency){
   if(currency !== 'INR') return num(val);
-  const r = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : 95.0;
+  const r = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : FX_FALLBACK_INR;
   return num(val) / r;
 }
 /* ---------- Watchlist ---------- */
@@ -945,7 +947,7 @@ function platformHoldings(y, platformId){
   const inv = yearData(y).investments.find(i => i.id === platformId);
   if(!inv) return [];
   const isINR = inv.currency === 'INR';
-  const fx = _ensureFx().INR || 95.0;
+  const fx = _ensureFx().INR || FX_FALLBACK_INR;
   return (inv.holdings || [])
     .filter(h => h.status !== 'closed')
     .map(h => {
@@ -1003,7 +1005,7 @@ function platformSoldHoldings(y, platformId){
   const inv = yearData(y).investments.find(i => i.id === platformId);
   if(!inv) return [];
   const isINR = inv.currency === 'INR';
-  const fx = _ensureFx().INR || 95.0;
+  const fx = _ensureFx().INR || FX_FALLBACK_INR;
   return (inv.holdings || [])
     /* BUGFIX: this used to filter on h.status === 'closed', which only
        ever becomes true once EVERY share is sold (see recalcHolding). A
@@ -1019,6 +1021,7 @@ function platformSoldHoldings(y, platformId){
       const tip = (v) => isINR ? fmtInr(v) : null;
       return {
         ...h,
+        platformId: inv.id,
         /* BUGFIX: was fmt(h.avgPrice) — h.avgPrice is the average cost of
            shares still HELD, which is 0 once a position is fully sold (no
            shares left to average). Use h.avgBuyPriceSold (the average cost
@@ -1319,7 +1322,7 @@ function renderHoldings(){
     // same as every row cell already does.
     const curInv = !isAll ? investments.find(i=>i.id===state.holdingsView) : null;
     const isInrPlatform = !!(curInv && curInv.currency === 'INR');
-    const fxForTip = fxRate || 95.0;
+    const fxForTip = fxRate || FX_FALLBACK_INR;
     const tipAttr = (usdVal) => isInrPlatform ? `data-tip="${fmtInr(usdVal*fxForTip)}"` : '';
 
     kpiHtml = `
@@ -1428,7 +1431,7 @@ function renderHoldings(){
       const dayColor = r.dayChangePct===null ? 'var(--text-dim)' : (r.dayChangePct>=0 ? 'var(--good)' : 'var(--danger)');
       const dayPlColor = r.dayChangePct===null ? 'var(--text-dim)' : plColor(r.dayPLUSD||0);
       return `<tr>
-        <td class="pin-col-1">${r.name}</td>
+        <td class="pin-col-1">${escapeHtml(r.name)}</td>
         <td data-tip="${r.qty}" class="has-tip">${(r.qty||0).toFixed(2)}</td>
         <td>${fmt$(r.avgPrice,2)}</td>
         <td>${r.priceUnknown ? '—' : fmt$(r.currentPrice,2)}</td>
@@ -1444,8 +1447,8 @@ function renderHoldings(){
     }
     const tip = (t) => t ? `data-tip="${t}" class="has-tip"` : '';
     return `<tr data-hid="${r.id}">
-      <td class="pin-col-1 editable" style="font-weight:600; width:72px; min-width:72px; max-width:72px; overflow:hidden; text-overflow:ellipsis;" contenteditable="true" data-f="symbol" data-id="${r.id}">${r.symbol||''}</td>
-      <td class="pin-col-2 editable" style="min-width:140px;" contenteditable="true" data-f="name" data-id="${r.id}">${r.name||''}</td>
+      <td class="pin-col-1 editable" style="font-weight:600; width:72px; min-width:72px; max-width:72px; overflow:hidden; text-overflow:ellipsis;" contenteditable="true" data-f="symbol" data-id="${r.id}">${escapeHtml(r.symbol||'')}</td>
+      <td class="pin-col-2 editable" style="min-width:140px;" contenteditable="true" data-f="name" data-id="${r.id}">${escapeHtml(r.name||'')}</td>
       <td><select data-htype="${r.id}" style="background:var(--bg-card-hi);color:var(--gold-soft);border:1px solid var(--line);border-radius:5px;font-family:var(--font-mono);font-size:11.5px;padding:3px 4px;">
         ${HOLDING_TYPES.map(t=>`<option value="${t}" ${r.type===t?'selected':''}>${t}</option>`).join('')}
       </select></td>
@@ -1464,15 +1467,26 @@ function renderHoldings(){
 
   /* ---- SOLD table ---- */
   const soldTheadCols = isAll
-    ? `<th>Platform</th><th>Symbol</th><th>Name</th><th>Type</th><th>Qty Sold</th><th>Avg Buy</th><th>Avg Sell</th><th>Cost Basis</th><th>Proceeds</th><th>Realized P&L</th><th>Sold</th>`
-    : `<th>Symbol</th><th>Name</th><th>Type</th><th>Qty Sold</th><th>Avg Buy</th><th>Avg Sell</th><th>Cost Basis</th><th>Proceeds</th><th>Realized P&L</th><th>Sold</th>`;
+    ? `<th>Platform</th><th>Symbol</th><th>Name</th><th>Type</th><th>Qty Sold</th><th>Avg Buy</th><th>Avg Sell</th><th>Cost Basis</th><th>Proceeds</th><th>Realized P&L</th><th>Sold</th><th></th>`
+    : `<th>Symbol</th><th>Name</th><th>Type</th><th>Qty Sold</th><th>Avg Buy</th><th>Avg Sell</th><th>Cost Basis</th><th>Proceeds</th><th>Realized P&L</th><th>Sold</th><th></th>`;
   function soldRowHtml(r, platformName){
     const plColor = (v) => v>=0 ? 'var(--teal-soft)' : 'var(--rust-soft)';
+    /* BUGFIX: the Sold view previously had no actions at all — a fully-
+       closed position (every share sold) disappears from the open
+       Holdings list entirely, so there was NO way to edit or delete it.
+       "Edit lots" is always offered (lets you remove/correct the
+       individual sale, which also un-hides the position if you delete the
+       sell lot). "Delete" (remove the holding record entirely) is only
+       offered when the position is fully closed (h.status==='closed') —
+       for a partial sale the holding still has open shares and remains
+       editable/deletable from the Holdings tab, so we don't also offer a
+       destructive whole-holding delete from here. */
+    const canDeleteWhole = r.status === 'closed';
     return `<tr>
-      ${isAll ? `<td><span class="debt-tag" style="font-size:10px;">${platformName}</span></td>` : ''}
-      <td style="font-weight:600;">${r.symbol}</td>
-      <td>${r.name||''}</td>
-      <td><span class="debt-tag">${r.type}</span></td>
+      ${isAll ? `<td><span class="debt-tag" style="font-size:10px;">${escapeHtml(platformName)}</span></td>` : ''}
+      <td style="font-weight:600;">${escapeHtml(r.symbol)}</td>
+      <td>${escapeHtml(r.name||'')}</td>
+      <td><span class="debt-tag">${escapeHtml(r.type)}</span></td>
       <td>${r.totalSoldQty}</td>
       <td ${r.tAvgBuy?`data-tip="${r.tAvgBuy}" class="has-tip"`:''}>${r.dAvgBuy}</td>
       <td ${r.tAvgSell?`data-tip="${r.tAvgSell}" class="has-tip"`:''}>${r.dAvgSell}</td>
@@ -1480,6 +1494,7 @@ function renderHoldings(){
       <td ${r.tProceeds?`data-tip="${r.tProceeds}" class="has-tip"`:''}>${r.dProceeds}</td>
       <td style="font-weight:600;color:${plColor(r.realizedPL)}" ${r.tRealized?`data-tip="${r.tRealized}" class="has-tip"`:''}>${r.realizedPL>=0?'+':''}${r.dRealized} <span style="font-size:11px;opacity:.75;">(${r.realizedPct>=0?'+':''}${pct(r.realizedPct)})</span></td>
       <td style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim); white-space:nowrap;">${r.lastSellDate||'—'}</td>
+      <td style="white-space:nowrap;"><button class="btn small" data-editlots-sold="${r.platformId}|${r.id}" title="Edit or correct individual buy/sell lots">📝</button> ${canDeleteWhole ? `<span class="row-del" data-delh-sold="${r.platformId}|${r.id}" title="Delete this fully-sold holding entirely">✕</span>` : ''}</td>
     </tr>`;
   }
   const soldSection = `
@@ -1539,7 +1554,7 @@ function renderHoldings(){
     const moversHead = `<thead><tr><th>Symbol</th><th style="text-align:right;">Day Change</th><th style="text-align:right;">Day P&L</th></tr></thead>`;
     const moversRow = (r, positive) => `
       <tr>
-        <td style="font-weight:600;">${r.symbol}</td>
+        <td style="font-weight:600;">${escapeHtml(r.symbol)}</td>
         <td style="text-align:right; color:${positive?'var(--good)':'var(--danger)'}; font-family:var(--font-mono); font-weight:600;">${r.dayChangePct>=0?'+':''}${r.dayChangePct.toFixed(2)}%</td>
         <td style="text-align:right; color:${positive?'var(--good)':'var(--danger)'}; font-family:var(--font-mono); font-size:11.5px;">${(r.dayPLUSD||0)>=0?'+':''}${fmt$(r.dayPLUSD||0,2)}</td>
       </tr>`;
@@ -1613,7 +1628,7 @@ function renderHoldings(){
           <tbody>${recurringRows.map(r => `
             <tr>
               ${isAll?`<td><span class="debt-tag" style="font-size:10px;">${r.platformName}</span></td>`:''}
-              <td style="font-weight:600;">${r.symbol} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${r.name}</span>` : ''}</td>
+              <td style="font-weight:600;">${escapeHtml(r.symbol)} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${escapeHtml(r.name)}</span>` : ''}</td>
               <td ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</td>
               <td><span class="debt-tag">${r.scheduleLabel}</span></td>
               <td style="font-size:12px;">${r.bankAccountName ? r.bankAccountName : '<span style="color:var(--text-dim);">— not linked —</span>'}</td>
@@ -1688,8 +1703,8 @@ function renderHoldings(){
             const atTarget = (w.targetPrice!==null && w.currentPrice!==null && w.currentPrice<=w.targetPrice);
             const rangeBar = w._rangePos===null ? '<span style="color:var(--text-faint); font-size:11px;">—</span>' : `<div class="runway" style="margin:0;"><div class="runway-fill" style="width:${w._rangePos}%; background:linear-gradient(90deg, var(--good), var(--gold));"></div></div>`;
             return `<tr data-wid="${w.id}">
-              <td style="font-weight:600;" class="editable" contenteditable="true" data-wf="symbol" data-id="${w.id}">${w.symbol||''}${nearLowTag}${nearHighTag}</td>
-              <td class="editable" contenteditable="true" data-wf="name" data-id="${w.id}">${w.name||''}</td>
+              <td style="font-weight:600;" class="editable" contenteditable="true" data-wf="symbol" data-id="${w.id}">${escapeHtml(w.symbol||'')}${nearLowTag}${nearHighTag}</td>
+              <td class="editable" contenteditable="true" data-wf="name" data-id="${w.id}">${escapeHtml(w.name||'')}</td>
               <td><select data-wregion="${w.id}" style="background:var(--bg-card-hi);color:var(--gold-soft);border:1px solid var(--line);border-radius:5px;font-family:var(--font-mono);font-size:11.5px;padding:3px 4px;">
                 <option value="US" ${w.region==='US'?'selected':''}>🇺🇸 US</option>
                 <option value="IN" ${w.region==='IN'?'selected':''}>🇮🇳 IN</option>
@@ -1702,7 +1717,7 @@ function renderHoldings(){
               <td style="color:${w._pctFromLow!==null && w._pctFromLow<=5?'var(--good)':'var(--text-dim)'}; font-family:var(--font-mono); font-size:11.5px;">${w._pctFromLow===null?'—':'+'+w._pctFromLow.toFixed(1)+'%'}</td>
               <td style="color:${w._pctFromHigh!==null && w._pctFromHigh>=-5?'var(--rust-soft)':'var(--text-dim)'}; font-family:var(--font-mono); font-size:11.5px;">${w._pctFromHigh===null?'—':w._pctFromHigh.toFixed(1)+'%'}</td>
               <td class="editable" contenteditable="true" data-wf="targetPrice" data-id="${w.id}" style="${atTarget?'color:var(--good); font-weight:700;':''}">${w.targetPrice===null?'–':fmt$(w.targetPrice,2)}${atTarget?' ✓':''}</td>
-              <td class="editable" contenteditable="true" data-wf="notes" data-id="${w.id}" style="max-width:160px; color:var(--text-dim); font-size:11.5px;">${w.notes||''}</td>
+              <td class="editable" contenteditable="true" data-wf="notes" data-id="${w.id}" style="max-width:160px; color:var(--text-dim); font-size:11.5px;">${escapeHtml(w.notes||'')}</td>
               <td style="white-space:nowrap;"><span class="row-del" data-delw="${w.id}" title="Remove from watchlist">✕</span></td>
             </tr>`;
           }).join('')}</tbody>
@@ -1913,9 +1928,20 @@ function renderHoldings(){
             const buyLots = h.lots.filter(l => l.type !== 'sell');
             const oldTotal = buyLots.reduce((a,l)=>a+num(l.qty)*num(l.price),0);
             const oldQty = buyLots.reduce((a,l)=>a+num(l.qty),0);
+            /* BUGFIX (#17): when every existing buy lot was priced at 0
+               (free/bonus shares, or a placeholder entry), oldTotal is 0
+               and the old "ratio = (v*oldQty)/oldTotal" divided by zero,
+               producing Infinity/NaN and corrupting every lot's price.
+               There's no relative weighting to preserve in that case
+               (every lot already contributes 0), so just set every buy
+               lot's price directly to the new average instead of scaling. */
             if(oldQty > 0){
-              const ratio = (v * oldQty) / oldTotal;
-              buyLots.forEach(l => l.price = num(l.price) * ratio);
+              if(oldTotal > 0){
+                const ratio = (v * oldQty) / oldTotal;
+                buyLots.forEach(l => l.price = num(l.price) * ratio);
+              } else {
+                buyLots.forEach(l => l.price = v);
+              }
             }
             recalcHolding(h);
           } else if(field === 'currentPrice'){
@@ -2007,6 +2033,32 @@ function renderHoldings(){
 
       
     }
+  }
+
+  /* ---- Sold-tab actions (Edit lots / Delete) — works in both the
+     single-platform and "all platforms" Sold views, so it's wired
+     unconditionally here rather than inside the isAll-excluding block
+     above. Bugfix: fully-closed positions used to have no delete/edit
+     entry point at all once they dropped out of the open Holdings list. */
+  if(showSold){
+    document.querySelectorAll('[data-editlots-sold]').forEach(el => el.addEventListener('click', ()=>{
+      const [platId, holdingId] = el.dataset.editlotsSold.split('|');
+      const inv2 = investments.find(i => i.id === platId);
+      const h = inv2 && inv2.holdings.find(x => x.id === holdingId);
+      if(h) openEditLotsModal(h);
+    }));
+    document.querySelectorAll('[data-delh-sold]').forEach(el => el.addEventListener('click', ()=>{
+      const [platId, holdingId] = el.dataset.delhSold.split('|');
+      const inv2 = investments.find(i => i.id === platId);
+      if(!inv2) return;
+      const h = inv2.holdings.find(x => x.id === holdingId);
+      if(!h) return;
+      if(!confirm(`Delete ${h.symbol} entirely? It's fully sold, so this only removes its sale history — this cannot be undone.`)) return;
+      inv2.holdings = inv2.holdings.filter(x => x.id !== holdingId);
+      markDirty('holdings', {tab:'holdings', action:'delete', target:h.symbol});
+      renderHoldings();
+      showToast(`Deleted ${h.symbol}`);
+    }));
   }
 
     /* ---- Fetch live prices (All Platforms or single platform) ---- */
