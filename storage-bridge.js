@@ -33,21 +33,31 @@ window.PRICE_PROXY_URL = 'https://dkwdzvwaoxekicycednh.supabase.co/functions/v1/
   localStorage.setItem('ledger:supabase:user', userId);
 
   const supaStorage = {
+    /* BUGFIX (data loss risk): this used to swallow EVERY failure — a real
+       network error, a timeout, Supabase being down — into the exact same
+       `return null` as "this key genuinely has no data yet". The caller
+       (loadData in core-data.js) couldn't tell the two apart, so a network
+       hiccup on page load looked identical to a brand-new empty ledger.
+       That opened an empty ledger in the browser, and the NEXT save would
+       overwrite the real cloud copy with that emptiness.
+       Fix: only return null when Supabase genuinely has no row for this
+       key (a clean, error-free response with no data). Any real error is
+       THROWN so the caller can tell "no data" apart from "couldn't check"
+       and refuse to treat the latter as if it were the former. */
     async get(key, isShared){
-      if (!sb) return null;
-      try {
-        const { data, error } = await sb
-          .from('ledger_data')
-          .select('data_json')
-          .eq('user_id', userId)
-          .eq('data_key', key)
-          .maybeSingle();
-        if (error || !data) return null;
-        const asString = typeof data.data_json === 'string' 
-          ? data.data_json 
-          : JSON.stringify(data.data_json);
-        return { value: asString };
-      } catch(e) { return null; }
+      if (!sb) throw new Error('Supabase client not initialized');
+      const { data, error } = await sb
+        .from('ledger_data')
+        .select('data_json')
+        .eq('user_id', userId)
+        .eq('data_key', key)
+        .maybeSingle();
+      if (error) throw error; // a real fetch/API error — not "no data"
+      if (!data) return null; // genuinely no row for this key yet
+      const asString = typeof data.data_json === 'string'
+        ? data.data_json
+        : JSON.stringify(data.data_json);
+      return { value: asString };
     },
     async set(key, value, isShared){
       if (!sb) return false;

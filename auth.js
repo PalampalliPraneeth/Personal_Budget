@@ -124,6 +124,28 @@ async function proceedAfterAuth(role){
   await loadData();
   await loadLogs();
   await logAccess(role);
+  /* BUGFIX (#6 — data loss risk): a load failure (network error, storage
+     down) used to be indistinguishable from "brand-new empty ledger" —
+     loadData() would fall back to buildDefaultData() either way, opening
+     an empty app that your next Save would then write over the real
+     cloud copy. Now loadData() sets dataLoadFailed instead of quietly
+     building an empty ledger, so we stop here and offer Retry rather than
+     ever rendering (and risking a save from) an empty ledger. */
+  if(typeof dataLoadFailed !== 'undefined' && dataLoadFailed){
+    panelsEl.innerHTML = `
+      <div class="section-sub" style="padding:40px 20px; text-align:center;">
+        <div style="font-size:15px; color:var(--danger); margin-bottom:10px;">⚠ Couldn't load your data</div>
+        <div style="max-width:480px; margin:0 auto 18px auto;">
+          This looks like a connection problem, not an empty ledger — so nothing has been changed or saved.
+          Please check your connection and retry rather than continuing, which could otherwise save an empty
+          ledger over your real data.
+        </div>
+        <button class="btn primary" id="dataLoadRetryBtn">Retry</button>
+      </div>`;
+    const retryBtn = document.getElementById('dataLoadRetryBtn');
+    if(retryBtn) retryBtn.addEventListener('click', ()=>{ proceedAfterAuth(role); });
+    return;
+  }
   // Get the live FX rate BEFORE the first render, not lazily whenever the
   // person happens to visit Investments/Holdings — otherwise Overview's
   // Net Worth briefly computes with no rate at all (or a stale one) on

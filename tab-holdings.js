@@ -487,15 +487,25 @@ function _isIndianPlatform(inv){
    field: uses the earliest portfolio snapshot recorded this year for that
    symbol (real historical data), falling back to avg cost if you haven't
    snapshotted yet. No UI entry needed — it just works off data you're
-   already recording. */
+   already recording.
+   BUGFIX (#10 — YTD divided by FX rate twice): a snapshot's stored price
+   (see recordPortfolioSnapshot below) is always in USD, because it comes
+   straight from aggregateAllHoldings()'s already-USD-converted currentPrice
+   — regardless of the holding's native currency. The two callers below
+   used to treat that price as if it were still native-currency and run it
+   through another INR→USD conversion, so an INR holding's YTD P/L got
+   divided by the FX rate a second time. The `isUsd` flag here tells each
+   caller which case they're in: true for a snapshot-sourced price (already
+   USD, no further conversion), false for the avgPrice fallback (native
+   currency, needs the normal conversion like any other native figure). */
 function _ytdStartPriceFor(h){
   const sym = (h.symbol || '').toString().toUpperCase();
   const snaps = getPortfolioSnapshots(state.year);
   if(snaps.length && sym){
     const first = snaps.find(s => s.holdings && s.holdings[sym] && s.holdings[sym].price);
-    if(first) return { price: first.holdings[sym].price, date: first.date };
+    if(first) return { price: first.holdings[sym].price, date: first.date, isUsd: true };
   }
-  return { price: h.avgPrice || 0, date: null };
+  return { price: h.avgPrice || 0, date: null, isUsd: false };
 }
 
 function getPortfolioSnapshots(y){
@@ -720,6 +730,13 @@ function recalcHolding(h){
   });
   h.qty = qty;
   h.avgPrice = qty > 0 ? costBasis/qty : 0;
+  /* BUGFIX: h.avgPrice above is the average cost of shares still HELD — it
+     correctly goes to 0 once every share is sold (qty hits 0), which is
+     fine for the Holdings/open view but meant the Sold view's "Avg Buy"
+     column always showed 0 for a fully-closed position, since it reused
+     this same field. Track the sold side separately so that number
+     survives even after the position is fully closed. */
+  h.avgBuyPriceSold = soldQty > 0 ? costBasisSold/soldQty : 0;
   h.realizedPL = realizedPL;
   h.totalBoughtQty = boughtQty;
   h.totalSoldQty = soldQty;
@@ -727,6 +744,11 @@ function recalcHolding(h){
   h.costBasisSold = costBasisSold;
   h.proceeds = proceeds;
   h.lastSellDate = lastSellDate;
+  // h.status stays "closed" ONLY when every share has been sold (used by
+  // the open-holdings list and the aggregate portfolio view to know
+  // whether a position still contributes current value). A PARTIAL sell
+  // intentionally leaves this "open" — see platformSoldHoldings() below,
+  // which uses totalSoldQty (not status) to decide what shows in Sold.
   h.status = (qty > 0.0000001 || soldQty <= 0) ? 'open' : 'closed';
   if(!h.ytdStartPrice) h.ytdStartPrice = h.avgPrice;
 }
@@ -878,7 +900,10 @@ function aggregateAllHoldings(y){
       const q = num(h.qty);
       const avgUSD = _toUsd(h.avgPrice, isINR ? 'INR' : 'USD');
       const curUSD = _toUsd(h.currentPrice, isINR ? 'INR' : 'USD');
-      const ytdUSD = _toUsd(_ytdStartPriceFor(h).price, isINR ? 'INR' : 'USD');
+      // BUGFIX (#10): ytdInfo.price is already USD when it came from a
+      // snapshot (isUsd true) — don't run it through _toUsd() again.
+      const ytdInfo = _ytdStartPriceFor(h);
+      const ytdUSD = ytdInfo.isUsd ? num(ytdInfo.price) : _toUsd(ytdInfo.price, isINR ? 'INR' : 'USD');
       map[sym].qty += q;
       map[sym].invested += q * avgUSD;
       map[sym].currentValue += q * curUSD;
@@ -925,8 +950,13 @@ function platformHoldings(y, platformId){
     .filter(h => h.status !== 'closed')
     .map(h => {
       const q = num(h.qty), avg = num(h.avgPrice), cur = num(h.currentPrice);
+      // BUGFIX (#10): ytdInfo.price is already USD when it came from a
+      // snapshot. Convert it back to THIS holding's native currency here
+      // (multiply by fx for INR) so the rest of this function — which
+      // works entirely in native currency until the explicit /fx step
+      // near the bottom — only ever divides by fx once, not twice.
       const ytdInfo = _ytdStartPriceFor(h);
-      const ytd = ytdInfo.price || avg;
+      const ytd = (ytdInfo.isUsd ? (isINR ? ytdInfo.price * fx : ytdInfo.price) : ytdInfo.price) || avg;
       const invested = q * avg, current = q * cur, ytdVal = q * ytd;
       const pl = current - invested, ytdPl = current - ytdVal;
       const investedUSD = isINR ? invested / fx : invested;
@@ -975,17 +1005,40 @@ function platformSoldHoldings(y, platformId){
   const isINR = inv.currency === 'INR';
   const fx = _ensureFx().INR || 95.0;
   return (inv.holdings || [])
-    .filter(h => h.status === 'closed')
+    /* BUGFIX: this used to filter on h.status === 'closed', which only
+       ever becomes true once EVERY share is sold (see recalcHolding). A
+       partial sell (e.g. selling 10 of 73 shares) correctly stays "open"
+       — you still hold 63 — so it was invisible here even though a real
+       sale happened and has real proceeds/realized P&L to show. Sold
+       history should be based on whether ANYTHING has been sold
+       (totalSoldQty > 0), independent of whether shares remain. */
+    .filter(h => num(h.totalSoldQty) > 0)
     .map(h => {
       const costBasisSold = num(h.costBasisSold), proceeds = num(h.proceeds), realized = num(h.realizedPL);
       const fmt = (v) => isINR ? fmt$(v/fx, 2) : fmt$(v, 2);
       const tip = (v) => isINR ? fmtInr(v) : null;
       return {
         ...h,
-        dAvgBuy: fmt(h.avgPrice), dAvgSell: fmt(h.avgSellPrice),
+        /* BUGFIX: was fmt(h.avgPrice) — h.avgPrice is the average cost of
+           shares still HELD, which is 0 once a position is fully sold (no
+           shares left to average). Use h.avgBuyPriceSold (the average cost
+           of what was actually sold) so this doesn't collapse to 0. */
+        dAvgBuy: fmt(h.avgBuyPriceSold), dAvgSell: fmt(h.avgSellPrice),
+        /* Avg Buy/Sell are per-share PRICES (not totals like Cost Basis/
+           Proceeds below) — reuse fmtInr for the ₹ formatting, with a
+           "/share" suffix so it reads clearly as a per-share price. */
+        tAvgBuy: isINR ? fmtInr(h.avgBuyPriceSold) + '/share' : null,
+        tAvgSell: isINR ? fmtInr(num(h.avgSellPrice)) + '/share' : null,
         dCostBasis: fmt(costBasisSold), dProceeds: fmt(proceeds), dRealized: fmt(realized),
         tCostBasis: tip(costBasisSold), tProceeds: tip(proceeds), tRealized: tip(realized),
         realizedUSD: isINR ? realized/fx : realized,
+        /* BUGFIX (#11): the aggregate Sold-view totals below need
+           proceeds/cost-basis in a common currency too — only realizedUSD
+           used to be converted, so summing r.proceeds / r.costBasisSold
+           across platforms added raw INR numbers straight into raw USD
+           numbers as if they were the same currency. */
+        costBasisSoldUSD: isINR ? costBasisSold/fx : costBasisSold,
+        proceedsUSD: isINR ? proceeds/fx : proceeds,
         realizedPct: costBasisSold > 0 ? realized/costBasisSold : 0
       };
     })
@@ -1181,8 +1234,13 @@ function renderHoldings(){
     // SOLD VIEW: Realized metrics
     const allSold = soldGroups.flatMap(g=>g.rows);
     const totalRealized = allSold.reduce((a,r)=>a+(r.realizedUSD||0),0);
-    const totalProceeds = allSold.reduce((a,r)=>a+(r.proceeds||0),0);
-    const totalCostBasisSold = allSold.reduce((a,r)=>a+(r.costBasisSold||0),0);
+    // BUGFIX (#11): these two used to sum r.proceeds / r.costBasisSold —
+    // raw NATIVE-currency numbers — across platforms, so an INR platform's
+    // rupee totals got added straight into a USD platform's dollar totals
+    // as if they were the same unit. Use the *USD fields now (see
+    // platformSoldHoldings) so everything here is in one common currency.
+    const totalProceeds = allSold.reduce((a,r)=>a+(r.proceedsUSD||0),0);
+    const totalCostBasisSold = allSold.reduce((a,r)=>a+(r.costBasisSoldUSD||0),0);
     const winners = allSold.filter(r=>(r.realizedUSD||0)>0);
     const losers = allSold.filter(r=>(r.realizedUSD||0)<0);
     const winRate = allSold.length > 0 ? (winners.length / allSold.length) * 100 : 0;
@@ -1416,8 +1474,8 @@ function renderHoldings(){
       <td>${r.name||''}</td>
       <td><span class="debt-tag">${r.type}</span></td>
       <td>${r.totalSoldQty}</td>
-      <td>${r.dAvgBuy}</td>
-      <td>${r.dAvgSell}</td>
+      <td ${r.tAvgBuy?`data-tip="${r.tAvgBuy}" class="has-tip"`:''}>${r.dAvgBuy}</td>
+      <td ${r.tAvgSell?`data-tip="${r.tAvgSell}" class="has-tip"`:''}>${r.dAvgSell}</td>
       <td ${r.tCostBasis?`data-tip="${r.tCostBasis}" class="has-tip"`:''}>${r.dCostBasis}</td>
       <td ${r.tProceeds?`data-tip="${r.tProceeds}" class="has-tip"`:''}>${r.dProceeds}</td>
       <td style="font-weight:600;color:${plColor(r.realizedPL)}" ${r.tRealized?`data-tip="${r.tRealized}" class="has-tip"`:''}>${r.realizedPL>=0?'+':''}${r.dRealized} <span style="font-size:11px;opacity:.75;">(${r.realizedPct>=0?'+':''}${pct(r.realizedPct)})</span></td>
@@ -2066,8 +2124,20 @@ function renderHoldings(){
           w.name = raw;
         } else if(field==='targetPrice'){
           const cleaned = raw.replace(/[$₹,\s]/g,'').replace(/✓$/,'');
-          const v = cleaned==='' || cleaned==='–' ? null : evalExpr(cleaned);
-          w.targetPrice = (v===null || isNaN(v)) ? null : roundCents(v);
+          if(cleaned==='' || cleaned==='–'){
+            w.targetPrice = null;
+          } else {
+            const v = evalExpr(cleaned);
+            // BUGFIX: garbage text used to be silently saved as "no target
+            // price" (null) instead of being rejected. Keep whatever was
+            // there before if what was typed isn't a real number.
+            if(v===null || isNaN(v)){
+              renderHoldings();
+              showToast(`"${raw}" isn't a number — kept the previous target price.`);
+              return;
+            }
+            w.targetPrice = roundCents(v);
+          }
         } else if(field==='notes'){
           w.notes = raw;
         }

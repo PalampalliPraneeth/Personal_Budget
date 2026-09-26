@@ -59,10 +59,26 @@ let DATA = null;
 let state = { year: 2026, month: 'ALL' };
 let charts = {};
 const STORAGE_KEY = 'ledger:data:v1';
+/* BUGFIX (data loss risk): true only when the load itself genuinely
+   failed (network/storage error) — NOT when the ledger is simply empty
+   for a brand-new setup. auth.js checks this after loadData() and, if
+   true, shows a retry screen instead of opening the app, so a network
+   hiccup can never look like "no data" and get an empty ledger saved
+   back over the real cloud copy. See the storage-bridge.js get() comment
+   for the other half of this fix. */
+let dataLoadFailed = false;
 
 async function loadData(){
+  let res;
   try{
-    const res = await window.storage.get(STORAGE_KEY, false);
+    res = await window.storage.get(STORAGE_KEY, false);
+  }catch(e){
+    console.error('[Ledger] Could not load your data (network or storage error) — refusing to open an empty ledger:', e);
+    DATA = null;
+    dataLoadFailed = true;
+    return;
+  }
+  try{
     if(res && res.value){
       DATA = JSON.parse(res.value);
       // Migrate investments to have holdings arrays
@@ -101,9 +117,22 @@ async function loadData(){
       if(!DATA.paymentPlan) DATA.paymentPlan = buildDefaultPaymentPlan();
       if(!DATA.fxRateHistory) DATA.fxRateHistory = {};
       lastSavedSnapshot = JSON.stringify(DATA);
+      dataLoadFailed = false;
       return;
     }
-  }catch(e){ /* not found or storage unavailable */ }
+  }catch(e){
+    // The row came back but wasn't valid JSON we could parse — treat this
+    // as a load failure too, not as "no data", for the same reason as the
+    // network-error case above: we don't want to silently open (and later
+    // save over the cloud copy with) an empty ledger when real data is
+    // actually sitting there, just currently unreadable.
+    console.error('[Ledger] Loaded data but could not parse it — refusing to open an empty ledger:', e);
+    DATA = null;
+    dataLoadFailed = true;
+    return;
+  }
+  // res was a clean, error-free response with genuinely no row for this
+  // key — a real brand-new ledger, safe to start empty.
   DATA = buildDefaultData();
   DATA.paymentPlan = buildDefaultPaymentPlan();
   DATA.fxRateHistory = {};
@@ -144,6 +173,52 @@ async function probeStorage(){
   updateSaveUI();
 }
 
+/* Copies over only the fields the price-refresh cron ever writes (see
+   Daily_Price_refresh.ts applyPrices()/recordSnapshotsForAllYears()),
+   matched by stable `.id` (not array index, since you may have added or
+   removed a holding locally in the meantime). Everything else in `mine`
+   — every field you actually edited — is left exactly as you left it.
+   Portfolio snapshots are treated as an append-only history the cron/any
+   client can extend, so the cloud's array (a superset once cron has run)
+   wins outright rather than being field-merged. */
+function mergeCronOwnedFields(mine, cloud){
+  if(!cloud || typeof cloud !== 'object') return;
+  Object.keys(cloud).filter(k=>/^\d+$/.test(k)).forEach(y=>{
+    const cloudYd = cloud[y], mineYd = mine[y];
+    if(!mineYd || !cloudYd) return; // a year we don't have locally, or the cloud doesn't have — nothing to merge
+    if(Array.isArray(cloudYd.portfolioSnapshots)){
+      mineYd.portfolioSnapshots = cloudYd.portfolioSnapshots;
+    }
+    (cloudYd.investments||[]).forEach(cInv=>{
+      const mInv = (mineYd.investments||[]).find(i=>i.id===cInv.id);
+      if(!mInv) return;
+      (cInv.holdings||[]).forEach(cH=>{
+        const mH = (mInv.holdings||[]).find(h=>h.id===cH.id);
+        if(!mH) return;
+        mH.currentPrice = cH.currentPrice;
+        mH.dayChangePct = cH.dayChangePct;
+        mH.lastFetched = cH.lastFetched;
+        mH.priceFetchFailed = cH.priceFetchFailed;
+      });
+    });
+  });
+  if(Array.isArray(cloud.watchlist)){
+    cloud.watchlist.forEach(cW=>{
+      const mW = (mine.watchlist||[]).find(w=>w.id===cW.id);
+      if(!mW) return;
+      mW.currentPrice = cW.currentPrice;
+      mW.dayChangePct = cW.dayChangePct;
+      mW.prevClose = cW.prevClose;
+      mW.fiftyTwoWeekHigh = cW.fiftyTwoWeekHigh;
+      mW.fiftyTwoWeekLow = cW.fiftyTwoWeekLow;
+      mW.volume = cW.volume;
+      mW.lastFetched = cW.lastFetched;
+      mW.priceFetchFailed = cW.priceFetchFailed;
+    });
+  }
+  if(cloud.fxRateHistory) mine.fxRateHistory = cloud.fxRateHistory;
+}
+
 async function persistData(silent, attempt){
   attempt = attempt || 1;
   if(typeof window.storage === 'undefined'){
@@ -152,6 +227,31 @@ async function persistData(silent, attempt){
     if(!silent) showToast("This page has no connection to Claude's storage right now, so nothing outside this tab will remember your edits. Export data regularly to keep a real backup.");
     return;
   }
+  /* BUGFIX (#7 — cron clobber): the daily-price-refresh cron job writes
+     fresh prices/day-change/portfolio-snapshots straight to Supabase with
+     its own compare-and-swap (see Daily_Price_refresh.ts), so IT can't
+     clobber a browser save. But the reverse wasn't protected: this
+     function used to blindly overwrite the whole row with whatever was in
+     memory, which could easily be OLDER than what cron just wrote (e.g.
+     you had a tab open since this morning, cron ran at 1pm, then you edit
+     one field and hit Save at 2pm — your save would stomp the 1pm prices
+     back to this morning's numbers).
+     Fix: right before writing, pull the current cloud copy and copy over
+     just the fields cron ever touches (current price, day-change,
+     portfolio snapshots, FX rate history, watchlist quotes) — never
+     anything you edited yourself. If that check fails (offline, etc.) we
+     proceed with the save anyway rather than blocking it outright. */
+  if(DATA === null){
+    console.error('[Ledger] persistData called with no data loaded — refusing to save (would overwrite the cloud copy with nothing).');
+    return;
+  }
+  try{
+    const fresh = await window.storage.get(STORAGE_KEY, false);
+    if(fresh && fresh.value){
+      const cloud = JSON.parse(fresh.value);
+      mergeCronOwnedFields(DATA, cloud);
+    }
+  }catch(e){ /* couldn't check for newer cron data — proceed with what we have rather than blocking the save */ }
   try{
     const res = await window.storage.set(STORAGE_KEY, JSON.stringify(DATA), false);
     if(!res) throw new Error('empty response from storage');

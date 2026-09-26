@@ -1,27 +1,51 @@
 /* =========================================================================
    EDITABLE TABLE BUILDER (shared by income / expenses / investments)
    ========================================================================= */
+/* BUGFIX: this used to fail on two common inputs:
+     - "1,234"  -> old code fell through to a bare parseFloat("1,234"),
+                   which JS parses only up to the comma and returns 1.
+     - "100-30" -> old code required a literal "+" to treat input as a sum,
+                   so this fell through to parseFloat("100-30"), which also
+                   stops at the first invalid character and returns 100 —
+                   silently dropping the "-30" instead of computing 70.
+   Fix: strip thousands-separator commas first, then only ever return a
+   number when the ENTIRE input is a valid plain number or a full chain of
+   +/- terms (validated end-to-end by EXPR, not just parsed from the front).
+   Anything else — letters, "1.2.3", a trailing operator like "100+", a
+   malformed "100--30" — is refused (returns null) rather than guessed at,
+   so a bad entry can't silently save the wrong number. */
 function evalExpr(s){
-  const cleaned = s.trim();
-  if(/^-?[0-9.]+$/.test(cleaned)) return parseFloat(cleaned);
-  if(/^[0-9.+\-\s]+$/.test(cleaned) && /\+/.test(cleaned)){
+  if(s===null || s===undefined) return null;
+  const cleaned = s.trim().replace(/,/g,''); // strip thousands separators, e.g. "1,234" -> "1234"
+  if(cleaned==='') return null;
+  const PLAIN_NUMBER = /^[+-]?\d+(\.\d+)?$/;
+  if(PLAIN_NUMBER.test(cleaned)) return parseFloat(cleaned);
+  const noSpace = cleaned.replace(/\s+/g,'');
+  // A chain of +/- terms across the WHOLE string, e.g. "100-30", "50+25.50",
+  // "-40+10-5". Using $ at the end (not just parsing a prefix) is what
+  // makes "100-30" correctly compute 70 instead of silently truncating to 100.
+  const EXPR = /^[+-]?\d+(\.\d+)?([+-]\d+(\.\d+)?)*$/;
+  if(EXPR.test(noSpace)){
     try{
-      const v = Function('"use strict";return ('+cleaned.replace(/\s+/g,'')+')')();
+      const v = Function('"use strict";return ('+noSpace+')')();
       if(typeof v!=='number' || !isFinite(v)) return null;
       // Guard against binary floating-point artifacts (e.g. 590+69.82 ->
       // 659.8199999999999) — these are currency amounts, so round to cents.
       return Math.round((v + Number.EPSILON) * 100) / 100;
     }catch(e){ return null; }
   }
-  const f = parseFloat(cleaned);
-  return isNaN(f) ? null : f;
+  return null;
 }
 function formatTip(raw, currency){
   if(!raw) return null;
-  const parts = raw.replace(/\s+/g,'').split('+').filter(Boolean);
-  if(parts.length<2) return null;
+  const noSpace = raw.replace(/\s+/g,'');
+  // Split into signed terms, e.g. "100-30+5" -> ["100","-30","+5"], so the
+  // breakdown tooltip works for subtraction too, not just addition.
+  const parts = noSpace.match(/[+-]?\d+(\.\d+)?/g);
+  if(!parts || parts.length<2) return null;
   const total = parts.reduce((a,b)=>a+(parseFloat(b)||0),0);
-  return parts.join(' + ') + ' = ' + fmtNative(total, currency);
+  const display = parts.map((p,i)=> i===0 ? p : (p[0]==='-' ? ' - '+p.slice(1) : ' + '+p.replace(/^\+/,''))).join('');
+  return display + ' = ' + fmtNative(total, currency);
 }
 
 function makeEditableRow(item, monthsToShow, opts){

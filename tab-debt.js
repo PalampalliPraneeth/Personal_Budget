@@ -12,10 +12,21 @@ function planRowRemaining(plan, row){
 }
 
 function simulatePayoffWithPlan(debts, plan){
-  const items = debts.filter(d=>debtPendingCalc(d)>0).map(d=>{ const p=debtPendingCalc(d); return {
-    name:d.name, balance:p, rate:(num(d.interest)/100)/12,
-    minPay: d.emi && d.emi>0 ? Math.min(d.emi, p*1.5) : Math.max(p*0.03, 25)
-  };});
+  const items = debts.filter(d=>debtPendingCalc(d)>0).map(d=>{
+    const p=debtPendingCalc(d); // USD
+    /* BUGFIX (#12b): d.emi is stored in the debt's NATIVE currency (like
+       d.total), but `p` (the balance here) is already USD. The old code
+       compared d.emi straight against p*1.5 — for an INR debt that meant
+       comparing a raw-rupee EMI (often tens of thousands) against a
+       dollar-sized cap, so the simulation effectively always used the
+       full (huge, rupee-denominated) "USD" EMI as the monthly payment.
+       Convert the EMI to USD the same way every other debt figure is. */
+    const emiUsd = debtToUsd(d.emi, d);
+    return {
+      name:d.name, balance:p, rate:(num(d.interest)/100)/12,
+      minPay: emiUsd && emiUsd>0 ? Math.min(emiUsd, p*1.5) : Math.max(p*0.03, 25)
+    };
+  });
   if(items.length===0) return {months:0, perDebt:{}, series:[{month:0,total:0}], payoffDate:new Date(), remainders:[], lastRemaining:0};
   const remainders = plan.rows.map(r=>Math.max(0, planRowRemaining(plan,r)));
   const lastRemaining = remainders.length ? remainders[remainders.length-1] : 0;
@@ -73,7 +84,13 @@ function renderDebt(){
 
   function debtCardHtml(d){
     const clearedToDate = debtClearedToDate(d);
-    const pct2 = d.total>0 ? Math.min(100, (clearedToDate/d.total)*100) : 0;
+    /* BUGFIX (#12c): clearedToDate is always USD (see debtClearedToDate),
+       but d.total is in the debt's NATIVE currency — for an INR debt this
+       divided a USD numerator by a much larger raw-INR denominator,
+       producing a tiny, wrong progress percentage. Use debtOriginalUsd(d)
+       (the already-converted total) so both sides of the ratio are USD. */
+    const totalUsd = debtOriginalUsd(d);
+    const pct2 = totalUsd>0 ? Math.min(100, (clearedToDate/totalUsd)*100) : 0;
     const isPaid = d.total>0 && debtPendingCalc(d)<=0;
     const needsTotal = num(d.total)===0;
     const isINR = d.currency === 'INR';
@@ -327,10 +344,16 @@ function renderDebt(){
       el.addEventListener('click', ()=>{
         const idx = plan.columns.findIndex(c=>c.id===el.dataset.delcol);
         if(idx>-1 && confirm('Remove the "'+plan.columns[idx].name+'" column?')){
+          /* BUGFIX (#12a): the old code read plan.columns[idx].name for the
+             markDirty log AFTER splicing that very column out of the array.
+             For the LAST column, idx now equals the array's new (shorter)
+             length, so plan.columns[idx] is undefined and .name crashed.
+             Capture the name before splicing. */
+          const removedName = plan.columns[idx].name;
           const removedId = plan.columns[idx].id;
           plan.columns.splice(idx,1);
           plan.rows.forEach(r=>{ delete r.values[removedId]; });
-          markDirty('debt', {tab:'debt', action:'delete', target:'column '+plan.columns[idx].name});
+          markDirty('debt', {tab:'debt', action:'delete', target:'column '+removedName});
           renderDebt();
         }
       });

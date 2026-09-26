@@ -1,15 +1,31 @@
 /* =========================================================================
    DATA / IMPORT TAB
    ========================================================================= */
+/* BUGFIX: same root cause as evalExpr in shared-editable.js -- the old
+   fallback here (parseFloat on a char-stripped string) silently truncated
+   "100-30" to 100 because parseFloat stops at the first invalid character
+   once it hits the interior "-". Rewritten to only accept a plain number
+   or a full +/- expression matched end-to-end, never a truncated prefix. */
 function parseNumCell(v){
   if(v===null || v===undefined || v==='') return null;
   if(typeof v==='number') return v;
   if(typeof v==='string'){
-    const s = v.trim();
-    if(/^-?[0-9.]+$/.test(s)) return parseFloat(s);
-    if(/^[0-9.+\s]+$/.test(s)){ try{ return Function('"use strict";return ('+s.replace(/\s+/g,'')+')')(); }catch(e){ return null; } }
-    const f = parseFloat(s.replace(/[^0-9.\-]/g,''));
-    return isNaN(f)? null : f;
+    const cleaned = v.trim().replace(/,/g,''); // strip thousands separators
+    if(cleaned==='') return null;
+    if(/^[+-]?\d+(\.\d+)?$/.test(cleaned)) return parseFloat(cleaned);
+    const noSpace = cleaned.replace(/\s+/g,'');
+    if(/^[+-]?\d+(\.\d+)?([+-]\d+(\.\d+)?)*$/.test(noSpace)){
+      try{
+        const r = Function('"use strict";return ('+noSpace+')')();
+        return (typeof r==='number' && isFinite(r)) ? r : null;
+      }catch(e){ return null; }
+    }
+    // Last resort for messy spreadsheet cells like "$1,234.56" -- strip
+    // currency symbols, but only accept a single clean number this way,
+    // never a truncated prefix of something messier like "100-30".
+    const stripped = cleaned.replace(/[()$₹]/g,'');
+    if(/^[+-]?\d+(\.\d+)?$/.test(stripped)) return parseFloat(stripped);
+    return null;
   }
   return null;
 }
@@ -113,6 +129,22 @@ function renderDataTab(){
   });
   */
 
+  /* BUGFIX (data loss): this used to do `DATA[yr] = parsed;` — a wholesale
+     replacement of the entire year object with no confirmation. Two
+     problems with that:
+       1. parseYearSheet() only ever returns income/expenseGroups/
+          investments/debts — it has no idea about savingsAccounts,
+          retirementAccounts, savingsGoals, assets, cashFlowOverrides, or
+          portfolioSnapshots, so replacing the whole year object silently
+          wiped all of those every time you re-imported a spreadsheet.
+       2. It also silently wiped `holdings` on every investment (the
+          per-lot detail from the Holdings tab), because the spreadsheet
+          rows for an "Investment" group only carry a name + monthly
+          totals, never lot-level holdings.
+     Fix: merge instead of replace — keep everything the spreadsheet
+     doesn't know about untouched, re-attach existing holdings to
+     investments matched by name, and ask for confirmation up front so a
+     drag-and-drop mistake can't wipe a year silently. */
   function handleFile(file){
     const status = document.getElementById('importStatus');
     status.textContent = 'Reading '+file.name+'…';
@@ -120,7 +152,7 @@ function renderDataTab(){
     reader.onload = (e)=>{
       try{
         const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
-        let importedAny = false;
+        const toImport = [];
         [2026,2025].forEach(yr=>{
           const sheetName = wb.SheetNames.find(n=> n.trim()===String(yr));
           if(!sheetName) return;
@@ -128,19 +160,50 @@ function renderDataTab(){
           const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
           const parsed = parseYearSheet(rows);
           if(parsed.income.length || parsed.expenseGroups.length || parsed.investments.length || parsed.debts.length){
-            DATA[yr] = parsed;
-            importedAny = true;
+            toImport.push({yr, parsed});
           }
         });
-        if(importedAny){
-          persistData(true);
-          status.innerHTML = '<span style="color:var(--good)">✓ Import complete.</span> Your Overview, Income, Expenses, Investments and Debt tabs now reflect the new file.';
-          showToast('Spreadsheet imported');
-          refreshMonthOptions();
-          renderActive();
-        } else {
+        if(!toImport.length){
           status.innerHTML = '<span style="color:var(--danger)">No matching "2025"/"2026" sheet with the expected layout was found.</span> The sheet names in your file were: '+wb.SheetNames.join(', ');
+          return;
         }
+        const yearList = toImport.map(x=>x.yr).join(' and ');
+        const confirmed = confirm(
+          'This will replace Income, Expenses, Investments, and Debt totals for '+yearList+' with what\'s in this spreadsheet.\n\n'+
+          'Savings accounts, retirement accounts, savings goals, assets, and any Holdings-tab lot detail on your investments will be kept as-is — the spreadsheet doesn\'t carry that information.\n\n'+
+          'Continue?'
+        );
+        if(!confirmed){ status.textContent = 'Import cancelled — nothing changed.'; return; }
+        toImport.forEach(({yr, parsed})=>{
+          const existing = DATA[yr] || {};
+          // Re-attach existing holdings/currency to investments matched by
+          // name, so re-importing the same spreadsheet doesn't blow away
+          // the lot-level detail you built up on the Holdings tab.
+          const oldInvByName = {};
+          (existing.investments||[]).forEach(inv=>{ oldInvByName[(inv.name||'').trim().toLowerCase()] = inv; });
+          parsed.investments.forEach(inv=>{
+            const old = oldInvByName[(inv.name||'').trim().toLowerCase()];
+            inv.holdings = old && old.holdings ? old.holdings : [];
+            inv.currency = old ? (old.currency || 'USD') : (inv.currency || 'USD');
+          });
+          DATA[yr] = {
+            income: parsed.income,
+            expenseGroups: parsed.expenseGroups,
+            investments: parsed.investments,
+            debts: parsed.debts,
+            savingsAccounts: existing.savingsAccounts || [],
+            retirementAccounts: existing.retirementAccounts || [],
+            savingsGoals: existing.savingsGoals || [],
+            assets: existing.assets || [],
+            cashFlowOverrides: existing.cashFlowOverrides || {},
+            portfolioSnapshots: existing.portfolioSnapshots || []
+          };
+        });
+        persistData(true);
+        status.innerHTML = '<span style="color:var(--good)">✓ Import complete.</span> Your Overview, Income, Expenses, Investments and Debt tabs now reflect the new file. Savings, goals, and holdings detail were kept.';
+        showToast('Spreadsheet imported');
+        refreshMonthOptions();
+        renderActive();
       }catch(err){
         status.innerHTML = '<span style="color:var(--danger)">Could not read that file: '+err.message+'</span>';
       }
