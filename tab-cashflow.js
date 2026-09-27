@@ -172,6 +172,77 @@ function nextDueDateOnOrAfter(dueDay, onOrAfter){
   return candidate;
 }
 function fmtShortDate(d){ return d.toLocaleDateString('en-US',{month:'short', day:'numeric'}); }
+/* Splits a credit card's total owed into what a real statement would show:
+     - priorBalance: what was already owed before the CURRENTLY open cycle
+       started. This is the amount actually due, by priorDueDate.
+     - cycleSpend: net charges/payments logged since the current cycle
+       opened. This doesn't come due yet — it accrues until the cycle
+       closes and becomes NEXT statement's priorBalance.
+   Returns null when there's no billing cycle configured (nothing to
+   measure the split against) — callers should fall back to showing plain
+   total owed, same as before this existed. */
+function creditCycleSplit(bank, y, today){
+  if(!bank.billingCycleDay) return null;
+  today = today || new Date();
+  const cycleRange = currentBillingCycleRange(bank.billingCycleDay, today);
+  if(!cycleRange) return null;
+  const totalOwed = Math.max(0, -(accountDisplayValueAt(bank, creditSnapshotMonth(bank, y)) || 0));
+  /* BUGFIX: this used to net ALL of this cycle's activity (charges minus
+     payments) against totalOwed in one shot — `priorBalance = totalOwed -
+     cycleSpend`. That silently breaks the moment a payment made mid-cycle
+     is bigger than this cycle's own new charges (e.g. you pay off last
+     month's statement plus a bit extra): the net goes negative, and
+     subtracting a negative INFLATES priorBalance past what's actually
+     owed — a real card showed "$84.87 due" while only $26.13 was owed in
+     total. A real statement applies payments to the OLDER balance first,
+     so: work out what was owed right at the previous cycle's close, sub-
+     tract any payments made since (floored at 0 — you can't un-owe money
+     you don't owe), and only apply whatever payment is left over against
+     this cycle's own new charges. */
+  let priorBalanceAtClose = 0, paymentsSinceClose = 0, chargesSinceClose = 0;
+  (bank.transactions||[]).forEach(t=>{
+    if(!t.date) return;
+    const p = parseLocalDateParts(t.date);
+    const d = new Date(p.year, p.monthIdx, p.day);
+    const amt = num(t.amount);
+    if(d < cycleRange.start){
+      priorBalanceAtClose += -amt; // amount<0 raises what's owed
+    } else if(amt > 0){
+      paymentsSinceClose += amt;
+    } else {
+      chargesSinceClose += -amt;
+    }
+  });
+  priorBalanceAtClose = Math.max(0, roundCents(priorBalanceAtClose));
+  const priorBalance = Math.max(0, roundCents(priorBalanceAtClose - paymentsSinceClose));
+  const leftoverPayment = Math.max(0, roundCents(paymentsSinceClose - priorBalanceAtClose));
+  const cycleSpend = Math.max(0, roundCents(chargesSinceClose - leftoverPayment));
+  const priorClose = new Date(cycleRange.start); priorClose.setDate(priorClose.getDate()-1);
+  const priorDueDate = bank.paymentDueDay ? nextDueDateOnOrAfter(bank.paymentDueDay, priorClose) : null;
+  // The date THIS cycle's own spend will become due, once it closes —
+  // same calc billingCycleLabel() already shows as "due Nov 8". Exposed
+  // here too so a balance with no priorBalance (nothing already billed)
+  // still gets a due date attached to what you do owe.
+  const currentDueDate = bank.paymentDueDay ? nextDueDateOnOrAfter(bank.paymentDueDay, cycleRange.end) : null;
+  return { totalOwed, cycleSpend, priorBalance, priorDueDate, currentDueDate, cycleStart: cycleRange.start, cycleEnd: cycleRange.end };
+}
+/* Single source of truth for the "Due ..." line shown under both the
+   card row and the card detail modal — centralized after the two copies
+   of this logic drifted (the row/modal version only handled priorBalance,
+   so a balance that was ENTIRELY this-cycle spend with no prior statement
+   showed no due date at all, even though real money was owed). Covers all
+   three states: something already billed and due, nothing billed yet but
+   still owed (due once this cycle closes), or genuinely paid off. */
+function creditDueSubline(split, currency){
+  if(!split) return '';
+  if(split.priorBalance > 0.005){
+    return `Due ${fmtShortDate(split.priorDueDate)}: <b style="color:var(--rust-soft);">${fmtNative(split.priorBalance,currency)}</b>${split.cycleSpend>0.005 ? ` · ${fmtNative(split.cycleSpend,currency)} not due yet` : ''}`;
+  }
+  if(split.cycleSpend > 0.005 && split.currentDueDate){
+    return `Due ${fmtShortDate(split.currentDueDate)}: <b style="color:var(--rust-soft);">${fmtNative(split.cycleSpend,currency)}</b> <span style="color:var(--text-faint);">(this cycle, once it closes)</span>`;
+  }
+  return '';
+}
 /* The display line used in both the row list and the bank detail modal —
    real calculated dates, not just "bills on the 12th". */
 function billingCycleLabel(b, refDate){
@@ -218,7 +289,7 @@ function renderCashFlow(){
   const banks = allAccounts.filter(b=>b.type!=='credit')
     .sort((a,b)=> (bankUsdAt(b, cashSnapIdx)||0) - (bankUsdAt(a, cashSnapIdx)||0));
   const creditCards = allAccounts.filter(b=>b.type==='credit')
-    .sort((a,b)=> Math.max(0,-(bankUsdAt(b, cashSnapIdx)||0)) - Math.max(0,-(bankUsdAt(a, cashSnapIdx)||0)));
+    .sort((a,b)=> Math.max(0,-(bankUsdAt(b, creditSnapshotMonth(b,y))||0)) - Math.max(0,-(bankUsdAt(a, creditSnapshotMonth(a,y))||0)));
 
   /* ---- Cash summary card + clickable bank list (Monarch-style) ---- */
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, cashSnapIdx) || 0));
@@ -226,7 +297,7 @@ function renderCashFlow(){
   const cashDelta = cashPrevTotal===null ? null : cashTotal - cashPrevTotal;
   const cashDeltaPct = (cashPrevTotal && cashPrevTotal!==0) ? (cashDelta/Math.abs(cashPrevTotal))*100 : null;
 
-  const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, cashSnapIdx) || 0)));
+  const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, creditSnapshotMonth(b,y)) || 0)));
 
   // Same components Net Worth uses, so "% of assets" lines up with Overview.
   const invCurrentForAssets = sumArr(yearData(y).investments.map(it => {
@@ -257,13 +328,19 @@ function renderCashFlow(){
   }).join('');
 
   const creditRows = creditCards.map(b=>{
-    const bal = accountDisplayValueAt(b, cashSnapIdx); // native currency, carried forward
+    const bal = accountDisplayValueAt(b, creditSnapshotMonth(b,y)); // native currency, carried forward — see creditSnapshotMonth()
     const owed = bal===null ? 0 : Math.max(0,-bal);
     const hasLimit = b.creditLimit!=null && b.creditLimit>0;
     const pctUsed = hasLimit ? (owed/b.creditLimit)*100 : null;
     const pctColor = pctUsed===null ? 'var(--text-dim)' : pctUsed>=70 ? 'var(--rust-soft)' : pctUsed>=30 ? 'var(--gold-soft)' : 'var(--good)';
     const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
     const cycleLabel = billingCycleLabel(b);
+    // Real-credit-card-app framing: what's actually due now (priorBalance,
+    // frozen since before this cycle opened) vs what's still accruing in
+    // the currently open cycle (cycleSpend, not due until next statement).
+    const split = creditCycleSplit(b, y);
+    const dueSublineText = creditDueSubline(split, b.currency);
+    const dueSubline = dueSublineText ? `<div class="bank-row-sub">${dueSublineText}</div>` : '';
     return `
     <div class="bank-row" data-bank-open="${b.id}">
       <div class="bank-row-icon">${initial}</div>
@@ -271,6 +348,7 @@ function renderCashFlow(){
         <div class="bank-row-name editable-inline" contenteditable="true" data-renamebank="${b.id}">${escapeHtml(b.name)}</div>
         <div class="bank-row-sub">${hasLimit ? `${fmtNative(b.creditLimit,b.currency)} limit · <span style="color:${pctColor};">${pctUsed.toFixed(0)}% used</span>` : 'No preset limit'} <span class="row-del" data-editlimit="${b.id}" title="edit credit limit">✎</span></div>
         <div class="bank-row-sub">${cycleLabel ? cycleLabel : 'Billing cycle not set'} <span class="row-del" data-editcycle="${b.id}" title="edit billing cycle & due date">✎</span></div>
+        ${dueSubline}
       </div>
       <div class="bank-row-right">
         <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')} <span class="row-del" data-delbank="${b.id}" title="remove card">✕</span></div>
@@ -313,7 +391,7 @@ function renderCashFlow(){
 
   const cardsWithLimit = creditCards.filter(b=>b.creditLimit!=null && b.creditLimit>0);
   const totalLimit = sumArr(cardsWithLimit.map(b=>b.creditLimit));
-  const totalOwedWithLimit = sumArr(cardsWithLimit.map(b=>Math.max(0,-(bankUsdAt(b, cashSnapIdx)||0))));
+  const totalOwedWithLimit = sumArr(cardsWithLimit.map(b=>Math.max(0,-(bankUsdAt(b, creditSnapshotMonth(b,y))||0))));
   const overallPct = totalLimit>0 ? (totalOwedWithLimit/totalLimit)*100 : null;
 
   const creditCard = `
@@ -362,6 +440,7 @@ function renderCashFlow(){
       ${editCell(i,'card', r.card)}
       ${editCell(i,'debtPaid', r.debtPaid)}
       ${editCell(i,'retirement', r.retirement)}
+      ${editCell(i,'invest', r.invest)}
       <td style="font-weight:600; color:${r.netFlow>=0?'var(--teal-soft)':'var(--rust-soft)'}">${r.netFlow>=0?'+':''}${fmt$(r.netFlow,2)}</td>
       <td style="font-weight:700; color:var(--gold-soft)">${fmt$(r.carryOut,2)}</td>
     </tr>`;
@@ -415,12 +494,12 @@ function renderCashFlow(){
 
   const html = `
     <div class="section-title">Cash Flow · ${y}</div>
-    <p class="section-sub">What you actually have on hand: income, minus categorized spending, minus card bill payments, minus debt payments, minus your own retirement contribution — carried forward month over month. Every cell below is editable — type over anything to correct it for a specific month; clear a cell to go back to the calculated value.</p>
+    <p class="section-sub">What you actually have on hand: income, minus categorized spending, minus card bill payments, minus debt payments, minus your own retirement contribution, minus your own investment contributions — carried forward month over month. Every cell below is editable — type over anything to correct it for a specific month; clear a cell to go back to the calculated value.</p>
 
     <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
       <div class="kpi-card c-gold"><div class="kpi-label">Carried in from ${mi>0?MONTHS[mi-1]:'prior year'}</div><div class="kpi-value">${fmt$(thisRow.carryIn)}</div></div>
       <div class="kpi-card c-teal"><div class="kpi-label">${MONTHS[mi]} net flow</div><div class="kpi-value">${thisRow.netFlow>=0?'+':''}${fmt$(thisRow.netFlow)}</div></div>
-      <div class="kpi-card c-rust"><div class="kpi-label">Card + debt + retirement this month</div><div class="kpi-value">${fmt$(thisRow.card+thisRow.debtPaid+thisRow.retirement)}</div></div>
+      <div class="kpi-card c-rust"><div class="kpi-label">Card + debt + retirement + invest this month</div><div class="kpi-value">${fmt$(thisRow.card+thisRow.debtPaid+thisRow.retirement+thisRow.invest)}</div></div>
       <div class="kpi-card c-gold"><div class="kpi-label">Cash on hand, end of ${MONTHS[mi]}</div><div class="kpi-value">${fmt$(thisRow.carryOut)}</div>${deltaHtml(thisRow.carryOut, prevRow)}</div>
     </div>
 
@@ -435,12 +514,12 @@ function renderCashFlow(){
       <div class="card-head"><h3>Month by month — computed cash flow</h3></div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Month</th><th>Carry-in</th><th>Income</th><th>Expenses</th><th>Card Paid</th><th>Debt Paid</th><th>Retirement</th><th>Net Flow</th><th>Carry-out</th></tr></thead>
+          <thead><tr><th>Month</th><th>Carry-in</th><th>Income</th><th>Expenses</th><th>Card Paid</th><th>Debt Paid</th><th>Retirement</th><th>Invested</th><th>Net Flow</th><th>Carry-out</th></tr></thead>
           <tbody id="cfBody">${tableRows}</tbody>
         </table>
       </div>
       <div class="section-sub" style="margin-top:10px; margin-bottom:0;">
-        <b>How this works:</b> <b>Carry-in</b> is what you had at the start. <b>Income</b> adds to it. <b>Expenses</b>, <b>Card Paid</b>, <b>Debt Paid</b>, and <b>Retirement</b> (your own contribution — employer match isn't your cash, so it's excluded) subtract. The result is <b>Net Flow</b>. <b>Carry-out</b> = Carry-in + Net Flow. That carry-out becomes next month's carry-in automatically.
+        <b>How this works:</b> <b>Carry-in</b> is what you had at the start. <b>Income</b> adds to it. <b>Expenses</b>, <b>Card Paid</b>, <b>Debt Paid</b>, <b>Retirement</b>, and <b>Invested</b> (your own contributions — employer match isn't your cash, so it's excluded) subtract. The result is <b>Net Flow</b>. <b>Carry-out</b> = Carry-in + Net Flow. That carry-out becomes next month's carry-in automatically. <b>Card Paid</b> is real payments logged as a Transfer to a credit card, plus anything in an expense group you've flagged "excluded from totals" — not the card's full owed balance, just what you've actually paid toward it.
       </div>
     </div>
 
@@ -827,7 +906,15 @@ function openBankDetailModal(bank, y, monthIdxArg){
   overlay.className = 'modal-overlay';
 
   const isCredit = bank.type==='credit';
-  const monthIdx = monthIdxArg!=null ? monthIdxArg : (state.month==='ALL' ? currentSnapshotMonth(y) : Number(state.month));
+  // BUGFIX: opening a card straight from the summary row (no explicit month
+  // picked yet) used to always land on currentSnapshotMonth() — today's
+  // real month — even when the row above it was already showing a later
+  // month's balance via creditSnapshotMonth(). That mismatch is exactly
+  // how "$178.28 owed" on the dashboard and "$1,178.28 owed" one click
+  // away, for the same card, could both be true at once. Land on the same
+  // month the row itself is showing.
+  const monthIdx = monthIdxArg!=null ? monthIdxArg
+    : (state.month==='ALL' ? (isCredit ? creditSnapshotMonth(bank,y) : currentSnapshotMonth(y)) : Number(state.month));
   const bal = accountDisplayValueAt(bank, monthIdx); // native currency, carried forward
   const prevBal = monthIdx>0 ? accountDisplayValueAt(bank, monthIdx-1) : null;
   const delta = prevBal===null ? null : bal - prevBal;
@@ -842,7 +929,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
     return `<div class="bank-txn-row">
       <div class="bank-txn-main">
         <div class="bank-txn-date">${t.date}</div>
-        <div class="bank-txn-cat">${catLabel}${t.note?' · '+t.note:''}</div>
+        <div class="bank-txn-cat">${catLabel}${t.note?' · '+escapeHtml(t.note):''}</div>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmtNative(t.amount,bank.currency)}</div>
@@ -870,6 +957,12 @@ function openBankDetailModal(bank, y, monthIdxArg){
           ? `<div class="section-sub" style="margin:-8px 0 10px;">${fmtNative(Math.max(0,bank.creditLimit-Math.max(0,-bal)),bank.currency)} available of ${fmtNative(bank.creditLimit,bank.currency)} limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ edit limit</span></div>`
           : `<div class="section-sub" style="margin:-8px 0 10px;">No preset limit <span class="row-del" data-editlimit="${bank.id}" style="margin-left:4px;">✎ set a limit</span></div>`)}
       ${!isCredit ? '' : `<div class="section-sub" style="margin:-4px 0 10px;">${billingCycleLabel(bank) || 'Billing cycle not set'} <span class="row-del" data-editcycle="${bank.id}" style="margin-left:4px;">✎ edit</span></div>`}
+      ${(() => {
+        if(!isCredit) return '';
+        const split = creditCycleSplit(bank, y);
+        const text = creditDueSubline(split, bank.currency);
+        return text ? `<div class="section-sub" style="margin:-4px 0 10px;">${text}</div>` : '';
+      })()}
       ${delta===null ? '' : `<div class="section-sub" style="margin:4px 0 14px;">${delta>=0?'↑':'↓'} ${fmtNative(Math.abs(delta),bank.currency)} vs ${MONTHS[monthIdx-1]}</div>`}
       <div style="max-height:220px; overflow-y:auto; margin-bottom:18px;">
         ${txnRows || `<div class="section-sub" style="text-align:center; padding:14px 0;">No transactions logged for ${MONTHS[monthIdx]} — anything you add here will show up in this list, each with an ✕ to remove it.</div>`}
@@ -1412,7 +1505,15 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
         if(!otherBank.transactions) otherBank.transactions = [];
         otherBank.transactions.push({
           id: transferPairTxnId, date: dateStr, amount: -amountInOtherCurrency, category:'transfer',
-          note: (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+bank.name, userNote: note,
+          // BUGFIX: this used the SAME direction ternary as the initiating
+          // side below (amount>=0?'from':'to') instead of the INVERSE —
+          // so a transfer that left `bank` and arrived here showed up on
+          // this account's own history as "Transfer to bank.name" (implying
+          // money left TO that bank) when money actually came FROM it. The
+          // mirrored note describes the other side of the same transfer, so
+          // its direction word has to be the opposite of the initiating
+          // side's.
+          note: (note?note+' · ':'') + 'Transfer '+(amount>=0?'to ':'from ')+bank.name, userNote: note,
           monthIdx, transferPairBankId: bank.id, transferPairTxnId: txnId
         });
         finalNote = (note?note+' · ':'') + 'Transfer '+(amount>=0?'from ':'to ')+otherBank.name;

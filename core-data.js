@@ -890,6 +890,33 @@ function findLatestMonthWithData(y){
   for(let i=0;i<12;i++){ if(inc[i]>0 || exp[i]>0) last=i; }
   return last;
 }
+/* Highest month index (0-11) that has an explicit, real value logged —
+   i.e. not the initial "nothing entered yet" placeholder. -1 if the array
+   is empty/all-null. */
+function latestNonNullMonthIndex(arr){
+  if(!arr) return -1;
+  for(let i=11;i>=0;i--){ if(arr[i]!==null && arr[i]!==undefined) return i; }
+  return -1;
+}
+/* BUGFIX: a credit card charge logged into a later calendar month — e.g.
+   because it falls inside the current, still-open billing cycle that
+   spans into next month (cycle "Sep 28 – Oct 27" logged under October
+   while it's still September) — used to sit invisible on every dashboard
+   total and on the card's own summary row until the calendar actually
+   reached that month, because they all read the balance at
+   currentSnapshotMonth() (today's real month, deliberately capped so
+   pre-filled future placeholders in Income/Expenses don't jump the gun —
+   see currentSnapshotMonth's own comment). A real charge you just logged
+   isn't a placeholder, though: debt doesn't wait for the calendar. This
+   returns whichever is later — today's real month, or the latest month
+   this specific card actually has a logged value in — so "owed" updates
+   the moment you log the charge, matching what the card's own month-by-
+   month detail view already showed all along. Only used for credit cards;
+   cash/income/expense snapshots keep the original "never the future"
+   behavior on purpose. */
+function creditSnapshotMonth(bank, y){
+  return Math.max(currentSnapshotMonth(y), latestNonNullMonthIndex(bank.m));
+}
 /* "What month should count as 'right now' for a snapshot figure?" — Cash on
    Hand, Net Worth, latest Savings/Goals balance, etc. all need to answer
    this. For the CURRENT calendar year this is always today's actual
@@ -935,6 +962,43 @@ function debtPaymentTotals(y){
   yearData(y).debts.forEach(d=> d.m.forEach((v,i)=> out[i]+=nativeMonthToUsd(v, d.currency, y, i)));
   return out;
 }
+/* Investment contributions, mirroring retirementSelfContribTotals below —
+   both represent money that left your pocket the moment it was diverted,
+   so both need to reduce Cash Flow's Net Flow the same way. inv.m[i] is
+   already a per-month CONTRIBUTION amount (additive, like Income/Expenses),
+   not a carried balance — see the "Contribution-only" comment where it's
+   written in tab-cashflow.js's Add Money flow. */
+function investmentContribTotals(y){
+  const out = n12().map(()=>0);
+  (yearData(y).investments||[]).forEach(inv => (inv.m||[]).forEach((v,i)=> out[i]+=nativeMonthToUsd(v, inv.currency, y, i)));
+  return out;
+}
+/* BUGFIX: real money paid toward a credit card balance — logged, exactly as
+   the Cash Flow page itself instructs, as a Transfer from a bank to the
+   card — never reduced "Card Paid" here. That field only ever read
+   expenseTotalsExcluded() (expense groups you've flagged "excluded from
+   totals" — a workaround some users set up manually), so a card payment
+   made the *documented* way silently vanished from Computed Cash while
+   still real-and-gone from the actual bank balance. That's a standing
+   source of the drift the Reconciliation table below shows — and unlike
+   "you forgot to log something", it happens even when you log everything
+   exactly as instructed. This sums the real payments (the card's own
+   incoming-transfer transactions) per month, in USD. Added to, not instead
+   of, expenseTotalsExcluded() — so an existing manual workaround still
+   counts too, on top of this. */
+function creditCardPaymentTotals(y){
+  const out = n12().map(()=>0);
+  (yearData(y).banks||[]).filter(b=>b.type==='credit').forEach(b=>{
+    const byMonth = n12().map(()=>0);
+    (b.transactions||[]).forEach(t=>{
+      if(t.category==='transfer' && num(t.amount)>0 && t.monthIdx!=null && t.monthIdx>=0 && t.monthIdx<12){
+        byMonth[t.monthIdx] += num(t.amount);
+      }
+    });
+    byMonth.forEach((v,i)=>{ if(v>0.005) out[i] += nativeMonthToUsd(v, b.currency, y, i); });
+  });
+  return out;
+}
 function cfOverride(y, i, field){
   const yd = yearData(y);
   const o = yd.cashFlowOverrides && yd.cashFlowOverrides[i];
@@ -953,7 +1017,16 @@ function getAutoYearStart(y){
   return 0;
 }
 function computeCashFlow(y){
-  const incBase = incomeTotals(y), expBase = expenseTotalsCounted(y), cardBase = expenseTotalsExcluded(y), debtBase = debtPaymentTotals(y);
+  const incBase = incomeTotals(y), expBase = expenseTotalsCounted(y), debtBase = debtPaymentTotals(y);
+  // BUGFIX: cardBase used to be ONLY expenseTotalsExcluded() (an indirect
+  // proxy — expense groups manually flagged "excluded from totals" — that
+  // stays $0 for anyone just doing what the Credit Cards section itself
+  // instructs: logging a real Transfer to pay the statement). Now also
+  // includes the card's own actual incoming-payment transactions, so a
+  // payment made the documented way is finally counted. See
+  // creditCardPaymentTotals()'s comment for the full story.
+  const cardPaidActual = creditCardPaymentTotals(y);
+  const cardBase = expenseTotalsExcluded(y).map((v,i)=> roundCents(v + cardPaidActual[i]));
   // Your own retirement contribution already leaves your pocket the moment
   // it's diverted — the Sankey ("Where it went") already treats it as an
   // outflow of your income, so Cash Flow needs to agree, or that same
@@ -962,6 +1035,15 @@ function computeCashFlow(y){
   // deliberately excluded: it never passed through your income, so it
   // can't be a cash outflow of yours.
   const retBase = retirementSelfContribTotals(y);
+  // BUGFIX: an investment contribution has the exact same "leaves your
+  // pocket the moment it's diverted" property as a retirement contribution
+  // above — the Sankey ("Where it went") already treats it as an outflow
+  // and always draws it FROM a bank (see the "Contribution-only" comment
+  // where it's logged) — but Cash Flow never subtracted it, so "Net Flow"
+  // here and "Net Savings" on the Sankey disagreed by exactly your
+  // investment total every month, and Computed Cash overstated real cash
+  // by the same amount, compounding every month you invested.
+  const investBase = investmentContribTotals(y);
   let running = getAutoYearStart(y);
   const rows = [];
   for(let i=0;i<12;i++){
@@ -970,17 +1052,19 @@ function computeCashFlow(y){
     const card = cfOverride(y,i,'card') ?? cardBase[i];
     const debtPaid = cfOverride(y,i,'debtPaid') ?? debtBase[i];
     const retirement = cfOverride(y,i,'retirement') ?? retBase[i];
+    const invest = cfOverride(y,i,'invest') ?? investBase[i];
     const carryInOverride = cfOverride(y,i,'carryIn');
     const carryIn = carryInOverride!==undefined ? carryInOverride : running;
-    const netFlow = income - expenses - card - debtPaid - retirement;
+    const netFlow = income - expenses - card - debtPaid - retirement - invest;
     const carryOut = carryIn + netFlow;
     rows.push({
-      income, expenses, card, debtPaid, retirement, netFlow, carryIn, carryOut,
+      income, expenses, card, debtPaid, retirement, invest, netFlow, carryIn, carryOut,
       incomeOverridden: cfOverride(y,i,'income')!==undefined,
       expensesOverridden: cfOverride(y,i,'expenses')!==undefined,
       cardOverridden: cfOverride(y,i,'card')!==undefined,
       debtPaidOverridden: cfOverride(y,i,'debtPaid')!==undefined,
       retirementOverridden: cfOverride(y,i,'retirement')!==undefined,
+      investOverridden: cfOverride(y,i,'invest')!==undefined,
       carryInOverridden: carryInOverride!==undefined
     });
     running = carryOut;

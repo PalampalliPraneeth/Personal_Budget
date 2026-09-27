@@ -158,7 +158,14 @@ function buildSankeyData(y){
     inNodes.push({ id:'shortfall', name:'From Savings / Credit', value:-leftover, kind:'shortfall', children:[] });
     grandInflow = totalOut;
   } else if(leftover > 0.005){
-    outNodes.push({ id:'grp:savings', name:'Net Savings', value:leftover, kind:'savings', children:[] });
+    // Renamed from "Net Savings": this is income minus every category this
+    // diagram tracks (Expenses, Investments, Debt Paid Off, Retirement) —
+    // a budget leftover, not a verified bank figure. It won't match your
+    // actual bank balance whenever there's untracked spending, a
+    // reconciliation gap (see the Cash Flow tab), or simply because this
+    // month isn't over yet. "Left Over" says what it actually is without
+    // implying it's sitting, confirmed, in an account somewhere.
+    outNodes.push({ id:'grp:savings', name:'Left Over', value:leftover, kind:'savings', children:[] });
   }
 
   // Bucket the top-level columns too (e.g. several sub-2% expense groups),
@@ -735,12 +742,12 @@ function renderCashCreditMiniCard(y){
   const banks = accounts.filter(b=>b.type!=='credit')
     .sort((a,b)=> (bankUsdAt(b, snapIdx)||0) - (bankUsdAt(a, snapIdx)||0));
   const creditCards = accounts.filter(b=>b.type==='credit')
-    .sort((a,b)=> Math.max(0,-(bankUsdAt(b, snapIdx)||0)) - Math.max(0,-(bankUsdAt(a, snapIdx)||0)));
+    .sort((a,b)=> Math.max(0,-(bankUsdAt(b, creditSnapshotMonth(b,y))||0)) - Math.max(0,-(bankUsdAt(a, creditSnapshotMonth(a,y))||0)));
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, snapIdx) || 0));
-  const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, snapIdx) || 0)));
+  const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, creditSnapshotMonth(b,y)) || 0)));
 
   const row = (b, isCredit) => {
-    const bal = accountDisplayValueAt(b, snapIdx); // native currency, carried forward
+    const bal = accountDisplayValueAt(b, isCredit ? creditSnapshotMonth(b,y) : snapIdx); // native currency, carried forward — see creditSnapshotMonth()
     const owed = isCredit ? Math.max(0, -(bal||0)) : null;
     const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
     const cycleLabel = isCredit ? billingCycleLabel(b) : null;
@@ -890,7 +897,7 @@ function _openEmailReminderModal(currentEmail){
   const nextReminderHtml = currentEmail
     ? `<p class="section-sub" style="margin:0 0 16px;">${
         nextInfo
-          ? `Next reminder: <b>${nextInfo.sendLabel}</b> — for ${nextInfo.symbol} on ${nextInfo.platform} (due ${nextInfo.dueLabel}).`
+          ? `Next reminder: <b>${nextInfo.sendLabel}</b> — for ${escapeHtml(nextInfo.symbol)} on ${escapeHtml(nextInfo.platform)} (due ${nextInfo.dueLabel}).`
           : `No recurring buys are scheduled yet, so there's nothing to remind you about.`
       }</p>`
     : '';
@@ -1073,7 +1080,7 @@ function renderOverview(){
   <div class="card sankey-card">
     <div class="card-head"><h3>Where ${state.month==='ALL'||state.month===undefined ? y : MONTHS[Number(state.month)]+' '+y} went</h3></div>
     <div id="sankeyWrap">${renderSankeySVG(buildSankeyData(y), y)}</div>
-    <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Click a bar with a ▸ to open its breakdown · click any other bar to jump to that tab. Change the month up top to see a different period.</div>
+    <div class="section-sub" style="margin-top:10px; margin-bottom:0;">Click a bar with a ▸ to open its breakdown · click any other bar to jump to that tab. Change the month up top to see a different period. <b>Left Over</b> is income minus everything this diagram tracks — a budget figure, not your verified bank balance. See the <b>Cash Flow</b> tab for that (and why the two can differ).</div>
   </div>
 
   <div class="overview-equal-row">

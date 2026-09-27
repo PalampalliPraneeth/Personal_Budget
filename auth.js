@@ -4,7 +4,9 @@
 const ADMIN_PIN = '2186';
 const READONLY_PIN = '3868';
 const SESSION_KEY = 'ledger:session:v1';
-const SESSION_TTL_MS = 0; // remembered for 12 hours, then re-prompts
+/* NOTE: intentionally 0 — by design the PIN is asked on every refresh,
+   not remembered. (See the on-screen caveat text below, kept in sync.) */
+const SESSION_TTL_MS = 0;
 let currentRole = null;
 
 /* BUGFIX (#19a): there used to be no limit on wrong-PIN attempts at all —
@@ -56,7 +58,7 @@ function showPinOverlay(onSuccess){
         <button class="pin-key" data-action="back">⌫</button>
       </div>
       <div class="pin-error" id="pinError">&nbsp;</div>
-      <div class="pin-caveat">This PIN only keeps the ledger from casual glances — the code lives in this page itself, so it isn't real security. Don't rely on it to protect anything you truly need to keep private. Once entered, it's remembered for 12 hours so you won't be asked on every refresh.</div>
+      <div class="pin-caveat">This PIN only keeps the ledger from casual glances — the code lives in this page itself, so it isn't real security. Don't rely on it to protect anything you truly need to keep private. You'll be asked for it on every refresh.</div>
     </div>
   `;
   document.body.appendChild(overlay);

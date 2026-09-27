@@ -75,27 +75,27 @@ async function renderActivityDropdown(){
   const html = `
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
       <h4 style="margin:0;">Activity — last 15 days</h4>
-      <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">ID: ${localStorage.getItem('ledger:supabase:user')?.slice(0,16)||'unknown'}…</span>
+      <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">ID: ${escapeHtml(localStorage.getItem('ledger:supabase:user')?.slice(0,16)||'unknown')}…</span>
     </div>
 
     <div style="max-height:60vh; overflow-y:auto;">
       ${changeLog.length ? changeLog.map((e, i) => `
         <div style="padding:10px 0; border-bottom:1px solid var(--line-soft); ${i===0?'border-top:1px solid var(--line-soft);':''}">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-            <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--gold-soft); font-weight:600; line-height:1.4;">${e.summary}</div>
+            <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--gold-soft); font-weight:600; line-height:1.4;">${escapeHtml(e.summary)}</div>
             <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-dim); white-space:nowrap; flex-shrink:0;">${new Date(e.ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div>
           </div>
           ${e.details && e.details.length ? `
             <div style="margin-top:6px; padding-left:10px; border-left:2px solid var(--line);">
               ${e.details.slice(0,5).map(d => `
                 <div style="font-size:11px; color:var(--text-dim); margin:3px 0; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                  <span style="color:var(--text); font-weight:500;">${d.target}</span>
-                  ${d.field ? `<span style="color:var(--text-faint);">(${d.field})</span>` : ''}
+                  <span style="color:var(--text); font-weight:500;">${escapeHtml(d.target)}</span>
+                  ${d.field ? `<span style="color:var(--text-faint);">(${escapeHtml(d.field)})</span>` : ''}
                   ${d.action==='edit' && d.oldVal!==undefined ? `
                     <span style="font-family:var(--font-mono); font-size:11px;">
-                      <span style="color:var(--text-faint); text-decoration:line-through;">${d.oldVal}</span>
+                      <span style="color:var(--text-faint); text-decoration:line-through;">${escapeHtml(d.oldVal)}</span>
                       <span style="color:var(--gold-soft); margin:0 4px;">→</span>
-                      <span style="color:var(--good);">${d.newVal}</span>
+                      <span style="color:var(--good);">${escapeHtml(d.newVal)}</span>
                     </span>
                   ` : ''}
                   ${d.action==='add' ? '<span style="color:var(--good); font-size:10px;">[+ added]</span>' : ''}
@@ -134,17 +134,21 @@ function initShell(){
        this placeholder is never left "selected". */
     const addOpt = document.createElement('option');
     addOpt.value = ADD_YEAR_VALUE;
-    addOpt.textContent = '＋ New year';
+    addOpt.textContent = '＋ Add a new year';
     yearSel.appendChild(addOpt);
   }
   rebuildYearOptions();
-  /* BUGFIX (#22): this used to hardcode "prefer 2026, else the first year
-     found" — meaning 2027 (or any later year) would never be picked as
-     the default even after it existed, and there was no way to create it
-     in the first place. Default to the most recent year on file instead,
-     which works the same today and keeps working after a year is added. */
+  /* BUGFIX (#23): the #22 fix above ("default to the most recent year on
+     file") broke as soon as you actually used the "add a new year" feature
+     it introduced — add 2027 while it's still 2026 (e.g. to plan ahead),
+     and Math.max() picks 2027 on every refresh from then on, even though
+     today is still in 2026. Prefer the year matching today's real date
+     when it exists; only fall back to the most recent year on file (the
+     old #22 behavior) when today's year hasn't been created yet. */
   const yearKeysAtBoot = Object.keys(DATA).filter(k=>/^\d+$/.test(k)).map(Number);
-  state.year = yearKeysAtBoot.length ? Math.max(...yearKeysAtBoot) : new Date().getFullYear();
+  const realCurrentYear = new Date().getFullYear();
+  state.year = DATA[realCurrentYear] ? realCurrentYear
+    : (yearKeysAtBoot.length ? Math.max(...yearKeysAtBoot) : realCurrentYear);
   yearSel.value = state.year;
   updateBrandYear();
 
