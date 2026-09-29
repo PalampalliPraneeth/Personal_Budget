@@ -301,8 +301,10 @@ function renderRecurring(){
       </div>
       `}
     </div>
+    ${typeof insuranceRecurringSectionHtml === 'function' ? insuranceRecurringSectionHtml() : ''}
   `;
   document.getElementById('panel-recurring').innerHTML = html;
+  if(typeof wireInsuranceRecurringSection === 'function') wireInsuranceRecurringSection();
 
   /* ---- Chart: this month's allocation by platform ---- */
   destroyChart('recurMonthAlloc');
