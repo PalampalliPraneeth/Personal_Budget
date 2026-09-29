@@ -734,6 +734,21 @@ function renderCashFlow(){
    Shared by both Delete and Edit — Edit is "reverse the old one, then create the new one" under the hood,
    using this exact same math so there's only one place that can get it wrong. Does NOT remove txn from
    bank.transactions itself — callers decide when/whether to do that. */
+/* BUGFIX (card still shows "owed" after a payment): monthly cells in bank.m
+   are RUNNING balances (each month = everything up to that month). A
+   transaction dated in month i used to change only cell i, so any LATER
+   month that already held a value (e.g. an October cell created earlier for
+   the cycle "Sep 28 - Oct 27") kept its old number. Credit cards read
+   "owed" from the latest month with a value, so that stale later cell kept
+   showing the debt you just paid. Every add / edit / delete now ripples the
+   same delta into every later month that already has a value. Blank months
+   are left blank (they carry forward on their own). */
+function shiftLaterMonths(bank, monthIdx, delta){
+  if(!bank || !Array.isArray(bank.m) || !delta) return;
+  for(let j=monthIdx+1; j<12; j++){
+    if(bank.m[j]!==null && bank.m[j]!==undefined) bank.m[j] = roundCents(num(bank.m[j]) + delta);
+  }
+}
 function reverseTransactionEffects(bank, y, txn){
   const idx = txn.monthIdx;
 
@@ -741,6 +756,7 @@ function reverseTransactionEffects(bank, y, txn){
   if(bank.m && bank.m[idx]!=null){
     bank.m[idx] = roundCents(num(bank.m[idx]) - num(txn.amount));
   }
+  shiftLaterMonths(bank, idx, -num(txn.amount));
 
   // 2. Reverse the linked income / expense effect, if any.
   if(txn.category==='income' && txn.refId){
@@ -789,6 +805,7 @@ function reverseTransactionEffects(bank, y, txn){
       if(otherBank.m && otherBank.m[idx]!=null){
         otherBank.m[idx] = roundCents(num(otherBank.m[idx]) - otherDelta);
       }
+      shiftLaterMonths(otherBank, idx, -otherDelta);
       otherBank.transactions = (otherBank.transactions||[]).filter(t=>t.id!==txn.transferPairTxnId);
     }
   }
@@ -1350,6 +1367,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       bankDelta = amount;
       bank.m[monthIdx] = roundCents(prevBankVal + amount);
     }
+    shiftLaterMonths(bank, monthIdx, bankDelta);
     bank.lastUpdatedAt = Date.now();
 
     let refType = null, refId = null, refDelta = null, linkedName = null;
@@ -1499,7 +1517,8 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
       if(otherBank){
         if(!otherBank.m) otherBank.m = n12();
         const amountInOtherCurrency = convertCurrency(amount, bank.currency, otherBank.currency, y, monthIdx);
-        otherBank.m[monthIdx] = roundCents(num(otherBank.m[monthIdx]) - amountInOtherCurrency);
+        otherBank.m[monthIdx] = roundCents(accountCarryValueAt(otherBank, monthIdx) - amountInOtherCurrency);
+        shiftLaterMonths(otherBank, monthIdx, -amountInOtherCurrency);
         otherBank.lastUpdatedAt = Date.now();
         transferPairTxnId = uid();
         if(!otherBank.transactions) otherBank.transactions = [];
