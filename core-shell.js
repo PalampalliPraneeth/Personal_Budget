@@ -10,6 +10,7 @@ const TABS = [
   {id:'holdings', label:'Holdings', icon:'📦'},
   {id:'recurring', label:'Recurring', icon:'🔁'},
   {id:'debt', label:'Debt Payoff', icon:'🎯'},
+  {id:'planner', label:'Financial Plan', icon:'🧮'},
   {id:'data', label:'Data & Import', icon:'📤'}
 ];
 
@@ -343,6 +344,7 @@ function renderActive(){
   if(active==='holdings') renderHoldings();
   if(active==='recurring') renderRecurring();
   if(active==='debt') renderDebt();
+  if(active==='planner') renderPlanner();
   if(active==='data') renderDataTab();
   applyReadOnlyGuard();
 }

@@ -324,9 +324,9 @@ works:
   settings, done.
 - **Netlify / Vercel** — drag-and-drop the folder or connect the repo, no
   build command needed.
-- **Local testing** — just open `index.html` (or `main.html`) directly in
-  a browser, or run a simple local server (`python3 -m http.server`) from
-  the project folder.
+- **Local testing** — just open `index.html` directly in a browser, or run a
+  simple local server (`python3 -m http.server`) from the project folder.
+  (Don't open `main.html` — see the note at the end of this README.)
 
 There's no environment-specific build step — every file already has its
 final config baked in from Step 3.
@@ -381,3 +381,42 @@ Confirm `hyper-task` deployed successfully and is reachable — open
 `https://xxxxxxxxxxxx.supabase.co/functions/v1/hyper-task?symbol=AAPL`
 directly in a browser; you should get back JSON with a price, not an
 error page.
+
+---
+
+## Financial Plan tab
+
+Sits right after **Debt Payoff**. Modelled on your `Financial_Plan` spreadsheet
+(details, short/long-term tax, year-by-year SIP projection) plus ideas from
+online planners.
+
+**Auto-filled (badge says `auto`, type over it to use your own number, `↺` to go back):**
+- Monthly salary = average of your monthly income (only months that have data, up to the current month)
+- Monthly expenses = average of your counted monthly expenses
+- Stocks = current value of open holdings of the selected types (default: stocks only)
+- SIP = monthly equivalent of your active recurring buys on those holdings
+  (or, if you pick it, your average monthly buys over the last 12 months)
+
+Everything else (name, age, retirement age, emergency fund, goal, return, step-up,
+inflation, withdrawal rate, tax rates) is editable. Amounts accept `50L`, `1.2cr`, `2.5m`, `40k`.
+
+**Outputs:** projected value at retirement (nominal and in today's money), surplus/shortfall,
+SIP needed to hit the goal, age you'd reach it, step-up vs flat SIP, coast check,
+safe-withdrawal income, FIRE number, return x step-up grid, year-by-year table and chart.
+
+Files: `planner-engine.js` (pure maths, unit-tested), `tab-planner.js` (screen).
+Settings are saved in `DATA.planner` (a top-level key next to `paymentPlan`; the edge
+functions only touch numeric year keys, so they ignore it).
+
+---
+
+## About `main.html`
+
+This repo used to ship a second, standalone copy of the whole app in
+`main.html`. It's now just a redirect to `index.html`. The original is kept
+as `main.html.legacy-backup` for reference only — **don't deploy or open
+it**: it never loaded `storage-bridge.js`, so every save silently failed
+and it reset to an empty ledger on every reload, and it predates the PIN
+lock and the security/data-loss fixes the real app (`index.html` + its
+`.js` files) now has.
+
