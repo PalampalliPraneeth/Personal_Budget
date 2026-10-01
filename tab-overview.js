@@ -1003,7 +1003,7 @@ function renderOverview(){
 
   const savingsCurrent = sumArr((yearData(y).savingsAccounts||[]).map(acc=>{
     const latest = currentSnapshotMonth(y);
-    const bal = num((acc.m||[])[latest>=0?latest:0]);
+    const bal = savingsBalanceNativeAt(acc, latest>=0?latest:0);
     return acc.currency==='INR' ? bal/fx : bal;
   }));
   const retirementCurrent = sumArr((yearData(y).retirementAccounts||[]).map(r=>retirementAccountTotalBalance(r)));

@@ -46,11 +46,11 @@ const HOLDING = {
 };
 const SPECS = [
   { key: 'income', nameField: 'name', shared: ['currency'],
-    fresh: () => ({ m: n12() }) },
+    fresh: src => ({ m: n12(), budget: Array.isArray(src && src.budget) ? clone(src.budget) : n12() }) },
   { key: 'expenseGroups', nameField: 'name', shared: ['excludeFromTotal'],
     fresh: () => ({ categories: [] }),
     child: { key: 'categories', nameField: 'name', shared: ['currency'],
-             fresh: () => ({ m: n12(), raw: n12(), notes: '' }) } },
+             fresh: src => ({ m: n12(), raw: n12(), notes: '', budget: Array.isArray(src && src.budget) ? clone(src.budget) : n12() }) } },
   { key: 'banks', nameField: 'name',
     shared: ['currency', 'type', 'creditLimit', 'billingCycleDay', 'paymentDueDay'],
     fresh: () => ({ m: n12(), transactions: [], lastUpdatedAt: null }) },
@@ -69,7 +69,8 @@ const SPECS = [
     link: { field: 'linkedDebtId', target: 'debts' },
     fresh: () => ({}) },
   { key: 'investments', nameField: 'name', shared: ['category', 'currency'],
-    fresh: () => ({ m: n12(), currentValue: 0, invested: 0, holdings: [] }),
+    fresh: src => ({ m: n12(), currentValue: num(src && src.currentValue), invested: num(src && src.invested),
+                     currentValueRaw: (src && src.currentValueRaw) || null, investedRaw: (src && src.investedRaw) || null, holdings: [] }),
     child: HOLDING }
 ];
 
@@ -152,6 +153,41 @@ function copyItem(spec, src, D, srcYear, destYear){
   return c;
 }
 function isClosedHolding(h){ return h.status === 'closed' || num(h.qty) <= 0; }
+
+/* The shares still held at the end of a year, carried into the next year WITH
+   THEIR ORIGINAL BUY DATES AND PRICES (so holding period, XIRR and cost basis
+   stay true across years -- nothing is re-dated to Jan 1).
+   The app's own accounting (recalcHolding) is AVERAGE-COST: a sale removes the
+   same fraction of every share held at that moment. Doing exactly the same here
+   -- each sale shrinks every earlier lot proportionally -- means the carried
+   lots add up to the same quantity AND the same average price the old year
+   ended on, to the cent. */
+function carriedLotsFrom(h, year){
+  const lots = (h.lots || []).filter(l => l && typeof l === 'object')
+    .slice().sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));   // same order as recalcHolding
+  const open = []; let qty = 0;
+  lots.forEach(l => {
+    const q = num(l.qty);
+    if (l.type === 'sell') {
+      const sq = Math.min(q, qty);
+      if (qty > 0 && sq > 0) { const f = (qty - sq) / qty; open.forEach(o => { o.qty *= f; }); qty -= sq; }
+    } else {
+      open.push({ qty: q, price: num(l.price), date: l.date || null, id: l.id || null }); qty += q;
+    }
+  });
+  return open.filter(o => o.qty > 1e-9).map((o, i) => ({
+    id: o.id ? (String(o.id).startsWith('o:') ? String(o.id) : 'o:' + o.id) : ('o:' + (h.sid || 'h') + ':' + i),   // stable, so re-running never churns the data
+    type: 'buy', qty: Math.round(o.qty * 1e8) / 1e8, price: o.price,
+    date: o.date || `${year}-01-01`, opening: true
+  }));
+}
+function sameLots(a, b){
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || a[i].type !== b[i].type || a[i].qty !== b[i].qty || a[i].price !== b[i].price || a[i].date !== b[i].date) return false;
+  }
+  return true;
+}
 function copyChild(def, src, parentSrc, parentDest){
   const c = { id: newId(), sid: src.sid };
   c[def.nameField] = src[def.nameField];
@@ -161,7 +197,7 @@ function copyChild(def, src, parentSrc, parentDest){
     const y = parentDest.__year || new Date().getFullYear();
     c.currentPrice = num(src.currentPrice);
     c.ytdStartPrice = num(src.currentPrice) || num(src.avgPrice);
-    c.lots = [{ id: newId(), type: 'buy', qty: num(src.qty), price: num(src.avgPrice), date: `${y}-01-01`, opening: true }];
+    c.lots = carriedLotsFrom(src, y);
     if (typeof root.recalcHolding === 'function') root.recalcHolding(c);
     else { c.qty = num(src.qty); c.avgPrice = num(src.avgPrice); }
   }
@@ -241,7 +277,6 @@ function applyOps(D, ops){
         const same = list.find(x => idOf(x, spec) === idOf(src, spec));
         if (same) { same.sid = sid; return; }
         const copy = copyItem(spec, src, D, y, y2);
-        if (copy.holdings) copy.holdings.forEach(h => { h.lots.forEach(l => { l.date = `${y2}-01-01`; }); });
         list.push(copy); n++;
       });
     } else if (op.t === 'del') {
@@ -353,19 +388,24 @@ function recomputeCarry(D){
     (yd.investments || []).forEach(inv => {
       const p = prevOf(D, SPECS[8], y, inv.sid);
       if (!p) return;
+      if (inv.carryFromPrior && !inv.valueManual) {          // last known snapshot value, until you type this year's own
+        inv.currentValue = num(p.it.currentValue); inv.invested = num(p.it.invested);
+        inv.currentValueRaw = p.it.currentValueRaw || null; inv.investedRaw = p.it.investedRaw || null;
+      }
+      const gone = new Set();
       (inv.holdings || []).forEach(h => {
         const ph = findBySid(p.it.holdings, h.sid); if (!ph) return;
-        const open = (h.lots || []).find(l => l.opening);
-        if (!open) return;
-        open.qty = num(ph.qty); open.price = num(ph.avgPrice); open.date = `${y}-01-01`;
+        if (!(h.lots || []).some(l => l && l.opening)) return;          // started in this year: untouched
+        const own = (h.lots || []).filter(l => l && !l.opening);
+        const oldOpen = (h.lots || []).filter(l => l && l.opening);
+        const fresh = carriedLotsFrom(ph, y);
+        // a position fully sold last year does not carry into this one (unless you traded it here)
+        if (!fresh.length && !own.length) { gone.add(h); return; }
+        if (sameLots(oldOpen, fresh)) return;                           // already exact: leave it alone
+        h.lots = fresh.concat(own);
         if (typeof root.recalcHolding === 'function') root.recalcHolding(h);
       });
-      // a position fully sold last year does not carry into this one (unless you traded it here)
-      inv.holdings = (inv.holdings || []).filter(h => {
-        const ph = findBySid(p.it.holdings, h.sid);
-        const onlyOpening = (h.lots || []).length === 1 && h.lots[0].opening;
-        return !(ph && onlyOpening && num(ph.qty) <= 0);
-      });
+      if (gone.size) inv.holdings = (inv.holdings || []).filter(h => !gone.has(h));
     });
   });
 }
@@ -384,7 +424,6 @@ function seedFrom(D, base, y){
     yd[spec.key] = yd[spec.key] || [];
     (D[base][spec.key] || []).forEach(src => {
       const c = copyItem(spec, src, D, base, y);
-      if (c.holdings) c.holdings.forEach(h => { h.lots.forEach(l => { l.date = `${y}-01-01`; }); });
       yd[spec.key].push(c);
     });
   });
@@ -423,7 +462,6 @@ function fillMissing(D){
         }
         if (!mine) {
           const c = copyItem(spec, src, D, py, y);
-          if (c.holdings) c.holdings.forEach(h => { h.lots.forEach(l => { l.date = `${y}-01-01`; }); });
           list.push(c); n++;
         } else if (spec.child) {
           mine[spec.child.key] = mine[spec.child.key] || [];
@@ -483,7 +521,6 @@ function createYear(D, year){
     SPECS.forEach(spec => {
       (D[base][spec.key] || []).forEach(src => {
         const c = copyItem(spec, src, D, base, ny);
-        if (c.holdings) c.holdings.forEach(h => { h.lots.forEach(l => { l.date = `${ny}-01-01`; }); });
         yd[spec.key].push(c);
       });
     });
@@ -502,7 +539,20 @@ function savingsBalanceAt(acc, monthIdx){
 }
 function goalSavedBefore(goal){ return num(goal.openingSaved); }
 
-const API = { init, rebaseline, reconcile, createYear, fillMissing, seedBlankYears, isBlankYear, assignSids, recomputeCarry, savingsBalanceAt, goalSavedBefore, SPECS, _state: st };
+/* What was put into a retirement account in every year BEFORE year y, plus
+   the starting balance that was typed into the earliest year. Powers the
+   "Carried from prior years" tooltip so the total is never a black box. */
+function contributionHistory(D, sid, y){
+  const out = { before: null, years: [] };
+  yearKeys(D).filter(v => v < Number(y)).forEach(py => {
+    const r = findBySid((D[py] && D[py].retirementAccounts) || [], sid); if (!r) return;
+    if (!out.before) out.before = { year: py, self: num(r.priorSelf), employer: num(r.priorEmployer) };
+    out.years.push({ year: py, self: round2(sumArr(r.mSelf)), employer: round2(sumArr(r.mEmployer)) });
+  });
+  return out;
+}
+
+const API = { contributionHistory, carriedLotsFrom, init, rebaseline, reconcile, createYear, fillMissing, seedBlankYears, isBlankYear, assignSids, recomputeCarry, savingsBalanceAt, goalSavedBefore, SPECS, _state: st };
 if (typeof module !== 'undefined' && module.exports) module.exports = API;
 root.YearSync = API;
 })(typeof window !== 'undefined' ? window : globalThis);

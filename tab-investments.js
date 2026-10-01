@@ -356,6 +356,7 @@ function renderInvestments(){
         const before = item[field]||0;
         if (before===(v||0) && !hasBreakdown) return;
         item[field] = v||0;
+        if(item.carryFromPrior && (field==='currentValue' || field==='invested')) item.valueManual = true;   // your number wins over the automatic carry
         if(field==='currentValue') item.currentValueRaw = hasBreakdown ? raw : null;
         if(field==='invested') item.investedRaw = hasBreakdown ? raw : null;
       }

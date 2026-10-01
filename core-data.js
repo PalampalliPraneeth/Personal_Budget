@@ -853,6 +853,16 @@ function retirementAccountTotalEmployer(r){
 }
 function retirementAccountTotalBalance(r){ return retirementAccountTotalSelf(r) + retirementAccountTotalEmployer(r); }
 
+/* Savings balance (native currency) for a month. Accounts carried in from
+   earlier years (year-sync.js) fall back to the last balance on record --
+   earlier months of this year, else the previous year's -- instead of 0, so
+   Net Worth, Cash Flow and the Savings tab all agree. Accounts that were never
+   linked across years keep behaving exactly as before (the typed cell). */
+function savingsBalanceNativeAt(acc, monthIdx){
+  if(acc && acc.carryFromPrior && window.YearSync) return YearSync.savingsBalanceAt(acc, monthIdx);
+  return num(((acc && acc.m) || [])[monthIdx]);
+}
+
 /* =========================================================================
    SAVINGS GOALS — a goal can either LINK to an existing savings account
    (progress auto-tracks that account's balance) or track contributions on

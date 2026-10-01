@@ -518,6 +518,30 @@ function _ytdStartPriceFor(h){
 function getPortfolioSnapshots(y){
   return yearData(y).portfolioSnapshots || [];
 }
+/* Dividends live in the year they were received (a new year starts with none
+   of its own). This adds them up across EVERY year, in USD, so nothing is lost
+   when the year rolls over. */
+function dividendsAllYears(viewYear){
+  const out = { totalUsd: 0, viewYearUsd: 0, count: 0, byYear: {} };
+  Object.keys(DATA || {}).filter(k=>/^\d{4}$/.test(k)).forEach(k=>{
+    const yy = Number(k);
+    ((DATA[yy] && DATA[yy].investments) || []).forEach(inv=>{
+      (inv.holdings || []).forEach(h=>{
+        (h.dividends || []).forEach(d=>{
+          if(!d) return;
+          const p = parseLocalDateParts(d.date);
+          const year = p.year || yy, mi = (p.monthIdx >= 0 && p.monthIdx < 12) ? p.monthIdx : 0;
+          const usd = nativeMonthToUsd(num(d.amount), d.currency || h.currency || inv.currency || 'USD', year, mi);
+          if(!isFinite(usd)) return;
+          out.totalUsd += usd; out.count++;
+          out.byYear[yy] = (out.byYear[yy] || 0) + usd;
+          if(yy === Number(viewYear)) out.viewYearUsd += usd;
+        });
+      });
+    });
+  });
+  return out;
+}
 /* The portfolio chart is one continuous history, not a per-year island: any
    year you open (including a brand-new one) shows every snapshot recorded in
    that year AND all earlier years. If the same date exists in more than one
@@ -1385,6 +1409,7 @@ function renderHoldings(){
         <div class="kpi-card ${portfolioXirr===null?'c-gold':(portfolioXirr>=0?'c-teal':'c-danger')}"><div class="kpi-label" data-tip="Annualized return combining every buy/sell/dividend shown below — not an average of the individual XIRR column, the actual combined cash flows" class="has-tip">${isAll?'Portfolio':'Platform'} XIRR</div><div class="kpi-value">${fmtXirr(portfolioXirr, portfolioXirrResult.tooNew)}</div></div>
         <div class="kpi-card ${!anyDayDataKnown?'':(totalDayPl>=0?'c-teal':'c-danger')}"><div class="kpi-label">Day Change P&L</div><div class="kpi-value" ${anyDayDataKnown?tipAttr(totalDayPl):''}>${anyDayDataKnown ? (totalDayPl>=0?'+':'')+fmt$(totalDayPl) : '—'}</div><div class="kpi-delta ${totalDayPl>=0?'up':'down'}">${anyDayDataKnown ? (totalDayPl>=0?'+':'')+pct(totalDayPlPct) : 'Click Fetch live prices'}</div></div>
       </div>
+      ${(function(){ const dv = dividendsAllYears(y); return `<div class="section-sub" style="margin-top:8px; margin-bottom:0; text-align:right;">Dividends received: <b style="color:var(--teal-soft);" ${tipAttr(dv.viewYearUsd)}>${fmt$(dv.viewYearUsd)}</b> in ${y} · <b style="color:var(--gold-soft);" ${tipAttr(dv.totalUsd)}>${fmt$(dv.totalUsd)}</b> across all years${dv.count ? ` <span style="color:var(--text-faint);">(${dv.count} payment${dv.count===1?'':'s'})</span>` : ' <span style="color:var(--text-faint);">(none recorded)</span>'}</div>`; })()}
       <div class="section-sub" style="margin-top:8px; margin-bottom:0; text-align:right;">
         ${fxRate ? `FX rate: <b style="color:var(--gold-soft);">1 USD = ${fxRate.toFixed(2)} INR</b> <span style="color:var(--text-faint);">(${fxSource})</span>` : '<span style="color:var(--text-faint);">Fetching FX rate...</span>'}
       </div>

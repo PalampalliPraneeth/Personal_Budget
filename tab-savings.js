@@ -35,7 +35,7 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
      as if 1 INR == 1 USD. balAt now converts to USD via the app's
      existing nativeMonthToUsd() helper; per-row cells still show the
      native amount (via acc.m directly), only aggregates go through this. */
-  const balAt = (acc, i)=> nativeMonthToUsd(num((acc.m||[])[i]), acc.currency, y, i);
+  const balAt = (acc, i)=> nativeMonthToUsd(savingsBalanceNativeAt(acc, i), acc.currency, y, i);
   const carriedAt = (acc, i)=> (acc.carryFromPrior && window.YearSync)
     ? nativeMonthToUsd(YearSync.savingsBalanceAt(acc, i), acc.currency, y, i) : balAt(acc, i);
   const totalSavedLatest = accounts.reduce((a,acc)=>a+carriedAt(acc, activeMonthIdx>=0?activeMonthIdx:0),0);
@@ -80,7 +80,7 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
             <tr class="total-row"><td>Total across accounts</td><td>${fmt$(accounts.reduce((a,acc)=>a+(acc.carryFromPrior?nativeMonthToUsd(num(acc.openingBalance), acc.currency, y, 0):0),0))}</td>${MONTHS.map((_,i)=>{
               /* BUGFIX (#14): was a raw num() sum across accounts, mixing
                  INR and USD balances as if they were the same currency. */
-              const t = accounts.reduce((a,acc)=>a+nativeMonthToUsd(num((acc.m||[])[i]), acc.currency, y, i),0);
+              const t = accounts.reduce((a,acc)=>a+nativeMonthToUsd(savingsBalanceNativeAt(acc, i), acc.currency, y, i),0);
               return `<td>${t>0?fmt$(t):'—'}</td>`;
             }).join('')}<td>${fmt$(accounts.reduce((a,acc)=>a+monthlyArrToUsd(acc.m||[], acc.currency, y),0))}</td><td></td><td></td><td>${fmt$(totalAnnualInterest)}</td></tr>
           </tbody>
@@ -480,21 +480,39 @@ function renderRetirementSection(y, retAccounts){
     const selfTotal = sumArr(r.mSelf||[]);
     const employerTotal = sumArr(r.mEmployer||[]);
     const projGrowth = retirementProjectedAnnualGrowth(r);
+    /* "Carried from prior years": everything contributed before this year.
+       Automatic for accounts carried over by the year sync (hover for the
+       year-by-year breakdown); typing a number there overrides it. */
+    const hist = (window.YearSync && r.sid) ? YearSync.contributionHistory(DATA, r.sid, y) : { before: null, years: [] };
+    const histTip = (kind)=>{
+      const parts = [];
+      if(hist.before) parts.push('Before '+hist.before.year+': '+fmtNative(hist.before[kind], r.currency));
+      hist.years.forEach(h=>parts.push(h.year+': '+fmtNative(h[kind], r.currency)));
+      const auto = r.carryFromPrior && !r.priorManual;
+      if(!parts.length) return (auto ? 'Automatic' : 'Typed by you')+' — nothing earlier on record. Click to edit.';
+      return (r.priorManual ? 'Typed by you (overrides the automatic total). Earlier years on record -- ' : (auto ? 'Automatic total of earlier years -- ' : 'Typed by you. Earlier years on record -- '))+parts.join(' · ');
+    };
+    const carriedCell = (field, kind)=>`<td class="editable-inline" contenteditable="true" data-retfield="${field}" data-id="${r.id}" data-tip="${histTip(kind).replace(/"/g,'&quot;')}" style="color:var(--gold-soft); font-weight:600;">${roundCents(num(r[field]))}</td>`;
+    const toDateCell = (prior, yearTotal)=>`<td style="font-weight:700; color:var(--teal-soft);" title="Carried from prior years + this year">${fmtNative(roundCents(num(prior)+yearTotal), r.currency)}</td>`;
     return `
     <tr data-ret-id="${r.id}" style="border-top:2px solid var(--line-soft);">
       <td rowspan="2" style="font-weight:600; vertical-align:middle;">${escapeHtml(r.name)} <span class="row-del" data-delret="${r.id}">✕</span>
-        <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">${r.currency||'USD'} · ${(r.carryFromPrior && !r.priorManual) ? 'carried from prior years' : 'prior'}: <b class="editable-inline" contenteditable="true" data-retfield="priorSelf" data-id="${r.id}">${num(r.priorSelf)}</b> you / <b class="editable-inline" contenteditable="true" data-retfield="priorEmployer" data-id="${r.id}">${num(r.priorEmployer)}</b> employer</div>
+        <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">${r.currency||'USD'} · ${(r.carryFromPrior && !r.priorManual) ? 'earlier years carried in automatically' : 'earlier total typed by you'}</div>
       </td>
       <td style="color:var(--gold-soft); font-size:11px; font-weight:600;">You</td>
+      ${carriedCell('priorSelf','self')}
       ${selfCells}
-      <td style="font-weight:700;">${fmt$(selfTotal,2)}</td>
+      <td style="font-weight:700;">${fmtNative(selfTotal, r.currency)}</td>
+      ${toDateCell(r.priorSelf, selfTotal)}
       <td rowspan="2" class="editable-inline" contenteditable="true" data-retfield="returnRate" data-id="${r.id}" style="text-align:center; vertical-align:middle;">${num(r.returnRate).toFixed(2)}%</td>
       <td rowspan="2" style="color:var(--good); font-size:11.5px; vertical-align:middle;">${fmt$(projGrowth,2)}/yr</td>
     </tr>
     <tr data-ret-id="${r.id}">
       <td style="color:var(--teal-soft); font-size:11px; font-weight:600;">Employer</td>
+      ${carriedCell('priorEmployer','employer')}
       ${employerCells}
-      <td style="font-weight:700;">${fmt$(employerTotal,2)}</td>
+      <td style="font-weight:700;">${fmtNative(employerTotal, r.currency)}</td>
+      ${toDateCell(r.priorEmployer, employerTotal)}
     </tr>`;
   }).join('');
 
@@ -510,8 +528,8 @@ function renderRetirementSection(y, retAccounts){
       </div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Account</th><th></th>${monthHeaderCells()}<th>Year</th><th>Return %</th><th>Est. growth</th></tr></thead>
-          <tbody id="retirementBody">${rows || '<tr><td colspan="17" class="section-sub" style="text-align:center; padding:14px 0;">No retirement accounts yet — add one below.</td></tr>'}</tbody>
+          <thead><tr><th>Account</th><th></th><th title="Everything contributed in earlier years (hover a cell for the year-by-year breakdown). Click to type your own.">Carried from prior years</th>${monthHeaderCells()}<th>Year</th><th title="Carried from prior years + this year">Total to date</th><th>Return %</th><th>Est. growth</th></tr></thead>
+          <tbody id="retirementBody">${rows || '<tr><td colspan="19" class="section-sub" style="text-align:center; padding:14px 0;">No retirement accounts yet — add one below.</td></tr>'}</tbody>
         </table>
       </div>
       <div class="addcat-row" style="margin-top:14px; flex-wrap:wrap;">

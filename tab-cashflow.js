@@ -326,7 +326,7 @@ function renderCashFlow(){
     if(platRows.length) return sumArr(platRows.map(r=>r.currentValueUSD));
     return nativeMonthToUsd(num(it.currentValue), it.currency, y, cashSnapIdx);
   }));
-  const savingsForAssets = sumArr((yearData(y).savingsAccounts||[]).map(acc=>nativeMonthToUsd(num((acc.m||[])[cashSnapIdx]), acc.currency, y, cashSnapIdx)));
+  const savingsForAssets = sumArr((yearData(y).savingsAccounts||[]).map(acc=>nativeMonthToUsd(savingsBalanceNativeAt(acc, cashSnapIdx), acc.currency, y, cashSnapIdx)));
   const retirementForAssets = sumArr((yearData(y).retirementAccounts||[]).map(r=>retirementAccountTotalBalance(r)));
   const totalAssets = cashTotal + invCurrentForAssets + savingsForAssets + retirementForAssets;
   const cashPctOfAssets = totalAssets>0 ? (cashTotal/totalAssets)*100 : null;
