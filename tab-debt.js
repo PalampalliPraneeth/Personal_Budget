@@ -250,6 +250,7 @@ function renderDebt(){
         if(beforeDisplay===safeV) return;
         const clearedNativeTotal = usdToNative(safeV);
         d.cleared = clearedNativeTotal - sumArr(d.m);
+        if(d.carryFromPrior) d.clearedManual = true;   // your number wins over the automatic carry
       } else if(field==='pending'){
         const clearedAmountUsd = debtClearedToDate(d);
         const newTotalUsd = safeV + clearedAmountUsd;

@@ -502,7 +502,12 @@ function _isIndianPlatform(inv){
    currency, needs the normal conversion like any other native figure). */
 function _ytdStartPriceFor(h){
   const sym = (h.symbol || '').toString().toUpperCase();
-  const snaps = getPortfolioSnapshots(state.year);
+  let snaps = getPortfolioSnapshots(state.year);
+  if(!snaps.length){
+    // new year, nothing recorded yet: start from the most recent price recorded in earlier years
+    const earlier = getChartSnapshots(state.year);
+    if(earlier.length) snaps = [earlier[earlier.length-1]];
+  }
   if(snaps.length && sym){
     const first = snaps.find(s => s.holdings && s.holdings[sym] && s.holdings[sym].price);
     if(first) return { price: first.holdings[sym].price, date: first.date, isUsd: true };
@@ -513,9 +518,56 @@ function _ytdStartPriceFor(h){
 function getPortfolioSnapshots(y){
   return yearData(y).portfolioSnapshots || [];
 }
-function filterSnapshots(snaps, timeframe){
+/* The portfolio chart is one continuous history, not a per-year island: any
+   year you open (including a brand-new one) shows every snapshot recorded in
+   that year AND all earlier years. If the same date exists in more than one
+   year, the later year's entry wins (its holdings were the accurate ones at
+   the time). Platform breakdowns from earlier years are re-keyed to the
+   platform ids of the year on screen, so the per-platform pills keep their
+   history too. */
+function getChartSnapshots(y){
+  const target = Number(y);
+  const years = Object.keys(DATA || {}).filter(k=>/^\d{4}$/.test(k)).map(Number).filter(v=>v<=target).sort((a,b)=>a-b);
+  const viewInv = (DATA[target] && DATA[target].investments) || [];
+  const bySid = {}; viewInv.forEach(i=>{ if(i && i.sid) bySid[i.sid] = i.id; });
+  const byDate = new Map();
+  years.forEach(yy=>{
+    const yd = DATA[yy] || {};
+    const idMap = {};
+    if(yy !== target) (yd.investments||[]).forEach(i=>{ if(i && i.sid && bySid[i.sid]) idMap[i.id] = bySid[i.sid]; });
+    (yd.portfolioSnapshots||[]).forEach(s=>{
+      if(!s || !s.date) return;
+      let snap = s;
+      if(yy !== target && s.platforms){
+        const plats = {};
+        Object.keys(s.platforms).forEach(k=>{ plats[idMap[k] || k] = s.platforms[k]; });
+        snap = Object.assign({}, s, { platforms: plats });
+      }
+      byDate.set(s.date, snap);
+    });
+  });
+  const lastDay = `${target}-12-31`;     // a year's chart ends with that year (the daily job also stamps old years' lists with later dates)
+  return Array.from(byDate.values()).filter(s => s.date <= lastDay).sort((a,b)=> a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+}
+/* Axis labels: plain MM-DD only when every point is from the year on screen;
+   otherwise the full date with its year, so "09-28" can never be mistaken for
+   a 2027 date while looking at 2027. */
+function chartLabelsFor(snaps, y){
+  const showYear = snaps.some(s => s.date.slice(0,4) !== String(y));
+  return snaps.map(s => showYear ? s.date : s.date.slice(5));
+}
+function filterSnapshots(snaps, timeframe, viewYear){
   if(!snaps.length) return [];
-  const now = new Date();
+  let now = new Date();
+  /* 1W / 1M / ... / YTD are measured from the end of the year you are LOOKING
+     AT. Looking at a finished year (e.g. 2026 once it is 2027) counts back
+     from Dec 31 of that year; for the current or a not-yet-started year it
+     counts back from today. Before this, they always counted back from today,
+     so a past year's chart went blank on every button except ALL. */
+  if(viewYear != null && !isNaN(Number(viewYear))){
+    const yEnd = new Date(Number(viewYear), 11, 31, 23, 59, 59);
+    if(yEnd < now) now = yEnd;
+  }
   let cutoff = new Date(0);
   switch(timeframe){
     case '1W': cutoff = new Date(now.getTime() - 7*24*60*60*1000); break;
@@ -526,7 +578,7 @@ function filterSnapshots(snaps, timeframe){
     case 'YTD': cutoff = new Date(now.getFullYear(), 0, 1); break;
     default: return snaps;
   }
-  return snaps.filter(s => new Date(s.date) >= cutoff);
+  return snaps.filter(s => { const t = new Date(s.date); return t >= cutoff && t <= now; });
 }
 function recordPortfolioSnapshot(y, silent){
   ensureHoldingsMigration();
@@ -1151,7 +1203,7 @@ function renderHoldings(){
   if(state.holdingsFilter === undefined) state.holdingsFilter = '';
 
   if(!state.holdingsTimeframe) state.holdingsTimeframe = 'ALL';
-  const snaps = filterSnapshots(getPortfolioSnapshots(y), state.holdingsTimeframe);
+  const snaps = filterSnapshots(getChartSnapshots(y), state.holdingsTimeframe, y);
 
   const investments = yearData(y).investments || [];
   const allRows = aggregateAllHoldings(y);
@@ -2231,7 +2283,7 @@ function renderHoldings(){
   /* ---- Portfolio history chart ---- */
   destroyChart('portfolioHistory');
   if(!showSold && !showRecurring && snaps.length > 1){
-    const labels = snaps.map(s => s.date.slice(5));
+    const labels = chartLabelsFor(snaps, y);
     const chartValueFor = (s) => isAll ? s.totalValue : (s.platforms && s.platforms[state.holdingsView] ? s.platforms[state.holdingsView].totalValue : null);
     const chartInvestedFor = (s) => isAll ? s.totalInvested : (s.platforms && s.platforms[state.holdingsView] ? s.platforms[state.holdingsView].totalInvested : null);
     const hasAnyPlatformData = isAll || snaps.some(s => s.platforms && s.platforms[state.holdingsView]);
@@ -2245,7 +2297,7 @@ function renderHoldings(){
         ] 
       },
       options: { responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
-        plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}},
+        plugins:{legend:{labels:{boxWidth:10,boxHeight:10}}, tooltip:{callbacks:{title: items => items.length ? snaps[items[0].dataIndex].date : ''}}},
         scales:{ y:{grid:{color:'#26332F'}, ticks:{callback:v=>'$'+v}}, x:{grid:{display:false}} } }
     });
     if(!hasAnyPlatformData){

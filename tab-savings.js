@@ -18,7 +18,7 @@ function monthlyInterestEstimate(balance, annualRatePct){
 
 function savingsBalanceForInterest(acc, monthIdx){
   const months = acc.m || [];
-  let balance = 0;
+  let balance = acc.carryFromPrior ? num(acc.openingBalance) : 0;   // carried in from earlier years
   for(let i=0; i<=monthIdx; i++){
     const v = num(months[i]);
     if(v > 0) balance = v;
@@ -36,7 +36,9 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
      existing nativeMonthToUsd() helper; per-row cells still show the
      native amount (via acc.m directly), only aggregates go through this. */
   const balAt = (acc, i)=> nativeMonthToUsd(num((acc.m||[])[i]), acc.currency, y, i);
-  const totalSavedLatest = accounts.reduce((a,acc)=>a+balAt(acc, activeMonthIdx>=0?activeMonthIdx:0),0);
+  const carriedAt = (acc, i)=> (acc.carryFromPrior && window.YearSync)
+    ? nativeMonthToUsd(YearSync.savingsBalanceAt(acc, i), acc.currency, y, i) : balAt(acc, i);
+  const totalSavedLatest = accounts.reduce((a,acc)=>a+carriedAt(acc, activeMonthIdx>=0?activeMonthIdx:0),0);
   const totalAnnualInterest = accounts.reduce((a,acc)=>a + nativeMonthToUsd(savingsBalanceForInterest(acc, activeMonthIdx>=0?activeMonthIdx:0), acc.currency, y, activeMonthIdx>=0?activeMonthIdx:0) * (num(acc.interestRate)/100), 0);
   const avgRate = accounts.length ? (accounts.reduce((a,acc)=>a+num(acc.interestRate),0)/accounts.length) : 0;
 
@@ -52,6 +54,7 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
     const estInterest = monthlyInterestEstimate(effectiveBal, acc.interestRate) * 12;
     return `<tr data-savings-id="${acc.id}">
       <td style="font-weight:600;">${escapeHtml(acc.name)} <span class="row-del" data-delsavings="${acc.id}">✕</span></td>
+      <td style="color:var(--gold-soft); font-weight:600;" title="Read-only: last balance from earlier years">${acc.carryFromPrior ? fmtNative(num(acc.openingBalance), acc.currency) : '--'}</td>
       ${cells}
       <td style="font-weight:700;">${fmt$(total,2)}</td>
       <td class="editable" contenteditable="true" data-sfield="rate" data-sid="${acc.id}" style="text-align:center;">${num(acc.interestRate).toFixed(2)}%</td>
@@ -72,9 +75,9 @@ function renderSavingsAccountsSection(y, accounts, activeMonthIdx, scopeLabel){
       <div class="card-head"><h3>Savings accounts — month by month</h3><span class="section-sub" style="margin:0;">Enter your end-of-month balance for each account, plus its current interest rate (APY %).</span></div>
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Account</th>${monthHeaderCells()}<th>Year</th><th>Interest %</th><th>Currency</th><th>Est. interest</th></tr></thead>
+          <thead><tr><th>Account</th><th title="Balance brought over from all earlier years">Carried from prior years</th>${monthHeaderCells()}<th>Year</th><th>Interest %</th><th>Currency</th><th>Est. interest</th></tr></thead>
           <tbody id="savingsBody">${rows}
-            <tr class="total-row"><td>Total across accounts</td>${MONTHS.map((_,i)=>{
+            <tr class="total-row"><td>Total across accounts</td><td>${fmt$(accounts.reduce((a,acc)=>a+(acc.carryFromPrior?nativeMonthToUsd(num(acc.openingBalance), acc.currency, y, 0):0),0))}</td>${MONTHS.map((_,i)=>{
               /* BUGFIX (#14): was a raw num() sum across accounts, mixing
                  INR and USD balances as if they were the same currency. */
               const t = accounts.reduce((a,acc)=>a+nativeMonthToUsd(num((acc.m||[])[i]), acc.currency, y, i),0);
@@ -229,7 +232,9 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
     const pending = Math.max(target - contributed, 0);
     const pct = target>0 ? Math.min(100, (contributed/target)*100) : 0;
     const reached = target>0 && contributed >= target;
-    const nativeContributed = acc ? num((acc.m||[])[activeMonthIdx>=0?activeMonthIdx:0]) : sumArr(g.m||[]);
+    const nativeContributed = acc
+      ? ((acc.carryFromPrior && window.YearSync) ? YearSync.savingsBalanceAt(acc, activeMonthIdx>=0?activeMonthIdx:0) : num((acc.m||[])[activeMonthIdx>=0?activeMonthIdx:0]))
+      : sumArr(g.m||[]) + (g.carryFromPrior ? num(g.openingSaved) : 0);
     const nativeTarget = num(g.targetAmount);
 
     // Days/months left until the goal's own end date (independent of the
@@ -292,6 +297,7 @@ function renderGoalsSection(y, goals, accounts, activeMonthIdx){
       </div>
       <div class="runway"><div class="runway-fill" style="width:${pct}%; ${reached?'background:var(--good);':''}"></div></div>
       <div class="debt-foot">
+        ${(!acc && g.carryFromPrior && num(g.openingSaved)>0) ? `<span>Carried from prior years: <b style="color:var(--gold-soft)">${fmt$(cur==='INR'?nativeMonthToUsd(num(g.openingSaved),cur,y,0):num(g.openingSaved),2)}</b> USD</span>` : ''}
         <span>Contributed: <b style="color:var(--teal-soft)">${fmt$(contributed,2)}</b> USD${cur==='INR'?` <span style="opacity:.55">(${fmtInrSafe(nativeContributed)})</span>`:''}</span>
         <span>Pending: <b style="color:var(--rust-soft)">${fmt$(pending,2)}</b> USD</span>
         <span>Target: <b class="editable-inline" contenteditable="true" data-goalfield="target" data-id="${g.id}">${nativeTarget}</b> ${cur} ${cur==='INR'?`<span style="opacity:.55">(${fmt$(target,2)})</span>`:''}
@@ -477,7 +483,7 @@ function renderRetirementSection(y, retAccounts){
     return `
     <tr data-ret-id="${r.id}" style="border-top:2px solid var(--line-soft);">
       <td rowspan="2" style="font-weight:600; vertical-align:middle;">${escapeHtml(r.name)} <span class="row-del" data-delret="${r.id}">✕</span>
-        <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">${r.currency||'USD'} · prior: <b class="editable-inline" contenteditable="true" data-retfield="priorSelf" data-id="${r.id}">${num(r.priorSelf)}</b> you / <b class="editable-inline" contenteditable="true" data-retfield="priorEmployer" data-id="${r.id}">${num(r.priorEmployer)}</b> employer</div>
+        <div style="font-size:10px; color:var(--text-faint); margin-top:4px;">${r.currency||'USD'} · ${(r.carryFromPrior && !r.priorManual) ? 'carried from prior years' : 'prior'}: <b class="editable-inline" contenteditable="true" data-retfield="priorSelf" data-id="${r.id}">${num(r.priorSelf)}</b> you / <b class="editable-inline" contenteditable="true" data-retfield="priorEmployer" data-id="${r.id}">${num(r.priorEmployer)}</b> employer</div>
       </td>
       <td style="color:var(--gold-soft); font-size:11px; font-weight:600;">You</td>
       ${selfCells}
@@ -556,6 +562,7 @@ function attachRetirementHandlers(y, retAccounts){
       const before = r[field];
       if(before===v) return;
       r[field] = v;
+      if(r.carryFromPrior && (field==='priorSelf' || field==='priorEmployer')) r.priorManual = true;   // your number wins over the automatic carry
       markDirty('savings', {tab:'savings', action:'edit', target:'Retirement '+r.name+' prior', field, oldVal:before, newVal:v});
       renderSavings();
     });

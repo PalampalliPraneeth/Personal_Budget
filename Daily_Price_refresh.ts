@@ -176,6 +176,7 @@ export function collectTargets(DATA: any): Set<string> {
   for (const yearKey of Object.keys(DATA || {})) {
     if (!isYearKey(yearKey)) continue;
     for (const inv of DATA[yearKey]?.investments || []) {
+      if (!inv) continue;
       const isIndian = inv.currency === 'INR';
       for (const h of inv.holdings || []) {
         if (!h?.symbol || h.status === 'closed') continue;
@@ -220,6 +221,7 @@ export function applyPrices(DATA: any, prices: Map<string, PriceInfo>, now = Dat
   for (const yearKey of Object.keys(DATA || {})) {
     if (!isYearKey(yearKey)) continue;
     for (const inv of DATA[yearKey]?.investments || []) {
+      if (!inv) continue;
       const isIndian = inv.currency === 'INR';
       for (const h of inv.holdings || []) {
         if (!h?.symbol || h.status === 'closed') continue;
@@ -257,10 +259,11 @@ export function computeYearSnapshot(yd: any, fxRate: number) {
   const platforms: Record<string, { totalValue: number; totalInvested: number; totalPl: number }> = {};
   let totalValue = 0, totalInvested = 0;
   for (const inv of yd?.investments || []) {
+    if (!inv) continue;
     const isINR = inv.currency === 'INR';
     let platValue = 0, platInvested = 0;
     for (const h of inv.holdings || []) {
-      if (!h.symbol || h.status === 'closed') continue;
+      if (!h?.symbol || h.status === 'closed') continue;
       const q = Number(h.qty) || 0;
       const avgUSD = isINR ? (Number(h.avgPrice) || 0) / fxRate : (Number(h.avgPrice) || 0);
       const curUSD = isINR ? (Number(h.currentPrice) || 0) / fxRate : (Number(h.currentPrice) || 0);
@@ -276,7 +279,7 @@ export function computeYearSnapshot(yd: any, fxRate: number) {
       map[sym].qty += q;
       map[sym].price = curUSD;
     }
-    if (inv.id) platforms[inv.id] = { totalValue: platValue, totalInvested: platInvested, totalPl: platValue - platInvested };
+    if (inv?.id) platforms[inv.id] = { totalValue: platValue, totalInvested: platInvested, totalPl: platValue - platInvested };
   }
   return { totalValue, totalInvested, totalPl: totalValue - totalInvested, holdings: map, platforms };
 }
@@ -284,6 +287,9 @@ export function computeYearSnapshot(yd: any, fxRate: number) {
 export function recordSnapshotsForAllYears(DATA: any, fxRate: number, today = new Date().toISOString().slice(0, 10)) {
   for (const yearKey of Object.keys(DATA)) {
     if (!isYearKey(yearKey)) continue;
+    // a year that has not started yet (e.g. 2027 while it is still 2026, holdings carried into it)
+    // must not receive today's snapshot -- it would show up as 2026 history inside 2027
+    if (Number(yearKey) > Number(today.slice(0, 4))) continue;
     const yd = DATA[yearKey];
     if (!yd?.investments?.length) continue;
     if (!Array.isArray(yd.portfolioSnapshots)) yd.portfolioSnapshots = [];

@@ -169,11 +169,11 @@ function initShell(){
       yearSel.value = state.year;
       return;
     }
-    if(!confirm(`Add ${nextYear} to the ledger? You'll be able to add income, budgets, and everything else for it right away.`)){
+    if(!confirm(`Add ${nextYear} to the ledger? Your accounts, cards, categories, savings, goals, assets, investments and holdings carry over from earlier years, with every prior-year total carried in.`)){
       yearSel.value = state.year;
       return;
     }
-    DATA[nextYear] = emptyYearShape();
+    if(window.YearSync){ YearSync.createYear(DATA, nextYear); } else { DATA[nextYear] = emptyYearShape(); }
     rebuildYearOptions();
     state.year = nextYear;
     yearSel.value = nextYear;

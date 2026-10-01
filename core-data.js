@@ -144,7 +144,12 @@ async function loadData(){
       });
       if(!DATA.paymentPlan) DATA.paymentPlan = buildDefaultPaymentPlan();
       if(!DATA.fxRateHistory) DATA.fxRateHistory = {};
+      let ysSeeded = 0;
+      try{ if(window.YearSync) ysSeeded = YearSync.init(DATA) || 0; }catch(e){ console.error('[YearSync]', e); }
       lastSavedSnapshot = JSON.stringify(DATA);
+      /* a blank year was just filled in: flag it as an unsaved change so the
+         "Save changes" button lights up and the filled year gets stored */
+      if(ysSeeded){ try{ isDirty = true; }catch(e){} }
       dataLoadFailed = false;
       return;
     }
@@ -174,6 +179,10 @@ let pendingChanges = [];
 let storageMode = 'unknown'; // 'connected' | 'unavailable' (API missing entirely) | 'failing' (API present but calls erroring)
 
 function markDirty(tabId, changeDetail){
+  /* LIVE YEAR SYNC (year-sync.js): whatever was just added / renamed /
+     removed in one year flows to the other years. Wrapped so a sync problem
+     can never stop a save. */
+  try{ if(window.YearSync && DATA) YearSync.reconcile(DATA); }catch(e){ console.error('[YearSync]', e); }
   isDirty = true;
   if(tabId) dirtyTabs.add(tabId);
   if(changeDetail){
@@ -325,6 +334,7 @@ async function persistData(silent, attempt){
 function discardChanges(){
   if(!lastSavedSnapshot) return;
   DATA = JSON.parse(lastSavedSnapshot);
+  try{ if(window.YearSync) YearSync.rebaseline(DATA); }catch(e){}
   isDirty = false;
   dirtyTabs.clear();
   updateSaveUI();
@@ -579,6 +589,9 @@ function bankNativeValueAt(bank, monthIdx){
   for(let i=monthIdx; i>=0; i--){
     if(arr[i]!==null && arr[i]!==undefined) return arr[i];
   }
+  /* Nothing typed yet this year: an account carried in from earlier years
+     (year-sync.js) starts from where the previous year ended. */
+  if(bank.carryFromPrior && num(bank.openingBalance)!==0) return bank.openingBalance;
   return null;
 }
 function bankBalanceUsdAt(bank, year, monthIdx){
@@ -604,7 +617,7 @@ function bankCarryValueAt(bank, monthIdx){
    decide whether "+ Add money" is allowed to carry forward a real balance,
    or must start from $0 — see openAddMoneyModal(). */
 function bankHasTransactionLog(bank){
-  return !!(bank && bank.transactions && bank.transactions.length);
+  return !!(bank && ((bank.transactions && bank.transactions.length) || (bank.carryFromPrior && num(bank.openingBalance)!==0)));
 }
 /* DISPLAY VALUE — what every card, table, modal, and reconciliation row
    should show. A month with nothing explicitly entered carries forward the
@@ -876,10 +889,13 @@ function goalContributedUsd(goal, accounts, monthIdx){
   const y = state.year;
   if(acc){
     const i = monthIdx>=0 ? monthIdx : 0;
-    const native = num((acc.m||[])[i]);
+    /* accounts carried in from earlier years (year-sync.js) count the balance
+       brought over until you enter this year's own figure */
+    const native = (acc.carryFromPrior && window.YearSync) ? YearSync.savingsBalanceAt(acc, i) : num((acc.m||[])[i]);
     return cur==='INR' ? nativeMonthToUsd(native, cur, y, i) : native;
   }
-  return monthlyArrToUsd(goal.m||[], cur, y);
+  const carriedIn = goal.carryFromPrior ? num(goal.openingSaved) : 0;   // saved in earlier years
+  return monthlyArrToUsd(goal.m||[], cur, y) + (cur==='INR' ? nativeMonthToUsd(carriedIn, cur, y, 0) : carriedIn);
 }
 
 function sumRange(arr, months){ return months.reduce((a,i)=>a+num(arr[i]),0); }

@@ -57,7 +57,7 @@ function repairBankBalancesFromTransactions(bank){
   let changed = false;
   for(let i=0;i<12;i++){
     if(touched[i]){
-      const correct = roundCents((carry ?? 0) + deltaByMonth[i]);
+      const correct = roundCents((carry ?? (bank.carryFromPrior ? num(bank.openingBalance) : 0)) + deltaByMonth[i]);
       if(bank.m[i] !== correct){ bank.m[i] = correct; changed = true; }
       carry = correct;
     } else if(bank.m[i]!=null){
@@ -181,6 +181,27 @@ function fmtShortDate(d){ return d.toLocaleDateString('en-US',{month:'short', da
    Returns null when there's no billing cycle configured (nothing to
    measure the split against) — callers should fall back to showing plain
    total owed, same as before this existed. */
+/* A card's activity can straddle New Year (cycle Dec 28 - Jan 27): the late-
+   December charges live in the old year's copy of the card and the January
+   payment in the new year's. Statement math needs both, so gather the copies
+   of this card from the other years too -- LATER years always; EARLIER years
+   only back through a chain of carried-over copies, so years that were never
+   linked (older manual data) keep behaving exactly as before. */
+function cardHistoryTransactions(bank){
+  const own = bank.transactions || [];
+  try{
+    if(!bank.sid || typeof DATA==='undefined' || !DATA) return own;
+    const years = Object.keys(DATA).filter(k=>/^\d{4}$/.test(k)).map(Number).sort((a,b)=>a-b);
+    const copies = years.map(yy=>({yy, b:(DATA[yy].banks||[]).find(x=>x && x.sid===bank.sid)})).filter(c=>c.b);
+    const at = copies.findIndex(c=>c.b===bank);
+    if(at<0) return own;
+    let lo = at;
+    while(lo>0 && copies[lo].b.carryFromPrior) lo--;      // include the copy the carry started from
+    const out = [];
+    for(let i=lo;i<copies.length;i++) (copies[i].b.transactions||[]).forEach(t=>out.push(t));
+    return out;
+  }catch(e){ return own; }
+}
 function creditCycleSplit(bank, y, today){
   if(!bank.billingCycleDay) return null;
   today = today || new Date();
@@ -200,7 +221,7 @@ function creditCycleSplit(bank, y, today){
      you don't owe), and only apply whatever payment is left over against
      this cycle's own new charges. */
   let priorBalanceAtClose = 0, paymentsSinceClose = 0, chargesSinceClose = 0;
-  (bank.transactions||[]).forEach(t=>{
+  cardHistoryTransactions(bank).forEach(t=>{
     if(!t.date) return;
     const p = parseLocalDateParts(t.date);
     const d = new Date(p.year, p.monthIdx, p.day);
@@ -1330,7 +1351,18 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
 
     const dateStr = overlay.querySelector('#amDate').value;
     if(!dateStr){ overlay.querySelector('#amDate').focus(); return; }
-    const monthIdx = parseLocalDateParts(dateStr).monthIdx;
+    const dateParts = parseLocalDateParts(dateStr);
+    /* A date in another year (e.g. a Jan 3 payment for a Dec 28 - Jan 27 card
+       cycle, entered while looking at the old year) used to be filed under
+       that MONTH of the year on screen -- the wrong year. Now it has to be
+       logged in the year it belongs to, where the card's balance carries in. */
+    if(dateParts.year !== y){
+      showToast(DATA[dateParts.year]
+        ? `That date is in ${dateParts.year}. Switch the year selector to ${dateParts.year} and add it there -- the balance carries over automatically.`
+        : `That date is in ${dateParts.year}, which isn't in your ledger yet. Add ${dateParts.year} first (Add year), then log it there.`);
+      return;
+    }
+    const monthIdx = dateParts.monthIdx;
     const note = overlay.querySelector('#amNote').value.trim();
 
     if(category==='transfer' && otherAccounts.length===0){

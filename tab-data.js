@@ -105,7 +105,9 @@ function renderDataTab(){
       <div class="card-head"><h3>Housekeeping</h3></div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn" id="exportBtn2">Export current data (.json)</button>
+        <button class="btn" id="syncYearsBtn" title="Copies anything a later year is missing from the year before it. Nothing already in a year is changed or removed.">Sync all years now</button>
       </div>
+      <div id="syncYearsStatus" style="margin-top:10px; font-family:var(--font-mono); font-size:12px; color:var(--text-dim);"></div>
     </div>
   `;
   document.getElementById('panel-data').innerHTML = html;
@@ -119,6 +121,15 @@ function renderDataTab(){
   fi.addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) handleFile(f); });
 
   document.getElementById('exportBtn2').addEventListener('click', ()=>document.getElementById('exportBtn').click());
+  document.getElementById('syncYearsBtn').addEventListener('click', ()=>{
+    if(!window.YearSync){ showToast('Year sync is not loaded'); return; }
+    if(!confirm('Copy every account, card, category, savings account, goal, asset, investment and holding that a later year is missing from the year before it?\n\nNothing already in a year is changed or removed. Anything you deliberately deleted from a later year earlier will come back, so export a backup first if unsure.')) return;
+    const n = YearSync.fillMissing(DATA);
+    markDirty('data');
+    persistData(true);
+    document.getElementById('syncYearsStatus').textContent = n ? ('Added '+n+' missing item'+(n===1?'':'s')+' across your years.') : 'Every year already has everything from the year before it.';
+    renderActive();
+  });
   /* "Reset to empty" removed on purpose — it wiped and saved over the
      entire DATA object (every tab, every year) behind a single confirm(),
      with no undo beyond a manual export. If you ever want it back:
@@ -199,6 +210,7 @@ function renderDataTab(){
             portfolioSnapshots: existing.portfolioSnapshots || []
           };
         });
+        try{ if(window.YearSync) YearSync.rebaseline(DATA); }catch(e){}
         persistData(true);
         status.innerHTML = '<span style="color:var(--good)">✓ Import complete.</span> Your Overview, Income, Expenses, Investments and Debt tabs now reflect the new file. Savings, goals, and holdings detail were kept.';
         showToast('Spreadsheet imported');
