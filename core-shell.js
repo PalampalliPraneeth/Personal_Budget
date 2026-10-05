@@ -184,6 +184,60 @@ function initShell(){
     renderActive();
     showToast(`${nextYear} added — remember to Save`);
   }
+  /* Delete the NEWEST year, and only if it is a FUTURE year (e.g. one added
+     by mistake). Only the newest, so the years before it -- and every carried
+     total that depends on them -- can never be broken by a deletion in the
+     middle. */
+  function yearHasOwnEntries(yd){
+    let found = false;
+    const NUM_ARRAYS = ['m','raw','mSelf','mEmployer'];
+    (function walk(o, key){
+      if(found || o===null || typeof o!=='object') return;
+      if(Array.isArray(o)){
+        if(NUM_ARRAYS.includes(key) && o.some(v=>v!==null && v!==undefined && v!=='' && Number(v)!==0)){ found = true; return; }
+        if((key==='transactions' || key==='dividends' || key==='portfolioSnapshots') && o.length){ found = true; return; }
+        if(key==='lots' && o.some(l=>l && !l.opening)){ found = true; return; }
+        o.forEach(v=>walk(v, key));
+        return;
+      }
+      Object.keys(o).forEach(k=>walk(o[k], k));
+    })(yd, '');
+    return found;
+  }
+  /* Only a FUTURE year (later than today's calendar year) can ever be deleted
+     -- i.e. one added by mistake. The current year and every past year are
+     permanent. Returns that year, or null when there is nothing deletable. */
+  function deletableFutureYear(){
+    const years = Object.keys(DATA).filter(k=>/^\d{4}$/.test(k)).map(Number).sort((a,b)=>a-b);
+    if(years.length < 2) return null;
+    const y = years[years.length-1];
+    return y > new Date().getFullYear() ? y : null;
+  }
+  window.deletableFutureYear = deletableFutureYear;
+  function deleteLatestYear(){
+    if(currentRole === 'readonly'){ showToast('Read-only access: cannot delete a year'); return; }
+    const years = Object.keys(DATA).filter(k=>/^\d{4}$/.test(k)).map(Number).sort((a,b)=>a-b);
+    const y = deletableFutureYear();
+    if(y === null){ showToast('Only a future year added by mistake can be deleted. The current year and past years are permanent.'); return; }
+    if(yearHasOwnEntries(DATA[y])){
+      const typed = prompt(`${y} contains numbers, transactions or holdings you entered. Deleting it removes ALL of that (earlier years are not touched).\n\nType ${y} to confirm deleting it:`);
+      if(typed === null || typed.trim() !== String(y)) { showToast('Delete cancelled'); return; }
+    } else if(!confirm(`Delete ${y}? It is empty -- nothing was entered in it. Earlier years are not touched.`)){
+      return;
+    }
+    delete DATA[y];
+    if(DATA.yearSyncSeeded) delete DATA.yearSyncSeeded[y];
+    try{ if(window.YearSync) YearSync.rebaseline(DATA); }catch(e){ console.error('[YearSync]', e); }
+    if(state.year === y){ state.year = years[years.length-2]; state.month = 'ALL'; }
+    rebuildYearOptions();
+    yearSel.value = state.year;
+    refreshMonthOptions();
+    updateBrandYear();
+    markDirty('data', {tab:'data', action:'delete-year', target:String(y)});
+    renderActive();
+    showToast(`${y} deleted -- remember to Save`);
+  }
+  window.deleteLatestYear = deleteLatestYear;
   yearSel.addEventListener('change', ()=>{
     if(yearSel.value === ADD_YEAR_VALUE){
       guardAndSwitch(addNewYear);

@@ -390,7 +390,7 @@ function openEditLotsModal(h){
   overlay.id = 'editLotsOverlay';
   overlay.className = 'modal-overlay';
 
-  const lotsSorted = [...(h.lots||[])].sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+  const lotsSorted = [...(h.lots||[])].sort(compareLots);
 
   const rowsHtml = lotsSorted.map(l => `
     <div class="lot-edit-row" data-lot-id="${l.id}">
@@ -784,8 +784,19 @@ function ensureHoldingsMigration(){
   });
 }
 
+/* Order of lots in time. A lot whose date is unknown (e.g. added by the live
+   holdings sync, which can't know it) counts as the EARLIEST if it is a buy and
+   the LATEST if it is a sell -- so an estimated "sold" lot is never applied
+   before the shares it sells exist. (Same rule is used in year-sync.js and
+   broker-import.js.) */
+function lotOrderKey(l){
+  const t = (l && l.date) ? new Date(l.date).getTime() : NaN;
+  if(!isNaN(t)) return t;
+  return (l && l.type === 'sell') ? Infinity : -Infinity;
+}
+function compareLots(a, b){ const x = lotOrderKey(a), y = lotOrderKey(b); return x < y ? -1 : x > y ? 1 : 0; }
 function recalcHolding(h){
-  const lots = (h.lots||[]).slice().sort((a,b)=> new Date(a.date||0) - new Date(b.date||0));
+  const lots = (h.lots||[]).slice().sort(compareLots);
   let qty = 0, costBasis = 0, realizedPL = 0, boughtQty = 0, soldQty = 0, proceeds = 0, costBasisSold = 0, lastSellDate = null;
   lots.forEach(l=>{
     const lq = num(l.qty);

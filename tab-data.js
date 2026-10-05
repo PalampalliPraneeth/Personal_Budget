@@ -101,10 +101,13 @@ function renderDataTab(){
       <div id="importStatus" style="margin-top:12px; font-family:var(--font-mono); font-size:12px; color:var(--text-dim);"></div>
     </div>
 
+    <div class="card" id="brokerCard"></div>
+
     <div class="card">
       <div class="card-head"><h3>Housekeeping</h3></div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn" id="exportBtn2">Export current data (.json)</button>
+        ${(()=>{ const dy = (typeof window.deletableFutureYear==='function') ? window.deletableFutureYear() : null; return dy ? `<button class="btn" id="deleteYearBtn" title="Only a future year added by mistake can be deleted. Asks you to confirm.">Delete ${dy} (added by mistake)</button>` : ''; })()}
         <button class="btn" id="syncYearsBtn" title="Copies anything a later year is missing from the year before it. Nothing already in a year is changed or removed.">Sync all years now</button>
       </div>
       <div id="syncYearsStatus" style="margin-top:10px; font-family:var(--font-mono); font-size:12px; color:var(--text-dim);"></div>
@@ -121,6 +124,9 @@ function renderDataTab(){
   fi.addEventListener('change', (e)=>{ const f=e.target.files[0]; if(f) handleFile(f); });
 
   document.getElementById('exportBtn2').addEventListener('click', ()=>document.getElementById('exportBtn').click());
+  try{ if(window.BrokerImport) BrokerImport.mountUI(document.getElementById('brokerCard')); }catch(e){ console.error('[BrokerImport]', e); }
+  const delYearBtn = document.getElementById('deleteYearBtn');
+  if(delYearBtn) delYearBtn.addEventListener('click', ()=>{ if(typeof window.deleteLatestYear==='function') window.deleteLatestYear(); });
   document.getElementById('syncYearsBtn').addEventListener('click', ()=>{
     if(!window.YearSync){ showToast('Year sync is not loaded'); return; }
     if(!confirm('Copy every account, card, category, savings account, goal, asset, investment and holding that a later year is missing from the year before it?\n\nNothing already in a year is changed or removed. Anything you deliberately deleted from a later year earlier will come back, so export a backup first if unsure.')) return;

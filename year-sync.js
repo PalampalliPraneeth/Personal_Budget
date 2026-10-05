@@ -162,9 +162,12 @@ function isClosedHolding(h){ return h.status === 'closed' || num(h.qty) <= 0; }
    -- each sale shrinks every earlier lot proportionally -- means the carried
    lots add up to the same quantity AND the same average price the old year
    ended on, to the cent. */
+/* same rule as recalcHolding: unknown date = earliest if a buy, latest if a sell */
+function lotKey(l){ const t = l.date ? new Date(l.date).getTime() : NaN; return !isNaN(t) ? t : (l.type === 'sell' ? Infinity : -Infinity); }
+function lotCompare(a, b){ const x = lotKey(a), y = lotKey(b); return x < y ? -1 : x > y ? 1 : 0; }
 function carriedLotsFrom(h, year){
   const lots = (h.lots || []).filter(l => l && typeof l === 'object')
-    .slice().sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));   // same order as recalcHolding
+    .slice().sort(lotCompare);   // same order as recalcHolding
   const open = []; let qty = 0;
   lots.forEach(l => {
     const q = num(l.qty);
@@ -172,21 +175,51 @@ function carriedLotsFrom(h, year){
       const sq = Math.min(q, qty);
       if (qty > 0 && sq > 0) { const f = (qty - sq) / qty; open.forEach(o => { o.qty *= f; }); qty -= sq; }
     } else {
-      open.push({ qty: q, price: num(l.price), date: l.date || null, id: l.id || null }); qty += q;
+      open.push({ qty: q, price: num(l.price), date: l.date || '', id: l.id || null }); qty += q;
     }
   });
   return open.filter(o => o.qty > 1e-9).map((o, i) => ({
     id: o.id ? (String(o.id).startsWith('o:') ? String(o.id) : 'o:' + o.id) : ('o:' + (h.sid || 'h') + ':' + i),   // stable, so re-running never churns the data
     type: 'buy', qty: Math.round(o.qty * 1e8) / 1e8, price: o.price,
-    date: o.date || `${year}-01-01`, opening: true
+    date: o.date || '',                                   // a lot whose real date is unknown stays "unknown" -- it is never given an invented date
+    opening: true, ...(o.date ? {} : { dateUnknown: true })
   }));
 }
 function sameLots(a, b){
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i].id !== b[i].id || a[i].type !== b[i].type || a[i].qty !== b[i].qty || a[i].price !== b[i].price || a[i].date !== b[i].date) return false;
+    if (a[i].id !== b[i].id || a[i].type !== b[i].type || a[i].qty !== b[i].qty || a[i].price !== b[i].price || a[i].date !== b[i].date || !!a[i].dateUnknown !== !!b[i].dateUnknown) return false;
   }
   return true;
+}
+/* Put a newly added (or re-opened) child -- a holding or an expense category --
+   into every later year. If a later year ALREADY has one with the same symbol /
+   name (for instance it was created there by a sync or a newer tradebook that
+   was imported first) it is LINKED to this one instead of duplicated, and for a
+   holding the earlier-year position is carried into it as dated opening lots. */
+function addChildLater(D, spec, sid, ksid, y, parent, src, later){
+  const years = yearKeys(D);
+  if (spec.child === HOLDING && !carriedLotsFrom(src, y).length) return 0;     // nothing still held -> nothing to carry
+  let n = 0;
+  later.forEach(y2 => {
+    const p2 = findBySid(D[y2][spec.key], sid); if (!p2) return;
+    p2[spec.child.key] = p2[spec.child.key] || [];
+    if (findBySid(p2[spec.child.key], ksid)) return;
+    const same = p2[spec.child.key].find(x => x && idOf(x, spec.child) === idOf(src, spec.child));
+    if (same) {
+      same.sid = ksid;
+      if (spec.child === HOLDING && !(same.lots || []).some(l => l && l.opening)) {
+        const open = carriedLotsFrom(src, y2);
+        if (open.length) { same.lots = open.concat(same.lots || []); if (typeof root.recalcHolding === 'function') root.recalcHolding(same); }
+      }
+      return;
+    }
+    p2.__year = y2;
+    const c = copyChild(spec.child, src, parent, p2);
+    delete p2.__year;
+    p2[spec.child.key].push(c); n++;
+  });
+  return n;
 }
 function copyChild(def, src, parentSrc, parentDest){
   const c = { id: newId(), sid: src.sid };
@@ -269,8 +302,11 @@ function applyOps(D, ops){
   ops.forEach(op => {
     const { spec, sid, y } = op;
     const later = years.filter(y2 => y2 > y);
+    /* several changes can land in one pass (an undo, a bulk import): an earlier
+       step may already have removed what a later step points at, so every step
+       re-checks that its source still exists and quietly skips if not */
     if (op.t === 'add') {
-      const src = findBySid(D[y][spec.key], sid);
+      const src = findBySid(D[y][spec.key], sid); if (!src) return;
       later.forEach(y2 => {
         const list = D[y2][spec.key] || (D[y2][spec.key] = []);
         if (findBySid(list, sid)) return;
@@ -286,7 +322,7 @@ function applyOps(D, ops){
         if (i >= 0) { list.splice(i, 1); n++; }
       });
     } else if (op.t === 'upd') {
-      const src = findBySid(D[y][spec.key], sid);
+      const src = findBySid(D[y][spec.key], sid); if (!src) return;
       const prevName = JSON.parse(op.prevSig).__name;
       const nameChanged = prevName !== src[spec.nameField];
       years.forEach(y2 => {
@@ -300,19 +336,9 @@ function applyOps(D, ops){
         n++;
       });
     } else if (op.t === 'addc') {
-      const parent = findBySid(D[y][spec.key], sid);
-      const src = findBySid(parent[spec.child.key], op.ksid);
-      later.forEach(y2 => {
-        const p2 = findBySid(D[y2][spec.key], sid); if (!p2) return;
-        p2[spec.child.key] = p2[spec.child.key] || [];
-        if (findBySid(p2[spec.child.key], op.ksid)) return;
-        const same = p2[spec.child.key].find(x => !x.sid && idOf(x, spec.child) === idOf(src, spec.child));
-        if (same) { same.sid = op.ksid; return; }
-        p2.__year = y2;
-        const c = copyChild(spec.child, src, parent, p2);
-        delete p2.__year;
-        p2[spec.child.key].push(c); n++;
-      });
+      const parent = findBySid(D[y][spec.key], sid); if (!parent) return;
+      const src = findBySid(parent[spec.child.key], op.ksid); if (!src) return;
+      n += addChildLater(D, spec, sid, op.ksid, y, parent, src, later);
     } else if (op.t === 'delc') {
       later.forEach(y2 => {
         const p2 = findBySid(D[y2][spec.key], sid); if (!p2) return;
@@ -321,10 +347,11 @@ function applyOps(D, ops){
         if (i >= 0) { list.splice(i, 1); n++; }
       });
     } else if (op.t === 'updc') {
-      const parent = findBySid(D[y][spec.key], sid);
-      const src = findBySid(parent[spec.child.key], op.ksid);
+      const parent = findBySid(D[y][spec.key], sid); if (!parent) return;
+      const src = findBySid(parent[spec.child.key], op.ksid); if (!src) return;
       const p = JSON.parse(op.prevSig);
       const nameChanged = p.__name !== src[spec.child.nameField];
+      if (spec.child === HOLDING && p.__closed && !isClosedHolding(src)) n += addChildLater(D, spec, sid, op.ksid, y, parent, src, later);   // re-opened
       years.forEach(y2 => {
         if (y2 === y) return;
         const p2 = findBySid(D[y2][spec.key], sid); if (!p2) return;
