@@ -935,6 +935,15 @@ function openBillingCycleModal(bank, y, onDone){
   });
 }
 
+/* Every transaction of the month, newest first. BUGFIX: this list used to be cut to the newest 10, so an entry dated
+   earlier in the month (e.g. Oct 1 behind ten later ones) was saved and counted in the balance but silently
+   missing here -- together with its edit and delete buttons. The box scrolls, so there is no reason to cap it. */
+function bankMonthTransactions(bank, monthIdx){
+  return [...((bank && bank.transactions) || [])]
+    .filter(t => t && (t.monthIdx===undefined || t.monthIdx===monthIdx))
+    .sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+}
+
 function openBankDetailModal(bank, y, monthIdxArg){
   const old = document.getElementById('bankDetailOverlay');
   if(old) old.remove();
@@ -956,10 +965,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
   const bal = accountDisplayValueAt(bank, monthIdx); // native currency, carried forward
   const prevBal = monthIdx>0 ? accountDisplayValueAt(bank, monthIdx-1) : null;
   const delta = prevBal===null ? null : bal - prevBal;
-  const txns = [...(bank.transactions||[])]
-    .filter(t=>t.monthIdx===undefined || t.monthIdx===monthIdx)
-    .sort((a,b)=> (b.date||'').localeCompare(a.date||''))
-    .slice(0,10);
+  const txns = bankMonthTransactions(bank, monthIdx);
 
   const txnRows = txns.map(t=>{
     const catLabel = t.category==='income' ? '💰 Income' : t.category==='expense' ? '🧾 Expense' : t.category==='debt' ? '🏦 Debt' : t.category==='investment' ? '📈 Investment' : t.category==='transfer' ? '🔁 Transfer' : '📝 Other';
@@ -1002,6 +1008,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
         return text ? `<div class="section-sub" style="margin:-4px 0 10px;">${text}</div>` : '';
       })()}
       ${delta===null ? '' : `<div class="section-sub" style="margin:4px 0 14px;">${delta>=0?'↑':'↓'} ${fmtNative(Math.abs(delta),bank.currency)} vs ${MONTHS[monthIdx-1]}</div>`}
+      ${txns.length ? `<div class="section-sub" style="margin:0 0 6px;">${txns.length} transaction${txns.length===1?'':'s'} in ${MONTHS[monthIdx]} ${y} — scroll for all</div>` : ''}
       <div style="max-height:220px; overflow-y:auto; margin-bottom:18px;">
         ${txnRows || `<div class="section-sub" style="text-align:center; padding:14px 0;">No transactions logged for ${MONTHS[monthIdx]} — anything you add here will show up in this list, each with an ✕ to remove it.</div>`}
       </div>
