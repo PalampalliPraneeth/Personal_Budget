@@ -674,6 +674,13 @@ td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decora
 .bank-txn-row{ display:flex; justify-content:space-between; align-items:center; padding:9px 2px; border-top:1px solid var(--line-soft); gap:10px; }
 .bank-txn-row:first-child{ border-top:none; }
 .bank-txn-date{ font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); }
+/* one block per day: a date heading once, that day's transactions underneath */
+.bank-txn-day{ margin-bottom:14px; background:var(--bg-card); border:1px solid var(--line-soft); border-radius:10px; overflow:hidden; }
+.bank-txn-day:last-child{ margin-bottom:0; }
+.bank-txn-day-head{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; padding:8px 12px; background:var(--bg-card-hi); border-bottom:1px solid var(--line-soft); }
+.bank-txn-day-title{ font-family:var(--font-mono); font-size:12px; font-weight:600; letter-spacing:.04em; color:var(--gold-soft); }
+.bank-txn-day-meta{ font-family:var(--font-mono); font-size:11.5px; color:var(--text-dim); }
+.bank-txn-day .bank-txn-row{ padding:10px 12px; }
 .bank-txn-cat{ font-size:12px; color:var(--text-faint); margin-top:2px; }
 .bank-txn-amt{ font-family:var(--font-mono); font-weight:600; font-size:13px; }
 
@@ -855,4 +862,4 @@ td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decora
   .ins-modal{padding:20px 16px;}
 }
 
-.ins-cat-main .ins-pill{white-space:normal; line-height:1.35;}
+.ins-cat-main .ins-pill{white-space:normal; line-height:1.35;}.bank-txn-day-head + .bank-txn-row{ border-top:none; }

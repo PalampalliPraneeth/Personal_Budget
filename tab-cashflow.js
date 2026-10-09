@@ -944,6 +944,96 @@ function bankMonthTransactions(bank, monthIdx){
     .sort((a,b)=> (b.date||'').localeCompare(a.date||''));
 }
 
+/* ---------- What each transaction in the detail window shows ----------
+   Every saved transaction remembers WHERE it went (refType + refId: the income source, expense category, debt or
+   investment) -- but the list only showed an icon and your typed note, so you had to open the edit dialog to see the
+   category. These resolve the names from those ids when the window is drawn, so they are always the current names. */
+const TXN_GONE = '(no longer exists)';
+function txnTargetInfo(bank, y, t){
+  const yd = (yearData(y)) || {};
+  const byId = (list, id) => (list || []).find(x => x && x.id === id);
+  const miss = id => id ? TXN_GONE : '';
+  switch(t && t.category){
+    case 'income': { const s = t.refId ? byId(yd.income, t.refId) : null; return { icon:'💰', label:'Income', target: s ? s.name : miss(t.refId) }; }
+    case 'expense': { const f = t.refId ? findExpenseCategoryById(y, t.refId) : null; return { icon:'🧾', label:'Expense', target: f ? (f.group.name + ' › ' + f.cat.name) : miss(t.refId) }; }
+    case 'debt': { const d = t.refId ? byId(yd.debts, t.refId) : null; return { icon:'🏦', label:'Debt payment', target: d ? d.name : miss(t.refId) }; }
+    case 'investment': { const i = t.refId ? byId(yd.investments, t.refId) : null; return { icon:'📈', label:'Investment', target: i ? i.name : miss(t.refId) }; }
+    case 'transfer': {
+      const other = t.transferPairBankId ? byId(yd.banks, t.transferPairBankId) : null; const dir = num(t.amount) >= 0 ? 'from' : 'to';
+      return { icon:'🔁', label:'Transfer', target: other ? (dir + ' ' + other.name) : (t.transferPairBankId ? dir + ' ' + TXN_GONE : '') };
+    }
+    default: return { icon:'📝', label:'Other', target:'' };
+  }
+}
+/* the note YOU typed (a transfer's automatic "Transfer from X" text is shown as the target instead, not twice) */
+function txnExtraNote(t){
+  if(!t) return '';
+  if(t.category === 'transfer'){
+    const u = t.userNote !== undefined ? t.userNote : String(t.note || '').replace(/(^|\s·\s)Transfer (from|to) .*$/, '');
+    return String(u || '').trim();
+  }
+  return String(t.note || '').trim();
+}
+function bankTxnRowHtml(bank, y, t){
+  const info = txnTargetInfo(bank, y, t), extra = txnExtraNote(t);
+  const color = num(t.amount) >= 0 ? 'var(--good)' : 'var(--danger)';
+  const gone = info.target === TXN_GONE || /\(no longer exists\)$/.test(info.target);
+  return `<div class="bank-txn-row" style="align-items:flex-start;">
+      <div class="bank-txn-main" style="flex:1; min-width:0;">
+        <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
+          <span style="font-size:13px; font-weight:600; color:var(--text);">${info.icon} ${info.label}</span>
+          ${info.target ? `<span style="font-size:13px; color:${gone ? 'var(--text-faint)' : 'var(--teal-soft)'};">${escapeHtml(info.target)}</span>` : ''}
+        </div>
+        ${extra ? `<div style="font-size:12px; color:var(--text-dim); margin-top:3px; overflow-wrap:anywhere;">${escapeHtml(extra)}</div>` : ''}
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
+        <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmtNative(t.amount,bank.currency)}</div>
+        <span class="row-del" data-edittxn="${t.id}" title="edit this transaction">✎</span>
+        <span class="row-del" data-deltxn="${t.id}" title="delete this transaction">✕</span>
+      </div>
+    </div>`;
+}
+/* ---------- Group a month's transactions under ONE heading per day ----------
+   The date used to be repeated on every row. Now each distinct date is shown once as a header (with that day's
+   net total), and every transaction from that day sits underneath it. Input order is kept (newest day first). */
+const _DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function txnDayHeading(dateStr){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
+  if(!m) return 'No date';
+  const yy = +m[1], mm = +m[2], dd = +m[3];
+  const dt = new Date(Date.UTC(yy, mm-1, dd)); // UTC on purpose: a plain date must never shift a day with the timezone
+  if(isNaN(dt.getTime())) return String(dateStr);
+  return `${_DOW[dt.getUTCDay()]}, ${dd} ${MONTHS[mm-1] || ''} ${yy}`;
+}
+function groupTxnsByDate(txns){
+  const groups = [], index = new Map();
+  (txns || []).forEach(t => {
+    const key = (t && t.date) ? String(t.date).slice(0,10) : '';
+    if(!index.has(key)){ const g = { date:key, items:[] }; index.set(key, g); groups.push(g); }
+    index.get(key).items.push(t);
+  });
+  return groups;
+}
+function bankTxnGroupedHtml(bank, y, txns){
+  return groupTxnsByDate(txns).map(g => {
+    const net = roundCents(g.items.reduce((a,t)=> a + num(t.amount), 0));
+    const netColor = net > 0 ? 'var(--good)' : net < 0 ? 'var(--danger)' : 'var(--text-dim)';
+    const count = g.items.length;
+    return `<div class="bank-txn-day">
+      <div class="bank-txn-day-head">
+        <span class="bank-txn-day-title">${escapeHtml(txnDayHeading(g.date))}</span>
+        <span class="bank-txn-day-meta">${count} transaction${count===1?'':'s'} · <b style="color:${netColor};">${net>0?'+':''}${fmtNative(net,bank.currency)}</b></span>
+      </div>
+      ${g.items.map(t => bankTxnRowHtml(bank, y, t)).join('')}
+    </div>`;
+  }).join('');
+}
+function bankTxnTotals(txns){
+  let inSum = 0, outSum = 0;
+  (txns || []).forEach(t => { const a = num(t && t.amount); if(a >= 0) inSum += a; else outSum += a; });
+  return { count: (txns || []).length, inSum: roundCents(inSum), outSum: roundCents(outSum) };
+}
+
 function openBankDetailModal(bank, y, monthIdxArg){
   const old = document.getElementById('bankDetailOverlay');
   if(old) old.remove();
@@ -967,24 +1057,11 @@ function openBankDetailModal(bank, y, monthIdxArg){
   const delta = prevBal===null ? null : bal - prevBal;
   const txns = bankMonthTransactions(bank, monthIdx);
 
-  const txnRows = txns.map(t=>{
-    const catLabel = t.category==='income' ? '💰 Income' : t.category==='expense' ? '🧾 Expense' : t.category==='debt' ? '🏦 Debt' : t.category==='investment' ? '📈 Investment' : t.category==='transfer' ? '🔁 Transfer' : '📝 Other';
-    const color = num(t.amount)>=0 ? 'var(--good)' : 'var(--danger)';
-    return `<div class="bank-txn-row">
-      <div class="bank-txn-main">
-        <div class="bank-txn-date">${t.date}</div>
-        <div class="bank-txn-cat">${catLabel}${t.note?' · '+escapeHtml(t.note):''}</div>
-      </div>
-      <div style="display:flex; align-items:center; gap:8px;">
-        <div class="bank-txn-amt" style="color:${color};">${num(t.amount)>=0?'+':''}${fmtNative(t.amount,bank.currency)}</div>
-        <span class="row-del" data-edittxn="${t.id}" title="edit this transaction">✎</span>
-        <span class="row-del" data-deltxn="${t.id}" title="delete this transaction">✕</span>
-      </div>
-    </div>`;
-  }).join('');
+  const txnRows = bankTxnGroupedHtml(bank, y, txns);
+  const totals = bankTxnTotals(txns);
 
   overlay.innerHTML = `
-    <div class="modal-card" style="width:420px;">
+    <div class="modal-card" style="width:660px; max-width:96vw;">
       <h3>${isCredit?'💳':'🏦'} ${escapeHtml(bank.name)}</h3>
       <p class="modal-sub">${isCredit?'Credit Card':(BANK_TYPE_LABELS[bank.type]||'Checking')} · ${bank.currency||'USD'}</p>
       <div class="modal-field" style="margin-bottom:10px;">
@@ -1008,8 +1085,8 @@ function openBankDetailModal(bank, y, monthIdxArg){
         return text ? `<div class="section-sub" style="margin:-4px 0 10px;">${text}</div>` : '';
       })()}
       ${delta===null ? '' : `<div class="section-sub" style="margin:4px 0 14px;">${delta>=0?'↑':'↓'} ${fmtNative(Math.abs(delta),bank.currency)} vs ${MONTHS[monthIdx-1]}</div>`}
-      ${txns.length ? `<div class="section-sub" style="margin:0 0 6px;">${txns.length} transaction${txns.length===1?'':'s'} in ${MONTHS[monthIdx]} ${y} — scroll for all</div>` : ''}
-      <div style="max-height:220px; overflow-y:auto; margin-bottom:18px;">
+      ${txns.length ? `<div class="section-sub" style="margin:0 0 6px;">${totals.count} transaction${totals.count===1?'':'s'} in ${MONTHS[monthIdx]} ${y} · money in <b style="color:var(--good)">+${fmtNative(totals.inSum,bank.currency)}</b> · money out <b style="color:var(--danger)">${fmtNative(totals.outSum,bank.currency)}</b> — scroll for all</div>` : ''}
+      <div style="max-height:min(52vh, 460px); overflow-y:auto; margin-bottom:18px;">
         ${txnRows || `<div class="section-sub" style="text-align:center; padding:14px 0;">No transactions logged for ${MONTHS[monthIdx]} — anything you add here will show up in this list, each with an ✕ to remove it.</div>`}
       </div>
       <div class="modal-actions" style="justify-content:space-between;">
