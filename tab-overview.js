@@ -973,6 +973,45 @@ function _openEmailReminderModal(currentEmail){
   });
 }
 
+/* ---------- Net worth breakdown in the browser console ----------
+   Shows exactly which numbers add up to the Net Worth card. It prints automatically whenever the total changes, and you
+   can print it again any time by typing  showNetWorth()  in the console (F12). Read-only: it never changes your data. */
+let _nwLastPrinted = null;
+function logNetWorthBreakdown(b){
+  try{
+    window.__netWorthBreakdown = b;
+    const f = v => Math.round(v * 100) / 100;
+    const key = JSON.stringify([b.year, f(b.netWorth)]);
+    window.showNetWorth = () => printNetWorth(window.__netWorthBreakdown);
+    if(key !== _nwLastPrinted){ _nwLastPrinted = key; printNetWorth(b); }
+  }catch(e){ /* diagnostics must never break the page */ }
+}
+function printNetWorth(b){
+  const f = v => Math.round(v * 100) / 100;
+  const $ = v => (v < 0 ? '-$' : '$') + Math.abs(f(v)).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  console.group(`%c[Ledger] Net Worth ${$(b.netWorth)}  (${b.year}, as of ${b.monthLabel})`, 'color:#C9A961;font-weight:bold');
+  console.log(`USD/INR rate used: ${b.fx}${b.fxIsFallback ? '  ⚠ this is the fixed fallback, the live rate was not available' : ''}`);
+  console.table([
+    { part: '+ Cash on hand',          usd: f(b.cashOnHand),        note: `bank carry-out for ${b.monthLabel}` },
+    { part: '+ Investments',           usd: f(b.invCurrent),        note: `${b.investments.length} platform(s)` },
+    { part: '+ Savings',               usd: f(b.savingsCurrent),    note: `${b.savings.length} account(s)` },
+    { part: '+ Retirement',            usd: f(b.retirementCurrent), note: `${b.retirement.length} account(s)` },
+    { part: '+ Assets',                usd: f(b.assetsCurrent),     note: `${b.assets.length} asset(s)` },
+    { part: '− Debt still owed',       usd: f(-b.debtPending),      note: `${b.debts.length} debt(s)` },
+    { part: '= NET WORTH',             usd: f(b.netWorth),          note: '' },
+  ]);
+  const sect = (title, rows) => { if(rows.length){ console.log(title); console.table(rows); } };
+  sect('Investments (platform → value; "live holdings" uses current stock prices, "manual" uses the typed Current Value)', b.investments);
+  sect('Savings accounts', b.savings);
+  sect('Retirement accounts', b.retirement);
+  sect('Assets', b.assets);
+  sect('Debts (pending balance is subtracted)', b.debts);
+  const sum = f(b.cashOnHand + b.invCurrent + b.savingsCurrent + b.retirementCurrent + b.assetsCurrent - b.debtPending);
+  console.log(sum === f(b.netWorth) ? '✓ parts add up to the total' : `⚠ parts add to ${sum}, card shows ${f(b.netWorth)}`);
+  console.log('Type showNetWorth() any time to print this again.');
+  console.groupEnd();
+}
+
 function renderOverview(){
   const y = state.year;
   const prevY = y-1;
@@ -1016,6 +1055,24 @@ function renderOverview(){
   const debts = yearData(y).debts;
   const debtPending = sumArr(debts.map(d=>debtPendingCalc(d)));
   const netWorth = cashOnHand + invCurrent + savingsCurrent + retirementCurrent + assetsCurrent - debtPending;
+  try{
+    const yd = yearData(y), mIdx = currentSnapshotMonth(y);
+    logNetWorthBreakdown({
+      year: y, monthLabel: (typeof MONTHS !== 'undefined' && MONTHS[cfIdx]) || ('month ' + (cfIdx+1)),
+      fx, fxIsFallback: !(typeof fxRates !== 'undefined' && fxRates && fxRates.INR),
+      cashOnHand, invCurrent, savingsCurrent, retirementCurrent, assetsCurrent, debtPending, netWorth,
+      investments: (yd.investments||[]).map(it => {
+        const rows = (it.holdings && it.holdings.length && typeof platformHoldings === 'function') ? platformHoldings(y, it.id) : [];
+        const live = rows.length > 0;
+        const usd = live ? sumArr(rows.map(r=>r.currentValueUSD)) : (it.currency === 'INR' ? num(it.currentValue) / fx : num(it.currentValue));
+        return { platform: it.name, currency: it.currency, source: live ? `live holdings (${rows.length})` : 'manual current value', native: live ? '' : num(it.currentValue), usd: Math.round(usd*100)/100 };
+      }),
+      savings: (yd.savingsAccounts||[]).map(acc => { const bal = savingsBalanceNativeAt(acc, mIdx>=0?mIdx:0); return { account: acc.name, currency: acc.currency, native: Math.round(bal*100)/100, usd: Math.round((acc.currency==='INR' ? bal/fx : bal)*100)/100 }; }),
+      retirement: (yd.retirementAccounts||[]).map(r => ({ account: r.name, usd: Math.round(retirementAccountTotalBalance(r)*100)/100 })),
+      assets: (yd.assets||[]).map(a => ({ asset: a.name, currency: a.currency, native: num(a.currentValue), usd: Math.round(nativeMonthToUsd(a.currentValue, a.currency, y, assetsMonthIdx)*100)/100 })),
+      debts: (yd.debts||[]).map(d => ({ debt: d.name, pending: Math.round(debtPendingCalc(d)*100)/100 })),
+    });
+  }catch(e){ /* never let the console diagnostics affect the screen */ }
 
   const deltaHtml = (curr,prev,inverse)=>{
     if(!hasPrevYear) return `<div class="kpi-delta flat">no ${prevY} data to compare</div>`;
