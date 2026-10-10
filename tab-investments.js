@@ -33,11 +33,26 @@ async function ensureFxRates(){
     if (typeof recordFxRateSample === 'function' && fxRates.INR) recordFxRateSample(fxRates.INR);
     return fxRates;
   } catch(e) {
-    console.warn('[FX] fetch failed, using fallback', FX_FALLBACK_INR);
-    fxRates = { INR: FX_FALLBACK_INR };
-    fxLastFetch = Date.now();
+    // Prefer the last rate this ledger actually recorded (always closer to reality than a fixed constant).
+    const lastKnown = lastKnownInrRate();
+    const rate = lastKnown || FX_FALLBACK_INR;
+    console.warn('[FX] fetch failed, using', lastKnown ? 'last recorded rate' : 'fixed fallback', rate);
+    fxRates = { INR: rate };
+    fxLastFetch = Date.now() - Math.max(0, FX_TTL - 60000); // retry in ~1 minute, not after the full cache period
     return fxRates;
   }
+}
+function lastKnownInrRate(){
+  try{
+    const hist = (typeof DATA !== 'undefined' && DATA && DATA.fxRateHistory) || {};
+    const keys = Object.keys(hist).sort();
+    for(let i = keys.length - 1; i >= 0; i--){
+      const e = hist[keys[i]] || {};
+      const r = (typeof e.end === 'number' && e.end > 0) ? e.end : (typeof e.latest === 'number' && e.latest > 0 ? e.latest : null);
+      if(r) return r;
+    }
+  }catch(e){}
+  return null;
 }
 
 function inrToUsd(inr, rates){

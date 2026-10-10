@@ -13,8 +13,10 @@
   --teal-soft:#8FC0AC;
   --text:#EEE7D8;
   --text-dim:#A2AEA9;
-  --text-faint:#66746E;
-  --danger:#C6584C;
+  --text-faint:#93A09A;
+  --danger:#E0786C;
+  --bad:var(--danger);          /* broker-import.js uses var(--bad); it was never defined, so errors had no colour */
+  --border:var(--line);        /* broker-import.js separator lines */
   --good:#7FAE79;
   --font-display:'Fraunces', serif;
   --font-body:'IBM Plex Sans', sans-serif;
@@ -153,7 +155,7 @@ a{color:var(--gold-soft);}
   .sidebar.collapsed .sidebar-brand{ justify-content:flex-start; padding:20px 18px 16px; }
   .sidebar.collapsed .side-nav .tab-btn{ justify-content:flex-start; padding:10px 12px; border-radius:0 8px 8px 0; }
   .sidebar.mobile-open{ transform:translateX(0); }
-  .sidebar-collapse-btn{ display:none; } /* collapsing doesn't make sense for an overlay drawer ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â close it instead */
+  .sidebar-collapse-btn{ display:none; } /* collapsing doesn't make sense for an overlay drawer ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â close it instead */
   .main-col{ width:100%; }
   .wrap{ padding-top:64px; } /* room for the fixed hamburger button */
 }
@@ -863,3 +865,29 @@ td.has-tip{ text-decoration:underline; text-decoration-style:dotted; text-decora
 }
 
 .ins-cat-main .ins-pill{white-space:normal; line-height:1.35;}.bank-txn-day-head + .bank-txn-row{ border-top:none; }
+
+
+/* ---------- Form controls used by the broker-import screens (class="input") ---------- */
+.input{
+  font-family:var(--font-mono); font-size:12px; color:var(--text);
+  background:var(--bg); border:1px solid var(--line); border-radius:7px;
+  padding:6px 10px; max-width:100%; box-sizing:border-box; color-scheme:dark;
+}
+select.input{ appearance:none; -webkit-appearance:none; padding-right:26px; cursor:pointer;
+  background-image:linear-gradient(45deg,transparent 50%,var(--text-dim) 50%),linear-gradient(135deg,var(--text-dim) 50%,transparent 50%);
+  background-position:calc(100% - 14px) 52%, calc(100% - 9px) 52%; background-size:5px 5px,5px 5px; background-repeat:no-repeat; }
+.input:hover{ border-color:var(--text-faint); }
+.input:focus, .input:focus-visible{ outline:none; border-color:var(--gold); box-shadow:0 0 0 2px rgba(201,169,97,.25); }
+.input::placeholder{ color:var(--text-faint); }
+.input:disabled{ opacity:.55; cursor:not-allowed; }
+
+/* keyboard users can reach the upload boxes (they're now focusable) */
+.dropzone:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; border-color:var(--gold); color:var(--gold-soft); }
+
+/* phones: finger-sized buttons and pills (they were ~22-26px tall) */
+@media (max-width:640px){
+  .btn.small{ padding:9px 13px; font-size:12px; }
+  .btn{ min-height:36px; }
+  .pill{ padding:8px 13px; font-size:12px; }
+  .input{ font-size:13px; padding:8px 10px; }
+}

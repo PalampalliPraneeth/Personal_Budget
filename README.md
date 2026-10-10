@@ -151,7 +151,7 @@ supabase link --project-ref xxxxxxxxxxxx   # the ref is in your Project URL
 
 ### 5a. Price proxy (`hyper-task`)
 
-This is `Hypertask.ts` in the repo. **Deploy it under the name
+This is `hyper-task.ts` in the repo. **Deploy it under the name
 `hyper-task`** — that's the exact name `storage-bridge.js` already expects
 (`window.PRICE_PROXY_URL` is hardcoded to `/functions/v1/hyper-task`), so
 using that name means zero extra config.
@@ -178,12 +178,16 @@ sends a proper auth header, so the default JWT verification stays on.
 
 ### 5c. Recurring investment reminders (`send-recurring-reminders`)
 
-This is `send-recurring-reminders.ts`. Same check — confirm `LEDGER_ID`
+This is `quick-action.ts` in the repo (its header still says `send-recurring-reminders`). Same check — confirm `LEDGER_ID`
 matches.
 
 ```bash
 supabase functions deploy send-recurring-reminders
 ```
+
+> The command above deploys the code under the name `send-recurring-reminders`. Since the file in this repo is called
+> `quick-action.ts`, copy/rename it first (for example to `supabase/functions/send-recurring-reminders/index.ts`), or paste its
+> contents into a function you create with that name in the dashboard. The deployed NAME is what the cron URL uses.
 
 > **Naming tip, from hard experience:** deploy this under the name
 > `send-recurring-reminders` — i.e. matching the filename exactly. An

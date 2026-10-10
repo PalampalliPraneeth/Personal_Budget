@@ -93,7 +93,7 @@ function renderDataTab(){
     <div class="card">
       <div class="card-head"><h3>Import a spreadsheet</h3></div>
       <div class="notice">Works best with a workbook shaped like your original tracker: a sheet named for the year (e.g. <b>2026</b>), with group headers like <b>INCOME</b>, <b>HOME</b>, <b>Investment</b>, or <b>Loan Payments</b> followed by <b>JAN…DEC</b> columns, each ending in a <b>Total</b> row. Re-uploading it any time refreshes this ledger — including brand-new categories you've added in Excel.</div>
-      <div class="dropzone" id="dropzone">
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Drop an .xlsx file here, or press Enter to browse">
         <div>📄 Drop an .xlsx file here, or click to browse</div>
         <div style="font-size:11px; margin-top:6px; color:var(--text-faint);">Data is parsed entirely in your browser — nothing is uploaded anywhere.</div>
         <input type="file" id="fileInput" accept=".xlsx,.xls">
@@ -118,6 +118,7 @@ function renderDataTab(){
   const dz = document.getElementById('dropzone');
   const fi = document.getElementById('fileInput');
   dz.addEventListener('click', ()=>fi.click());
+  dz.addEventListener('keydown', (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); fi.click(); } });   // keyboard access
   ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault(); dz.classList.add('drag');}));
   ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault(); dz.classList.remove('drag');}));
   dz.addEventListener('drop', (e)=>{ const f=e.dataTransfer.files[0]; if(f) handleFile(f); });

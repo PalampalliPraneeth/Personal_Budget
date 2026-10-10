@@ -142,7 +142,7 @@ function openRecurringModal(h, y, onSave, onRemove){
   ];
   overlay.innerHTML = `
     <div class="modal-card" style="width:420px;">
-      <h3>🔁 Recurring buy — ${h.symbol}</h3>
+      <h3>🔁 Recurring buy — ${escapeHtml(String(h.name||'').trim() || h.symbol || '')}</h3>
       <p class="modal-sub">Same frequency options Robinhood and AngelOne offer for scheduled buys/SIPs, plus specific-day(s) for anything more custom. Purely a tracker — nothing places an order automatically.</p>
       <div class="modal-field">
         <label>Amount per buy</label>
@@ -623,7 +623,7 @@ function recordPortfolioSnapshot(y, silent){
     platforms[inv.id] = { totalValue: pValue, totalInvested: pInvested, totalPl: pValue-pInvested };
   });
   const filtered = snaps.filter(s => s.date !== today);
-  filtered.push({date: today, totalValue, totalInvested, totalPl: totalValue-totalInvested, holdings, platforms});
+  filtered.push({date: today, at: new Date().toISOString(), totalValue, totalInvested, totalPl: totalValue-totalInvested, holdings, platforms});
   yearData(y).portfolioSnapshots = filtered.slice(-365); // keep last year of daily snaps
   markDirty('holdings');
   if(!silent) showToast('Snapshot recorded: '+today);
@@ -1219,6 +1219,73 @@ function openSellModal(h, onConfirm){
   qtyEl.focus(); qtyEl.select();
 }
 
+/* ---------- Saved view (remembers how you left the Holdings screen) ----------
+   Remembers: the table's sort order and Type filter, the region pill, the Holdings/Recurring/Watchlist/Sold
+   switch, and the sort + Type picked on the Top Gainers and Top Losers cards. Stored under its own key (NOT inside
+   your ledger data), so changing a view never marks the ledger "unsaved" and never touches your numbers. */
+const HOLDINGS_VIEW_KEY = 'ledger:ui:holdingsView:v1';
+const HOLDINGS_SORTS = ['valueDesc','valueAsc','nameAsc','nameDesc','investedDesc','investedAsc','plDesc','plAsc','type','dayplDesc','dayplAsc'];
+const MOVERS_SORTS = ['pct','pl','value'];
+const MOVERS_SORT_LABELS = { pct:'Day change %', pl:'Day P&L ($)', value:'Holding value' };
+let _holdingsViewLoaded = false;
+function _hvClean(v){
+  const out = {};
+  if(!v || typeof v !== 'object') return out;
+  if(HOLDINGS_SORTS.includes(v.sort)) out.sort = v.sort;
+  if(v.types === null) out.types = null;
+  else if(Array.isArray(v.types)){
+    const t = v.types.filter(x => HOLDING_TYPES.includes(x));
+    out.types = (t.length && t.length < HOLDING_TYPES.length) ? t : null; // empty/full list = "All types"
+  }
+  if(['all','IN','US'].includes(v.region)) out.region = v.region;
+  if(['open','recurring','watchlist','sold'].includes(v.subView)) out.subView = v.subView;
+  ['gain','loss'].forEach(k => {
+    const m = v[k]; if(!m || typeof m !== 'object') return;
+    out[k] = { sort: MOVERS_SORTS.includes(m.sort) ? m.sort : 'pct', type: (m.type === 'ALL' || HOLDING_TYPES.includes(m.type)) ? m.type : 'ALL' };
+  });
+  return out;
+}
+function _hvApply(v){
+  if(v.sort !== undefined) state.holdingsSort = v.sort;
+  if(v.types !== undefined) state.holdingsTypeFilter = v.types;
+  if(v.region !== undefined) state.holdingsRegion = v.region;
+  if(v.subView !== undefined) state.holdingsSubView = v.subView;
+  if(v.gain) state.moversGain = v.gain;
+  if(v.loss) state.moversLoss = v.loss;
+}
+function _hvSnapshot(){
+  return { sort: state.holdingsSort, types: state.holdingsTypeFilter, region: state.holdingsRegion, subView: state.holdingsSubView,
+           gain: state.moversGain, loss: state.moversLoss };
+}
+function saveHoldingsView(){
+  let json; try{ json = JSON.stringify(_hvSnapshot()); }catch(e){ return; }
+  try{ localStorage.setItem(HOLDINGS_VIEW_KEY, json); }catch(e){}            // instant, this device
+  try{ if(window.storage) Promise.resolve(window.storage.set(HOLDINGS_VIEW_KEY, json, false)).catch(()=>{}); }catch(e){} // follows you to other devices
+}
+function loadHoldingsViewOnce(){
+  if(_holdingsViewLoaded) return;
+  _holdingsViewLoaded = true;
+  let local = null;
+  try{ local = JSON.parse(localStorage.getItem(HOLDINGS_VIEW_KEY) || 'null'); }catch(e){}
+  _hvApply(_hvClean(local));
+  // then check the cloud copy once; if it differs (saved from another device) apply it and redraw
+  try{
+    if(window.storage && typeof window.storage.get === 'function'){
+      Promise.resolve(window.storage.get(HOLDINGS_VIEW_KEY, false)).then(res => {
+        if(!res || !res.value) return;
+        let remote = null; try{ remote = JSON.parse(res.value); }catch(e){ return; }
+        const clean = _hvClean(remote);
+        const before = JSON.stringify(_hvSnapshot());
+        _hvApply(clean);
+        if(JSON.stringify(_hvSnapshot()) !== before){
+          try{ localStorage.setItem(HOLDINGS_VIEW_KEY, JSON.stringify(_hvSnapshot())); }catch(e){}
+          if(document.getElementById('panel-holdings') && document.getElementById('panel-holdings').offsetParent !== null) renderHoldings();
+        }
+      }).catch(()=>{});
+    }
+  }catch(e){}
+}
+
 /* ---------- Render ---------- */
 function renderHoldings(){
   const y = state.year;
@@ -1230,12 +1297,15 @@ function renderHoldings(){
   if(_priceRefreshTimestamp === undefined){
     ensurePriceRefreshTimestamp().then(() => { renderHoldings(); });
   }
+  loadHoldingsViewOnce();
   if(!state.holdingsView) state.holdingsView = 'ALL';
   if(state.holdingsSubView === undefined) state.holdingsSubView = 'open';
   if(state.holdingsTypeFilter === undefined) state.holdingsTypeFilter = null; // null = All types
   if(state.holdingsTypeFilterOpen === undefined) state.holdingsTypeFilterOpen = false;
   if(state.holdingsSort === undefined) state.holdingsSort = 'valueDesc';
   if(state.holdingsFilter === undefined) state.holdingsFilter = '';
+  if(!state.moversGain) state.moversGain = { sort:'pct', type:'ALL' };
+  if(!state.moversLoss) state.moversLoss = { sort:'pct', type:'ALL' };
 
   if(!state.holdingsTimeframe) state.holdingsTimeframe = 'ALL';
   const snaps = filterSnapshots(getChartSnapshots(y), state.holdingsTimeframe, y);
@@ -1245,6 +1315,7 @@ function renderHoldings(){
   const isAll = state.holdingsView === 'ALL';
   let rows = isAll ? allRows : platformHoldings(y, state.holdingsView);
   let soldGroups = isAll ? allSoldHoldingsByPlatform(y) : [{ platformId: state.holdingsView, platformName: (investments.find(i=>i.id===state.holdingsView)||{}).name || '', rows: platformSoldHoldings(y, state.holdingsView) }].filter(g=>g.rows.length>0);
+  const rowsBeforeTypeFilter = rows; // the Gainers/Losers cards have their own Type picker, independent of the table's
   if(state.holdingsTypeFilter !== null){
     const activeTypes = state.holdingsTypeFilter;
     rows = rows.filter(r => activeTypes.includes(r.type));
@@ -1633,38 +1704,56 @@ function renderHoldings(){
   /* ---- Portfolio history chart ---- */
   const platformSnaps = isAll ? snaps : snaps.filter(s => s.platforms && s.platforms[state.holdingsView]);
 
-  /* ---- Today's Top Gainers / Losers ---- */
-  /* ---- Today's Top Gainers / Losers ---- */
+  /* ---- Today's Top Gainers / Losers ----
+     Shows each holding by NAME (same short name the P&L bar chart uses; hover for the full name + symbol).
+     Each card has its own "Sort by" and "Type" picker, and both are remembered (see saveHoldingsView). */
   const moversSection = (showSold || showRecurring || showWatchlist) ? '' : (() => {
-    const moversRows = rows.filter(r => r.dayChangePct !== null && r.dayChangePct !== undefined);
-    const topGainers = [...moversRows].sort((a,b)=>b.dayChangePct-a.dayChangePct).slice(0,5);
-    const topLosers = [...moversRows].sort((a,b)=>a.dayChangePct-b.dayChangePct).filter(r=>r.dayChangePct<0).slice(0,5);
-    const moversHead = `<thead><tr><th>Symbol</th><th style="text-align:right;">Day Change</th><th style="text-align:right;">Day P&L</th></tr></thead>`;
-    const moversRow = (r, positive) => `
+    const regionOk = r => !isAll || state.holdingsRegion === 'all' || (r.regions && r.regions.includes(state.holdingsRegion));
+    const pool = rowsBeforeTypeFilter.filter(r => regionOk(r) && r.dayChangePct !== null && r.dayChangePct !== undefined && isFinite(r.dayChangePct));
+    if(!pool.length) return '';
+    const valOf = r => (r.currentValueUSD !== undefined ? r.currentValueUSD : r.currentValue) || 0;
+    const metric = { pct: r => r.dayChangePct, pl: r => r.dayPLUSD || 0, value: valOf };
+    const pick = (cfg, positive) => {
+      const typed = pool.filter(r => cfg.type === 'ALL' || r.type === cfg.type);
+      const side = typed.filter(r => positive ? r.dayChangePct > 0 : r.dayChangePct < 0);
+      const f = metric[cfg.sort] || metric.pct;
+      // gainers: biggest first. losers: for % and P&L the worst (most negative) first; for value, biggest holding first.
+      const dir = (positive || cfg.sort === 'value') ? -1 : 1;
+      return [...side].sort((a,b) => dir * (f(a) - f(b)) || (a.symbol||'').localeCompare(b.symbol||'')).slice(0,5);
+    };
+    const gain = pick(state.moversGain, true), loss = pick(state.moversLoss, false);
+    const nameOf = r => _shortLabel(r) || r.symbol || '';
+    const fullTip = r => (r.name && r.symbol && r.name !== r.symbol) ? `${r.name} (${r.symbol})` : (r.name || r.symbol || '');
+    const head = `<thead><tr><th>Name</th><th style="text-align:right;">Day Change</th><th style="text-align:right;">Day P&L</th></tr></thead>`;
+    const row = (r, positive) => `
       <tr>
-        <td style="font-weight:600;">${escapeHtml(r.symbol)}</td>
+        <td style="font-weight:600;" title="${escapeHtml(fullTip(r))}">${escapeHtml(nameOf(r))}</td>
         <td style="text-align:right; color:${positive?'var(--good)':'var(--danger)'}; font-family:var(--font-mono); font-weight:600;">${r.dayChangePct>=0?'+':''}${r.dayChangePct.toFixed(2)}%</td>
         <td style="text-align:right; color:${positive?'var(--good)':'var(--danger)'}; font-family:var(--font-mono); font-size:11.5px;">${(r.dayPLUSD||0)>=0?'+':''}${fmt$(r.dayPLUSD||0,2)}</td>
       </tr>`;
-    if(!moversRows.length) return '';
+    const selStyle = 'appearance:none;-webkit-appearance:none;background:var(--bg);color:var(--text);border:1px solid var(--line);padding:5px 22px 5px 9px;border-radius:7px;font-family:var(--font-mono);font-size:11.5px;cursor:pointer;';
+    const controls = (which, cfg) => `
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <select data-movers-sort="${which}" title="Sort by" style="${selStyle}">
+          ${MOVERS_SORTS.map(k => `<option value="${k}" ${cfg.sort===k?'selected':''}>Sort: ${MOVERS_SORT_LABELS[k]}</option>`).join('')}
+        </select>
+        <select data-movers-type="${which}" title="Type" style="${selStyle}">
+          <option value="ALL" ${cfg.type==='ALL'?'selected':''}>Type: All</option>
+          ${HOLDING_TYPES.map(t => `<option value="${t}" ${cfg.type===t?'selected':''}>Type: ${t}</option>`).join('')}
+        </select>
+      </div>`;
+    const card = (title, which, cfg, list, positive, emptyMsg) => `
+      <div class="card" style="min-width:0;">
+        <div class="card-head" style="flex-wrap:wrap; gap:8px;"><h3>${title}</h3>${controls(which, cfg)}</div>
+        ${!list.length ? `<div class="section-sub" style="padding:12px 0; text-align:center;">${emptyMsg}</div>` : `
+        <div class="table-scroll">
+          <table class="ledger" style="min-width:0; width:100%;">${head}<tbody>${list.map(r=>row(r,positive)).join('')}</tbody></table>
+        </div>`}
+      </div>`;
     return `
     <div class="grid-2" style="margin-bottom:20px; grid-template-columns:1fr 1fr;">
-      <div class="card" style="min-width:0;">
-        <div class="card-head"><h3>🚀 Today's Top Gainers</h3></div>
-        ${!topGainers.length ? '<div class="section-sub" style="padding:12px 0; text-align:center;">Nothing up today.</div>' : `
-        <div class="table-scroll">
-          <table class="ledger" style="min-width:0; width:100%;">${moversHead}<tbody>${topGainers.map(r=>moversRow(r,true)).join('')}</tbody></table>
-        </div>
-        `}
-      </div>
-      <div class="card" style="min-width:0;">
-        <div class="card-head"><h3>📉 Today's Top Losers</h3></div>
-        ${!topLosers.length ? '<div class="section-sub" style="padding:12px 0; text-align:center;">Nothing down today.</div>' : `
-        <div class="table-scroll">
-          <table class="ledger" style="min-width:0; width:100%;">${moversHead}<tbody>${topLosers.map(r=>moversRow(r,false)).join('')}</tbody></table>
-        </div>
-        `}
-      </div>
+      ${card("🚀 Today's Top Gainers", 'gain', state.moversGain, gain, true, state.moversGain.type==='ALL' ? 'Nothing up today.' : 'Nothing up today in this type.')}
+      ${card("📉 Today's Top Losers", 'loss', state.moversLoss, loss, false, state.moversLoss.type==='ALL' ? 'Nothing down today.' : 'Nothing down today in this type.')}
     </div>`;
   })();
 
@@ -1889,10 +1978,18 @@ function renderHoldings(){
 
   /* ---- Toggle handler ---- */
   document.querySelectorAll('[data-subview]').forEach(b => b.addEventListener('click', ()=>{
-    state.holdingsSubView = b.dataset.subview; renderHoldings();
+    state.holdingsSubView = b.dataset.subview; saveHoldingsView(); renderHoldings();
   }));
   document.querySelectorAll('[data-region]').forEach(b => b.addEventListener('click', ()=>{
-    state.holdingsRegion = b.dataset.region; state.holdingsPage = 1; renderHoldings();
+    state.holdingsRegion = b.dataset.region; state.holdingsPage = 1; saveHoldingsView(); renderHoldings();
+  }));
+  document.querySelectorAll('[data-movers-sort]').forEach(el => el.addEventListener('change', ()=>{
+    const cfg = el.dataset.moversSort === 'gain' ? state.moversGain : state.moversLoss;
+    cfg.sort = MOVERS_SORTS.includes(el.value) ? el.value : 'pct'; saveHoldingsView(); renderHoldings();
+  }));
+  document.querySelectorAll('[data-movers-type]').forEach(el => el.addEventListener('change', ()=>{
+    const cfg = el.dataset.moversType === 'gain' ? state.moversGain : state.moversLoss;
+    cfg.type = (el.value === 'ALL' || HOLDING_TYPES.includes(el.value)) ? el.value : 'ALL'; saveHoldingsView(); renderHoldings();
   }));
   const pagePrevBtn = document.getElementById('holdPagePrev');
   if(pagePrevBtn) pagePrevBtn.addEventListener('click', ()=>{ state.holdingsPage = Math.max(1, state.holdingsPage-1); renderHoldings(); });
@@ -1908,6 +2005,7 @@ function renderHoldings(){
   if(typeFilterAll) typeFilterAll.addEventListener('change', ()=>{
     state.holdingsTypeFilter = typeFilterAll.checked ? null : [];
     state.holdingsPage = 1;
+    saveHoldingsView();
     renderHoldings();
   });
   document.querySelectorAll('.typeFilterBox').forEach(cb => cb.addEventListener('change', ()=>{
@@ -1916,6 +2014,7 @@ function renderHoldings(){
     else { sel = sel.filter(t => t !== cb.value); }
     state.holdingsTypeFilter = sel;
     state.holdingsPage = 1;
+    saveHoldingsView();
     renderHoldings();
   }));
 
@@ -2365,6 +2464,7 @@ function renderHoldings(){
     sortSelect.addEventListener('change', (e)=>{
       state.holdingsSort = e.target.value;
       state.holdingsPage = 1;
+      saveHoldingsView();
       renderHoldings();
     });
   }

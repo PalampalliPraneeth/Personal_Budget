@@ -85,17 +85,55 @@ async function handleSector(symbol: string): Promise<Response> {
   return json({ symbol, sector, industry });
 }
 
+/* ---- Abuse guard -------------------------------------------------------
+   This endpoint is public (no login, so the browser can call it). Without a
+   limit anyone could hammer it and get your Supabase project's Yahoo traffic
+   rate-limited or blocked -- which would also break your daily price refresh.
+   1) Symbols must look like real tickers (A-Z 0-9 . - = ^ _ , max 24 chars).
+   2) Each caller IP gets RATE_LIMIT requests per window. This is kept in
+      memory per function instance, so it is a best-effort brake (not a hard
+      guarantee), but it stops casual hammering. Normal use is far below it.
+   3) Optional: set the ALLOWED_ORIGIN secret (e.g. https://yourledger.vercel.app)
+      to only answer your own site. Leave it unset to allow any site.      */
+const RATE_LIMIT = 90;            // requests
+const RATE_WINDOW_MS = 60_000;    // per minute, per IP
+const SYMBOL_RE = /^[A-Za-z0-9.\-=^_]{1,24}$/;
+const hits = new Map<string, { n: number; reset: number }>();
+function rateLimited(ip: string): boolean {
+  const now = Date.now();
+  if (hits.size > 5000) { for (const [k, v] of hits) if (v.reset < now) hits.delete(k); if (hits.size > 5000) hits.clear(); }
+  const e = hits.get(ip);
+  if (!e || e.reset < now) { hits.set(ip, { n: 1, reset: now + RATE_WINDOW_MS }); return false; }
+  e.n++;
+  return e.n > RATE_LIMIT;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
   }
 
   try {
+    const allowedOrigin = (Deno.env.get('ALLOWED_ORIGIN') ?? '').trim();
+    const origin = req.headers.get('origin') ?? '';
+    if (allowedOrigin && origin && origin !== allowedOrigin) {
+      return json({ error: 'origin not allowed' }, 403);
+    }
+    const ip = (req.headers.get('x-forwarded-for') ?? req.headers.get('cf-connecting-ip') ?? 'unknown').split(',')[0].trim();
+    if (rateLimited(ip)) {
+      return new Response(JSON.stringify({ error: 'Too many requests -- slow down and try again in a minute.' }), {
+        status: 429,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': '60' },
+      });
+    }
     const url = new URL(req.url);
     const symbol = url.searchParams.get('symbol');
     const mode = url.searchParams.get('mode');
     if (!symbol) {
       return json({ error: 'symbol query param is required' }, 400);
+    }
+    if (!SYMBOL_RE.test(symbol)) {
+      return json({ error: 'invalid symbol' }, 400);
     }
     if (mode === 'sector') {
       return await handleSector(symbol);
@@ -171,8 +209,9 @@ Deno.serve(async (req: Request) => {
 });
 
 function json(body: unknown, status = 200): Response {
+  const ao = (Deno.env.get('ALLOWED_ORIGIN') ?? '').trim();
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    headers: { ...CORS_HEADERS, ...(ao ? { 'Access-Control-Allow-Origin': ao, Vary: 'Origin' } : {}), 'Content-Type': 'application/json' },
   });
 }

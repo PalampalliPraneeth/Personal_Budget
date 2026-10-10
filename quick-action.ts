@@ -467,6 +467,52 @@ function buildForwardCalendar(
 }
 
 /* ---------------------------------------------------------------------
+   Collect every ACTIVE recurring plan, exactly ONCE per real-world holding.
+   FIX: year-sync.js copies a holding's `recurring` setting into every later
+   year, so the same plan lives in 2026 AND 2027 (and so on). The old loops
+   walked every year and counted each copy -> doubled/tripled amounts in the
+   reminder email and duplicated rows in the forward calendar. Now years are
+   walked newest-first and a plan is skipped if the same holding (matched by
+   its shared `sid`, else platform+symbol) was already taken. The planId uses
+   that stable identity (not the year) so dedupe keys don't change when a new
+   year is added.
+   --------------------------------------------------------------------- */
+type ActivePlan = { planId: string; symbol: string; platform: string; amount: number; currency: string; bankAccountId: string | null; bank: any | null; recurring: any };
+function collectActivePlans(DATA: any): ActivePlan[] {
+  const out: ActivePlan[] = [];
+  const seenInYear = new Map<string, string>(); // identity -> the year it was first taken from
+  const countInYear = new Map<string, number>(); // identity -> how many times taken (same-year twins get a #n suffix)
+  const years = Object.keys(DATA || {}).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(b) - Number(a));
+  for (const yearKey of years) {
+    const banks = DATA[yearKey]?.banks || [];
+    for (const inv of DATA[yearKey]?.investments || []) {
+      if (!inv) continue;
+      for (const h of inv.holdings || []) {
+        if (!h?.recurring?.active) continue;
+        const norm = normalizedRecurring(h.recurring);
+        const hasSchedule = norm.frequencyType === 'daysOfMonth' ? !!norm.daysOfMonth?.length : !!norm.startDate;
+        if (!hasSchedule) continue;
+        const platformKey = String(inv.sid || inv.name || inv.id || '').trim().toLowerCase();
+        const holdingKey = String(h.sid || h.symbol || h.name || h.id || '').trim().toLowerCase();
+        const identity = `${platformKey}|${holdingKey}`;
+        const takenFrom = seenInYear.get(identity);
+        if (takenFrom !== undefined && takenFrom !== yearKey) continue; // copy of a holding already taken from a newer year
+        seenInYear.set(identity, yearKey);
+        const n = (countInYear.get(identity) || 0) + 1; countInYear.set(identity, n);
+        const bankAccountId = norm.bankAccountId || null;
+        const bank = bankAccountId ? (banks.find((b: any) => b.id === bankAccountId && b.type !== 'credit') || null) : null;
+        out.push({
+          planId: n === 1 ? identity : `${identity}#${n}`, symbol: h.symbol || h.name || 'a holding', platform: inv.name || 'a platform',
+          amount: Number(norm.amount) || 0, currency: inv.currency || 'USD',
+          bankAccountId, bank, recurring: norm,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------------
    Main run.
    --------------------------------------------------------------------- */
 async function runReminderCheck(testMode = false) {
@@ -494,27 +540,8 @@ async function runReminderCheck(testMode = false) {
     const today = new Date(); today.setUTCHours(0, 0, 0, 0);
     const monthIdx = today.getUTCMonth();
 
-    // ---- Collect every active plan across every year, resolving its funding bank up front ----
-    const allPlans: { planId: string; symbol: string; platform: string; amount: number; currency: string; bankAccountId: string | null; bank: any | null; recurring: any }[] = [];
-    for (const yearKey of Object.keys(DATA)) {
-      if (!/^\d+$/.test(yearKey)) continue;
-      const banks = DATA[yearKey]?.banks || [];
-      for (const inv of DATA[yearKey]?.investments || []) {
-        for (const h of inv.holdings || []) {
-          if (!h.recurring?.active) continue;
-          const norm = normalizedRecurring(h.recurring);
-          const hasSchedule = norm.frequencyType === 'daysOfMonth' ? !!norm.daysOfMonth?.length : !!norm.startDate;
-          if (!hasSchedule) continue;
-          const bankAccountId = norm.bankAccountId || null;
-          const bank = bankAccountId ? (banks.find((b: any) => b.id === bankAccountId && b.type !== 'credit') || null) : null;
-          allPlans.push({
-            planId: `${yearKey}:${h.id}`, symbol: h.symbol || h.name || 'a holding', platform: inv.name || 'a platform',
-            amount: Number(norm.amount) || 0, currency: inv.currency || 'USD',
-            bankAccountId, bank, recurring: norm,
-          });
-        }
-      }
-    }
+    // ---- Collect every active plan (once per holding, not once per year) ----
+    const allPlans = collectActivePlans(DATA);
     if (!allPlans.length) { console.log('send-recurring-reminders: no active recurring plans'); return; }
 
     // ---- Bucket by lead time: which plans' NEXT occurrence is exactly 7 / 3 / 1 day(s) away ----
@@ -692,50 +719,8 @@ async function runRealTestCheck() {
     today.setUTCHours(0, 0, 0, 0);
     const monthIdx = today.getUTCMonth();
 
-    // Load the same real active recurring plans used by production mode.
-    const allPlans: {
-      planId: string;
-      symbol: string;
-      platform: string;
-      amount: number;
-      currency: string;
-      bankAccountId: string | null;
-      bank: any | null;
-      recurring: any;
-    }[] = [];
-
-    for (const yearKey of Object.keys(DATA)) {
-      if (!/^\d+$/.test(yearKey)) continue;
-      const banks = DATA[yearKey]?.banks || [];
-
-      for (const inv of DATA[yearKey]?.investments || []) {
-        for (const h of inv.holdings || []) {
-          if (!h.recurring?.active) continue;
-
-          const norm = normalizedRecurring(h.recurring);
-          const hasSchedule = norm.frequencyType === 'daysOfMonth'
-            ? !!norm.daysOfMonth?.length
-            : !!norm.startDate;
-          if (!hasSchedule) continue;
-
-          const bankAccountId = norm.bankAccountId || null;
-          const bank = bankAccountId
-            ? (banks.find((b: any) => b.id === bankAccountId && b.type !== 'credit') || null)
-            : null;
-
-          allPlans.push({
-            planId: `${yearKey}:${h.id}`,
-            symbol: h.symbol || h.name || 'a holding',
-            platform: inv.name || 'a platform',
-            amount: Number(norm.amount) || 0,
-            currency: inv.currency || 'USD',
-            bankAccountId,
-            bank,
-            recurring: norm,
-          });
-        }
-      }
-    }
+    // Same de-duplicated plan list production uses.
+    const allPlans = collectActivePlans(DATA);
 
     if (!allPlans.length) {
       console.log('send-recurring-reminders: REAL TEST — no active recurring plans');

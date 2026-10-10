@@ -107,5 +107,4 @@ window.PRICE_PROXY_URL = 'https://dkwdzvwaoxekicycednh.supabase.co/functions/v1/
   };
 
   window.storage = useSupabase ? supaStorage : localStorageBackend;
-  console.log('[Ledger Storage]', useSupabase ? 'Supabase cloud (' + cleanUrl + ')' : 'localStorage fallback');
 })();

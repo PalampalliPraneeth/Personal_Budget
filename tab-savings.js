@@ -489,10 +489,12 @@ function renderRetirementSection(y, retAccounts){
       if(hist.before) parts.push('Before '+hist.before.year+': '+fmtNative(hist.before[kind], r.currency));
       hist.years.forEach(h=>parts.push(h.year+': '+fmtNative(h[kind], r.currency)));
       const auto = r.carryFromPrior && !r.priorManual;
-      if(!parts.length) return (auto ? 'Automatic' : 'Typed by you')+' — nothing earlier on record. Click to edit.';
+      if(!parts.length) return num(r[kind==='self'?'priorSelf':'priorEmployer'])===0
+        ? 'Nothing carried from earlier years. Click to type a starting amount.'
+        : 'Starting amount on this account — no earlier year on record. Click to edit.';
       return (r.priorManual ? 'Typed by you (overrides the automatic total). Earlier years on record -- ' : (auto ? 'Automatic total of earlier years -- ' : 'Typed by you. Earlier years on record -- '))+parts.join(' · ');
     };
-    const carriedCell = (field, kind)=>`<td class="editable-inline" contenteditable="true" data-retfield="${field}" data-id="${r.id}" data-tip="${histTip(kind).replace(/"/g,'&quot;')}" style="color:var(--gold-soft); font-weight:600;">${roundCents(num(r[field]))}</td>`;
+    const carriedCell = (field, kind)=>`<td class="editable-inline" contenteditable="true" data-retfield="${field}" data-id="${r.id}" data-tip="${histTip(kind).replace(/"/g,'&quot;')}" style="color:var(--gold-soft); font-weight:600;">${num(r[field])===0 ? '–' : roundCents(num(r[field]))}</td>`;
     const toDateCell = (prior, yearTotal)=>`<td style="font-weight:700; color:var(--teal-soft);" title="Carried from prior years + this year">${fmtNative(roundCents(num(prior)+yearTotal), r.currency)}</td>`;
     return `
     <tr data-ret-id="${r.id}" style="border-top:2px solid var(--line-soft);">

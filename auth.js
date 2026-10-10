@@ -55,7 +55,7 @@ function showPinOverlay(onSuccess){
         ${[1,2,3,4,5,6,7,8,9].map(n=>`<button class="pin-key" data-num="${n}">${n}</button>`).join('')}
         <button class="pin-key" data-action="clear">Clear</button>
         <button class="pin-key" data-num="0">0</button>
-        <button class="pin-key" data-action="back">⌫</button>
+        <button class="pin-key" data-action="back" aria-label="Delete last digit" title="Delete last digit">⌫</button>
       </div>
       <div class="pin-error" id="pinError">&nbsp;</div>
       <div class="pin-caveat">This PIN only keeps the ledger from casual glances — the code lives in this page itself, so it isn't real security. Don't rely on it to protect anything you truly need to keep private. You'll be asked for it on every refresh.</div>

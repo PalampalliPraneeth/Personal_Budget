@@ -296,7 +296,7 @@ export function recordSnapshotsForAllYears(DATA: any, fxRate: number, today = ne
     const snap = computeYearSnapshot(yd, fxRate);
     yd.portfolioSnapshots = yd.portfolioSnapshots
       .filter((s: any) => s.date !== today)
-      .concat([{ date: today, ...snap }])
+      .concat([{ date: today, at: new Date().toISOString(), ...snap }])
       .slice(-365);
   }
 }

@@ -2,7 +2,10 @@
 // No npm install needed — Vercel auto-detects this file and runs it at the
 // edge before serving any page, for any project type (static sites included).
 
-const ALLOWED_COUNTRIES = ['US']; // two-letter ISO codes, add/remove as needed , 'IN'
+// Two-letter ISO codes. Default is US only. To also allow another country (e.g. you travel to India) WITHOUT
+// editing code: in Vercel -> Project -> Settings -> Environment Variables add  ALLOWED_COUNTRIES = US,IN  and redeploy.
+const ALLOWED_COUNTRIES = (((typeof process !== 'undefined' && process.env && process.env.ALLOWED_COUNTRIES) || 'US')
+  .split(',').map(c => c.trim().toUpperCase()).filter(Boolean));
 
 export const config = {
   // Runs on page requests, skips static assets so CSS/JS/images for an

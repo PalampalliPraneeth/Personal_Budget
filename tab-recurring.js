@@ -59,10 +59,113 @@ function nextNOccurrences(norm, count){
   return dates;
 }
 
+/* ---------- Names (not tickers) + saved view for this tab ---------- */
+const RECUR_VIEW_KEY = 'ledger:ui:recurringView:v1';
+const RECUR_SORTS = { next:'Next date', name:'Name A→Z', amount:'Amount (high→low)', platform:'Platform' };
+let _recurViewLoaded = false;
+/* A holding is shown by its NAME; the ticker only appears on hover. Falls back to the ticker if there is no name. */
+function recurName(x){ return (x && (String(x.name||'').trim() || x.symbol)) || ''; }
+function recurTip(x){ return (x && x.name && x.symbol && String(x.name).trim() !== x.symbol) ? `${x.name} (${x.symbol})` : recurName(x); }
+function _recurCleanView(v){
+  const out = {};
+  if(!v || typeof v !== 'object') return out;
+  if(typeof v.platform === 'string' && v.platform.length < 80) out.platform = v.platform;
+  if(Object.prototype.hasOwnProperty.call(RECUR_SORTS, v.sort)) out.sort = v.sort;
+  return out;
+}
+function saveRecurringView(){
+  let json; try{ json = JSON.stringify({ platform: state.recurringPlatform, sort: state.recurringSort }); }catch(e){ return; }
+  try{ localStorage.setItem(RECUR_VIEW_KEY, json); }catch(e){}
+  try{ if(window.storage) Promise.resolve(window.storage.set(RECUR_VIEW_KEY, json, false)).catch(()=>{}); }catch(e){}
+}
+function loadRecurringViewOnce(){
+  if(_recurViewLoaded) return;
+  _recurViewLoaded = true;
+  const apply = v => { if(v.platform !== undefined) state.recurringPlatform = v.platform; if(v.sort !== undefined) state.recurringSort = v.sort; };
+  try{ apply(_recurCleanView(JSON.parse(localStorage.getItem(RECUR_VIEW_KEY) || 'null'))); }catch(e){}
+  try{
+    if(window.storage && typeof window.storage.get === 'function'){
+      Promise.resolve(window.storage.get(RECUR_VIEW_KEY, false)).then(res => {
+        if(!res || !res.value) return;
+        let v = null; try{ v = _recurCleanView(JSON.parse(res.value)); }catch(e){ return; }
+        const before = state.recurringPlatform + '|' + state.recurringSort;
+        apply(v);
+        if(before !== state.recurringPlatform + '|' + state.recurringSort){
+          const p = document.getElementById('panel-recurring');
+          if(p && p.offsetParent !== null) renderRecurring();
+        }
+      }).catch(()=>{});
+    }
+  }catch(e){}
+}
+
+/* "➕ Add recurring plan": pick a platform + holding, then the same editor the ✏️ button opens. */
+function openAddRecurringPicker(y, preferPlatformId, onPicked){
+  const old = document.getElementById('recurPickOverlay'); if(old) old.remove();
+  const investments = (yearData(y).investments || []).filter(inv => (inv.holdings||[]).some(h => h.status !== 'closed'));
+  const overlay = document.createElement('div');
+  overlay.id = 'recurPickOverlay'; overlay.className = 'modal-overlay';
+  if(!investments.length){
+    overlay.innerHTML = `<div class="modal-card" style="width:380px;"><h3>➕ Add recurring plan</h3>
+      <p class="modal-sub">You don't have any open holdings yet. Add a holding in the Holdings tab first, then come back.</p>
+      <div class="modal-actions"><button class="btn small" id="recurPickClose">Close</button></div></div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#recurPickClose').addEventListener('click', ()=>overlay.remove());
+    overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
+    return;
+  }
+  const startId = investments.some(i => i.id === preferPlatformId) ? preferPlatformId : investments[0].id;
+  overlay.innerHTML = `<div class="modal-card" style="width:400px;">
+    <h3>➕ Add recurring plan</h3>
+    <p class="modal-sub">Pick where and what you buy on a schedule. If the holding already has a plan, this edits it.</p>
+    <div class="modal-field"><label>Platform</label>
+      <select id="recurPickPlatform">${investments.map(i => `<option value="${escapeHtml(i.id)}" ${i.id===startId?'selected':''}>${escapeHtml(i.name)}</option>`).join('')}</select></div>
+    <div class="modal-field"><label>Holding</label><select id="recurPickHolding"></select></div>
+    <div class="modal-actions"><button class="btn small" id="recurPickCancel">Cancel</button><button class="btn small primary" id="recurPickGo">Continue</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const platSel = overlay.querySelector('#recurPickPlatform'), holdSel = overlay.querySelector('#recurPickHolding');
+  const fill = () => {
+    const inv = investments.find(i => i.id === platSel.value);
+    const open = ((inv && inv.holdings) || []).filter(h => h.status !== 'closed');
+    const nameCount = {}; open.forEach(h => { const n = recurName(h); nameCount[n] = (nameCount[n]||0) + 1; });
+    holdSel.innerHTML = open.map(h => {
+      const n = recurName(h);
+      const label = nameCount[n] > 1 && h.symbol ? `${n} (${h.symbol})` : n;   // only disambiguate true twins
+      return `<option value="${escapeHtml(h.id)}">${escapeHtml(label)}${(h.recurring && h.recurring.active) ? ' — has a plan (edit)' : ''}</option>`;
+    }).join('');
+  };
+  platSel.addEventListener('change', fill); fill();
+  overlay.querySelector('#recurPickCancel').addEventListener('click', ()=>overlay.remove());
+  overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#recurPickGo').addEventListener('click', ()=>{
+    const inv = investments.find(i => i.id === platSel.value);
+    const h = inv && (inv.holdings||[]).find(x => x.id === holdSel.value);
+    overlay.remove();
+    if(h) onPicked(h);
+  });
+}
+
 function renderRecurring(){
   const y = state.year;
   const investments = yearData(y).investments || [];
-  const recurringRows = collectRecurringRows(y, null); // null = every platform, already sorted by next date
+  loadRecurringViewOnce();
+  if(!state.recurringPlatform) state.recurringPlatform = 'ALL';
+  if(!state.recurringSort) state.recurringSort = 'next';
+  // a platform id that no longer exists in this year (deleted, or you switched year) falls back to "All"
+  if(state.recurringPlatform !== 'ALL' && !investments.some(i => i.id === state.recurringPlatform)) state.recurringPlatform = 'ALL';
+  const isAllPlatforms = state.recurringPlatform === 'ALL';
+  const allPlansEveryPlatform = collectRecurringRows(y, null);               // for the pill counts
+  const recurringRows = collectRecurringRows(y, isAllPlatforms ? null : state.recurringPlatform); // already sorted by next date
+  const _byDate = (a,b) => (a.nextDate||'9999') < (b.nextDate||'9999') ? -1 : (a.nextDate||'9999') > (b.nextDate||'9999') ? 1 : 0;
+  const sortedRows = [...recurringRows].sort((a,b) => {
+    switch(state.recurringSort){
+      case 'name': return recurName(a).localeCompare(recurName(b), undefined, {sensitivity:'base'}) || _byDate(a,b);
+      case 'amount': return (b.amount||0) - (a.amount||0) || _byDate(a,b);
+      case 'platform': return String(a.platformName).localeCompare(String(b.platformName)) || _byDate(a,b);
+      default: return _byDate(a,b);
+    }
+  });
 
   const nextUpcoming = recurringRows[0] || null;
   const activeCount = recurringRows.length;
@@ -193,6 +296,14 @@ function renderRecurring(){
     <div class="section-title">Recurring · ${y}</div>
     <p class="section-sub">Every scheduled recurring buy across every platform, in one place — a tracker, not an auto-trader. Add or change one from here, or from 🔁 on a holding in the Holdings tab; either way stays in sync.</p>
 
+    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:16px;">
+      <button class="pill ${isAllPlatforms?'active':''}" data-recurplat="ALL">All platforms <span style="opacity:.65;">· ${allPlansEveryPlatform.length}</span></button>
+      ${investments.map(inv => { const n = allPlansEveryPlatform.filter(r => r.platformId === inv.id).length;
+        return `<button class="pill ${state.recurringPlatform===inv.id?'active':''}" data-recurplat="${escapeHtml(inv.id)}">${escapeHtml(inv.name)} <span style="opacity:.65;">· ${n}</span></button>`; }).join('')}
+      <span style="flex:1;"></span>
+      <button class="btn small" id="recurAddBtn">➕ Add recurring plan</button>
+    </div>
+
     <div class="card">
       <div class="card-head"><h3>${monthName} — where it's going</h3><span class="section-sub" style="margin:0;">Total: <b style="color:var(--gold-soft)">${fmt$(monthAllocTotal,2)}</b> across ${monthAllocLabels.length} platform${monthAllocLabels.length===1?'':'s'}</span></div>
       ${!monthAllocLabels.length ? `
@@ -239,7 +350,7 @@ function renderRecurring(){
               <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
                 ${p.rows.map(r=>`
                   <div style="display:flex; justify-content:space-between; font-size:12.5px; color:var(--text);">
-                    <span>${escapeHtml(r.symbol)}</span>
+                    <span title="${escapeHtml(recurTip(r))}">${escapeHtml(recurName(r))}</span>
                     <span ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</span>
                   </div>
                 `).join('')}
@@ -269,23 +380,26 @@ function renderRecurring(){
       <div class="kpi-card c-teal"><div class="kpi-label">Active Plans</div><div class="kpi-value">${activeCount}</div></div>
       <div class="kpi-card c-gold"><div class="kpi-label">Across Platforms</div><div class="kpi-value">${platformCount}</div></div>
       <div class="kpi-card c-teal"><div class="kpi-label">~Per Month (USD)</div><div class="kpi-value">${fmt$(monthlyEstimateUsd,2)}</div></div>
-      <div class="kpi-card c-gold"><div class="kpi-label">Next Up</div><div class="kpi-value" style="font-size:15px;">${nextUpcoming ? `${nextUpcoming.symbol} · ${nextUpcoming.nextDate}` : '—'}</div></div>
+      <div class="kpi-card c-gold"><div class="kpi-label">Next Up</div><div class="kpi-value" style="font-size:15px;">${nextUpcoming ? `<span title="${escapeHtml(recurTip(nextUpcoming))}">${escapeHtml(recurName(nextUpcoming))}</span> · ${nextUpcoming.nextDate}` : '—'}</div></div>
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>All recurring buys</h3></div>
+      <div class="card-head" style="flex-wrap:wrap; gap:8px;"><h3>${isAllPlatforms ? 'All recurring buys' : 'Recurring buys · ' + escapeHtml((investments.find(i=>i.id===state.recurringPlatform)||{}).name || '')}</h3>
+        <select id="recurSort" title="Sort by" style="appearance:none;-webkit-appearance:none;background:var(--bg);color:var(--text);border:1px solid var(--line);padding:6px 26px 6px 10px;border-radius:7px;font-family:var(--font-mono);font-size:11.5px;cursor:pointer;">
+          ${Object.entries(RECUR_SORTS).map(([k,l]) => `<option value="${k}" ${state.recurringSort===k?'selected':''}>Sort: ${l}</option>`).join('')}
+        </select></div>
       ${!recurringRows.length ? `
         <div class="section-sub" style="padding:24px 0; text-align:center;">
-          No recurring plans yet. Go to <b style="color:var(--gold-soft);">Holdings</b>, open a position, and click 🔁 to set one up — it'll show up here automatically.
+          ${isAllPlatforms ? 'No recurring plans yet.' : 'No recurring plans on this platform yet.'} Click <b style="color:var(--gold-soft);">➕ Add recurring plan</b> above to set one up.
         </div>
       ` : `
       <div class="table-scroll">
         <table class="ledger">
-          <thead><tr><th>Platform</th><th>Holding</th><th>Amount / buy</th><th>Schedule</th><th>Funding</th><th>Next date</th><th>Est. shares</th><th></th></tr></thead>
-          <tbody>${recurringRows.map(r => `
+          <thead><tr>${isAllPlatforms?'<th>Platform</th>':''}<th>Holding</th><th>Amount / buy</th><th>Schedule</th><th>Funding</th><th>Next date</th><th>Est. shares</th><th></th></tr></thead>
+          <tbody>${sortedRows.map(r => `
             <tr>
-              <td><span class="debt-tag" style="font-size:10px;">${r.platformName}</span></td>
-              <td style="font-weight:600;">${escapeHtml(r.symbol)} ${r.name && r.name!==r.symbol ? `<span style="color:var(--text-dim); font-weight:400;">· ${escapeHtml(r.name)}</span>` : ''}</td>
+              ${isAllPlatforms?`<td><span class="debt-tag" style="font-size:10px;">${escapeHtml(r.platformName)}</span></td>`:''}
+              <td style="font-weight:600;" title="${escapeHtml(recurTip(r))}">${escapeHtml(recurName(r))}</td>
               <td ${r.tAmount?`data-tip="${r.tAmount}" class="has-tip"`:''}>${r.dAmount}</td>
               <td><span class="debt-tag">${r.scheduleLabel}</span></td>
               <td>${fundingHtml(r)}</td>
@@ -337,19 +451,19 @@ function renderRecurring(){
       (config) => {
         h.recurring = { active: true, ...config };
         markDirty(); renderRecurring();
-        showToast(`Recurring buy updated for ${h.symbol}`);
+        showToast(`Recurring buy updated for ${recurName(h)}`);
       },
       () => {
         h.recurring = null;
         markDirty(); renderRecurring();
-        showToast(`Recurring buy removed for ${h.symbol}`);
+        showToast(`Recurring buy removed for ${recurName(h)}`);
       }
     );
   }));
   document.querySelectorAll('[data-removerecur]').forEach(el => el.addEventListener('click', ()=>{
     const h = _findRecurHolding(el.dataset.removerecur);
     if(!h) return;
-    if(confirm(`Remove the recurring plan for ${h.symbol}?`)){
+    if(confirm(`Remove the recurring plan for ${recurName(h)}?`)){
       h.recurring = null; markDirty(); renderRecurring();
     }
   }));
@@ -364,7 +478,26 @@ function renderRecurring(){
       if(h.recurring) h.recurring.lastConfirmedFor = scheduledDate;
       markDirty('holdings');
       renderRecurring();
-      showToast(`Added ${qty.toFixed(4)} ${h.symbol} @ ${fmt$(price,2)} from recurring buy`);
+      showToast(`Added ${qty.toFixed(4)} ${recurName(h)} @ ${fmt$(price,2)} from recurring buy`);
     });
   }));
+
+  /* ---- Platform pills, sort, and "Add recurring plan" ---- */
+  document.querySelectorAll('[data-recurplat]').forEach(b => b.addEventListener('click', ()=>{
+    state.recurringPlatform = b.dataset.recurplat; saveRecurringView(); renderRecurring();
+  }));
+  const recurSortSel = document.getElementById('recurSort');
+  if(recurSortSel) recurSortSel.addEventListener('change', ()=>{
+    state.recurringSort = Object.prototype.hasOwnProperty.call(RECUR_SORTS, recurSortSel.value) ? recurSortSel.value : 'next';
+    saveRecurringView(); renderRecurring();
+  });
+  const recurAddBtn = document.getElementById('recurAddBtn');
+  if(recurAddBtn) recurAddBtn.addEventListener('click', ()=>{
+    openAddRecurringPicker(y, isAllPlatforms ? null : state.recurringPlatform, (h) => {
+      openRecurringModal(h, y,
+        (config) => { h.recurring = { active: true, ...config }; markDirty(); renderRecurring(); showToast(`Recurring buy saved for ${recurName(h)}`); },
+        () => { h.recurring = null; markDirty(); renderRecurring(); showToast(`Recurring buy removed for ${recurName(h)}`); }
+      );
+    });
+  });
 }

@@ -96,6 +96,15 @@ const STORAGE_KEY = 'ledger:data:v1';
    for the other half of this fix. */
 let dataLoadFailed = false;
 
+/* SAVE-CONFLICT GUARD. Every browser save stamps DATA.__save = {rev, by, at}. The price-refresh cron never touches
+   that stamp, so it can't be mistaken for "someone else edited". Before saving we compare the cloud copy's stamp with
+   the one we last loaded/wrote: if another device or tab saved in between, we stop instead of silently overwriting
+   its edits. DEVICE_ID is new on every page load, so a second tab counts as "another device" too. */
+const DEVICE_ID = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+let cloudRev = null;           // the revision this page last loaded or wrote (null = nothing known yet)
+let saveConflictNotified = false;
+function saveStampOf(obj){ return (obj && obj.__save && typeof obj.__save === 'object') ? obj.__save : null; }
+
 async function loadData(){
   let res;
   try{
@@ -146,6 +155,7 @@ async function loadData(){
       if(!DATA.fxRateHistory) DATA.fxRateHistory = {};
       let ysSeeded = 0;
       try{ if(window.YearSync) ysSeeded = YearSync.init(DATA) || 0; }catch(e){ console.error('[YearSync]', e); }
+      cloudRev = (saveStampOf(DATA) && Number(saveStampOf(DATA).rev)) || 0;
       lastSavedSnapshot = JSON.stringify(DATA);
       /* a blank year was just filled in: flag it as an unsaved change so the
          "Save changes" button lights up and the filled year gets stored */
@@ -220,11 +230,35 @@ async function probeStorage(){
    wins outright rather than being field-merged. */
 function mergeCronOwnedFields(mine, cloud){
   if(!cloud || typeof cloud !== 'object') return;
+  /* BUGFIX (blank table after "Record snapshot"): this used to copy the cloud's price fields over yours
+     UNCONDITIONALLY, and to replace your snapshot list with the cloud's. So if you added a stock (saved with no
+     price), clicked "Fetch live prices", then clicked "Record snapshot", the save that followed overwrote your
+     fresh prices with the cloud's empty ones and threw away the snapshot you had just taken.
+     Now: a price/day-change is taken from the cloud ONLY when the cloud's copy is newer (lastFetched), and
+     snapshots are merged by date (newest wins per date) instead of replaced. */
+  const ts = v => { const n = Number(v); return isFinite(n) ? n : 0; };
+  const takeIfCloudNewer = (m, c, extraFields) => {
+    if(ts(c.lastFetched) > ts(m.lastFetched)){
+      m.currentPrice = c.currentPrice;
+      m.dayChangePct = c.dayChangePct;
+      m.lastFetched = c.lastFetched;
+      m.priceFetchFailed = c.priceFetchFailed;
+      (extraFields || []).forEach(f => { m[f] = c[f]; });
+    }
+  };
+  const snapTime = s => { const t = Date.parse(s && s.at); return isFinite(t) ? t : 0; };
   Object.keys(cloud).filter(k=>/^\d+$/.test(k)).forEach(y=>{
     const cloudYd = cloud[y], mineYd = mine[y];
     if(!mineYd || !cloudYd) return; // a year we don't have locally, or the cloud doesn't have — nothing to merge
     if(Array.isArray(cloudYd.portfolioSnapshots)){
-      mineYd.portfolioSnapshots = cloudYd.portfolioSnapshots;
+      const byDate = new Map();
+      cloudYd.portfolioSnapshots.forEach(s => { if(s && s.date) byDate.set(s.date, s); });
+      (mineYd.portfolioSnapshots || []).forEach(s => {
+        if(!s || !s.date) return;
+        const c = byDate.get(s.date);
+        if(!c || snapTime(s) > snapTime(c)) byDate.set(s.date, s);   // only on this device, or taken more recently here
+      });
+      mineYd.portfolioSnapshots = Array.from(byDate.values()).sort((a,b)=> String(a.date).localeCompare(String(b.date))).slice(-365);
     }
     (cloudYd.investments||[]).forEach(cInv=>{
       const mInv = (mineYd.investments||[]).find(i=>i.id===cInv.id);
@@ -232,10 +266,7 @@ function mergeCronOwnedFields(mine, cloud){
       (cInv.holdings||[]).forEach(cH=>{
         const mH = (mInv.holdings||[]).find(h=>h.id===cH.id);
         if(!mH) return;
-        mH.currentPrice = cH.currentPrice;
-        mH.dayChangePct = cH.dayChangePct;
-        mH.lastFetched = cH.lastFetched;
-        mH.priceFetchFailed = cH.priceFetchFailed;
+        takeIfCloudNewer(mH, cH);
       });
     });
   });
@@ -243,17 +274,13 @@ function mergeCronOwnedFields(mine, cloud){
     cloud.watchlist.forEach(cW=>{
       const mW = (mine.watchlist||[]).find(w=>w.id===cW.id);
       if(!mW) return;
-      mW.currentPrice = cW.currentPrice;
-      mW.dayChangePct = cW.dayChangePct;
-      mW.prevClose = cW.prevClose;
-      mW.fiftyTwoWeekHigh = cW.fiftyTwoWeekHigh;
-      mW.fiftyTwoWeekLow = cW.fiftyTwoWeekLow;
-      mW.volume = cW.volume;
-      mW.lastFetched = cW.lastFetched;
-      mW.priceFetchFailed = cW.priceFetchFailed;
+      takeIfCloudNewer(mW, cW, ['prevClose','fiftyTwoWeekHigh','fiftyTwoWeekLow','volume']);
     });
   }
-  if(cloud.fxRateHistory) mine.fxRateHistory = cloud.fxRateHistory;
+  if(cloud.fxRateHistory && typeof cloud.fxRateHistory === 'object'){
+    // keep any month this device recorded that the cloud doesn't have yet; the cloud wins where both exist
+    mine.fxRateHistory = Object.assign({}, mine.fxRateHistory || {}, cloud.fxRateHistory);
+  }
 }
 
 async function persistData(silent, attempt){
@@ -282,16 +309,37 @@ async function persistData(silent, attempt){
     console.error('[Ledger] persistData called with no data loaded — refusing to save (would overwrite the cloud copy with nothing).');
     return;
   }
+  let remoteRev = cloudRev || 0;
   try{
     const fresh = await window.storage.get(STORAGE_KEY, false);
     if(fresh && fresh.value){
       const cloud = JSON.parse(fresh.value);
+      const stamp = saveStampOf(cloud);
+      remoteRev = (stamp && Number(stamp.rev)) || 0;
+      const writtenByThisPage = !!(stamp && stamp.by === DEVICE_ID);   // e.g. our own earlier try whose reply got lost
+      if(cloudRev !== null && remoteRev !== cloudRev && !writtenByThisPage){
+        // Another device/tab saved since this page loaded. Never overwrite it silently.
+        if(silent){
+          if(!saveConflictNotified){
+            saveConflictNotified = true;
+            showToast('Your ledger was changed on another device or tab, so this page stopped auto-saving to avoid overwriting it. Reload to get the latest.');
+          }
+          return;
+        }
+        const overwrite = confirm('Your ledger was saved from another device or tab after you opened this page.\n\n'
+          + 'OK = save THIS page anyway (the other changes will be lost)\n'
+          + 'Cancel = do not save (reload the page to get the latest, then redo your edit)');
+        if(!overwrite){ showToast('Not saved — reload to get the latest version.'); return; }
+      }
       mergeCronOwnedFields(DATA, cloud);
     }
   }catch(e){ /* couldn't check for newer cron data — proceed with what we have rather than blocking the save */ }
+  DATA.__save = { rev: remoteRev + 1, by: DEVICE_ID, at: new Date().toISOString() };
   try{
     const res = await window.storage.set(STORAGE_KEY, JSON.stringify(DATA), false);
     if(!res) throw new Error('empty response from storage');
+    cloudRev = DATA.__save.rev;
+    saveConflictNotified = false;
     lastSavedSnapshot = JSON.stringify(DATA);
     isDirty = false;
     dirtyTabs.clear();

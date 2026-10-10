@@ -848,6 +848,16 @@ async function readFile(file, headerFn, what){
   }
   return parseCsv(await file.text());
 }
+/* A tradebook named like "tradebook-ZH1234.csv" or "AngelOne_..." that is being imported into a different
+   platform is almost always a slip of the dropdown, so say so right in the preview (nothing is blocked). */
+function brokerHintMismatch(fileName, platformName){
+  const f = String(fileName || '').toLowerCase(), p = String(platformName || '').toLowerCase();
+  const kinds = [ ['Zerodha', /zerodha|(^|[^a-z])zh\d{3,}|kite/, /zerodha/], ['Angel One', /angel/, /angel/], ['Robinhood', /robinhood/, /robinhood/] ];
+  for (const [label, fileRe, platRe] of kinds) {
+    if (fileRe.test(f) && !platRe.test(p)) return `<div class="notice" style="border-color:var(--gold); margin-bottom:8px;">⚠ This file looks like a <b>${esc(label)}</b> file, but the selected platform is <b>${esc(platformName || 'none')}</b>. If that's a mistake, pick the right platform in the dropdown at the top and drop the file again.</div>`;
+  }
+  return '';
+}
 function mountUI(el){
   if (!el) return;
   const D = () => getData() || {};            // before the ledger has loaded there is simply nothing to list
@@ -964,6 +974,7 @@ function mountUI(el){
       if (parsed.error) { box.innerHTML = `<div class="notice" style="border-color:var(--bad)">${esc(parsed.error)}</div>`; return; }
       tradeState = { mapping: {}, naming: 'symbol' };
       showTradeParsed(parsed);
+      box.insertAdjacentHTML('afterbegin', brokerHintMismatch(file.name, selPlatform().platformName));
     } catch (e) { box.innerHTML = `<div class="notice" style="border-color:var(--bad)">${esc(e.message || e)}</div>`; }
   }
   let tradeState = { mapping: {}, naming: 'symbol' }, lastTradeParsed = null;
@@ -1018,6 +1029,9 @@ function mountUI(el){
   }
   const wireZone = (zoneId, inputId, handler) => {
     const zone = $(zoneId), input = $(inputId);
+    zone.setAttribute('tabindex', '0'); zone.setAttribute('role', 'button');                 // reachable with the keyboard
+    zone.setAttribute('aria-label', String((zone.textContent || 'Choose a file')).replace(/\s+/g, ' ').trim());
+    zone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
     zone.addEventListener('click', e => { if (e.target === input) return; input.click(); });          // the app's CSS hides the real input, same as its own upload box
     ['dragover', 'dragenter'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList && zone.classList.add('drag'); }));
     ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList && zone.classList.remove('drag'); }));
@@ -1045,6 +1059,7 @@ function mountUI(el){
       const parsed = normalizeDividends(rows, { market: market(), dateOrder: $('biDateOrder').value });
       if (parsed.error) { box.innerHTML = `<div class="notice" style="border-color:var(--bad)">${esc(parsed.error)}</div>`; return; }
       renderDivParsed(box, parsed);
+      box.insertAdjacentHTML('afterbegin', brokerHintMismatch(file.name, selPlatform().platformName));
     } catch (e) { box.innerHTML = `<div class="notice" style="border-color:var(--bad)">${esc(e.message || e)}</div>`; }
   }
   let lastDivParsed = null, divApplied = false;
@@ -1215,6 +1230,7 @@ function mountUI(el){
         + (parsed.meta.pledgedRows ? `<div class="notice" style="border-color:var(--gold)">${parsed.meta.pledgedRows} row(s) list <b>pledged</b> shares separately; only the available quantity is used. Check those quantities below.</div>` : '');
       reviewState = { mapping: {}, dates: {}, naming: 'symbol', ticks: {}, globalDate: '' };
       renderHoldingsReview(parsed.snapshot, { label: `Holdings file <b>${esc(file.name || '')}</b> — ${parsed.snapshot.holdings.length} holdings, no dates inside`, head });
+      box.insertAdjacentHTML('afterbegin', brokerHintMismatch(file.name, selPlatform().platformName));
     } catch (e) { box.innerHTML = `<div class="notice" style="border-color:var(--bad)">${esc(e.message || e)}</div>`; }
   }
   wireZone('biHFDrop', 'biHFFile', handleHFFile);

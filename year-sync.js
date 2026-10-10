@@ -397,7 +397,13 @@ function recomputeCarry(D){
     (yd.retirementAccounts || []).forEach(r => {
       if (!r.carryFromPrior || r.priorManual) return;      // typed by hand -> keep it
       const p = prevOf(D, SPECS[4], y, r.sid);
-      if (!p) return;                                  // first year: the value you typed is the base
+      if (!p) {
+        /* No earlier year has this account. If the number sitting here was filled in AUTOMATICALLY earlier
+           (priorAuto), its source year is gone/empty, so it is a leftover -> clear it. A number you typed
+           yourself in a first year (priorAuto not set) is the base and stays. */
+        if (r.priorAuto) { r.priorSelf = 0; r.priorEmployer = 0; r.priorAuto = false; }
+        return;
+      }
       r.priorSelf = round2(num(p.it.priorSelf) + sumArr(p.it.mSelf));
       r.priorEmployer = round2(num(p.it.priorEmployer) + sumArr(p.it.mEmployer));
       r.priorAuto = true;
