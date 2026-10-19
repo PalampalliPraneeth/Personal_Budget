@@ -104,13 +104,13 @@ function renderExpenses(){
       const v = d.m[i];
       const val = v===null||v===undefined ? '' : v;
       const displayVal = val==='' ? '' : Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-      const tip = monthCellFxTip(v, d.currency, y, i);
+      const tip = debtCellFxTip(v, d.currency, y, i, d);
       return `<td class="editable ${!val?'zero':''} ${tip?'has-tip':''}" contenteditable="true" data-debtpay="${d.id}" data-idx="${i}" ${tip?`data-tip="${tip.replace(/"/g,'&quot;')}"`:''}>${displayVal===''?'–':displayVal}</td>`;
     }).join('');
     return `<tr data-debt-id="${d.id}" class="${extraClass||''}">
       <td><span class="ledger-name-text" title="${(d.name||'').replace(/"/g,'&quot;')}">${escapeHtml(d.name)}</span> ${debtPendingCalc(d)<=0?'<span class="debt-tag" style="color:var(--good);border-color:var(--good);">paid off</span>':''}</td>
       ${cells}
-      <td style="font-weight:600;">${fmtNative(sumArr(d.m), d.currency)}</td>
+      <td style="font-weight:600;">${fmtNative(sumArr(d.m), d.currency)}${d.currency==='INR' ? `<div style="font-size:10.5px; font-weight:400; color:var(--text-dim);">≈ ${fmt$(sumArr(d.m)/liveInrRate(), 2)} today</div>` : ''}</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="interest" data-id="${d.id}" style="cursor:pointer;">${d.interest}</b>%</td>
       <td style="color:var(--gold-soft);"><b class="editable-inline" contenteditable="true" data-debtfield="emi" data-id="${d.id}" style="cursor:pointer;">${d.emi||0}</b></td>
       <td><span class="row-del" data-deldebt="${d.id}" title="remove debt" style="cursor:pointer;">✕</span></td>

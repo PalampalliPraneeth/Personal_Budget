@@ -52,7 +52,7 @@ const SPECS = [
     child: { key: 'categories', nameField: 'name', shared: ['currency'],
              fresh: src => ({ m: n12(), raw: n12(), notes: '', budget: Array.isArray(src && src.budget) ? clone(src.budget) : n12() }) } },
   { key: 'banks', nameField: 'name',
-    shared: ['currency', 'type', 'creditLimit', 'billingCycleDay', 'paymentDueDay'],
+    shared: ['currency', 'type', 'creditLimit', 'billingCycleDay', 'paymentDueDay', 'closed', 'closedAt'],
     fresh: () => ({ m: n12(), transactions: [], lastUpdatedAt: null }) },
   { key: 'savingsAccounts', nameField: 'name', shared: ['currency', 'interestRate'],
     fresh: () => ({ m: n12() }) },

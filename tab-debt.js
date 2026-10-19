@@ -61,6 +61,46 @@ function simulatePayoffWithPlan(debts, plan){
   return {months:month, perDebt, series, payoffDate, remainders, lastRemaining};
 }
 
+/* ---------- Debt page helpers: display switch, compact rupee text ---------- */
+const DEBT_VIEW_KEY = 'ledger:ui:debtView:v1';
+function getDebtView(){
+  if(!state.debtView){
+    let v = null; try{ v = localStorage.getItem(DEBT_VIEW_KEY); }catch(e){}
+    state.debtView = (v === 'inr' || v === 'usd') ? v : 'both';
+  }
+  return state.debtView;
+}
+function setDebtView(v){
+  state.debtView = (v === 'inr' || v === 'usd') ? v : 'both';
+  try{ localStorage.setItem(DEBT_VIEW_KEY, state.debtView); }catch(e){}
+  try{ if(window.storage) Promise.resolve(window.storage.set(DEBT_VIEW_KEY, JSON.stringify(state.debtView), false)).catch(()=>{}); }catch(e){}
+}
+/* ₹6.4 L / ₹1.25 Cr style, the way rupee amounts are normally said out loud */
+function fmtInrShort(n){
+  const v = Math.abs(num(n)), sign = n < 0 ? '-' : '';
+  const trim = x => x.toFixed(2).replace(/\.?0+$/, '');
+  if(v >= 1e7) return `${sign}₹${trim(v/1e7)} Cr`;
+  if(v >= 1e5) return `${sign}₹${trim(v/1e5)} L`;
+  return `${sign}₹${Math.round(v).toLocaleString('en-IN')}`;
+}
+
+/* Set Original and Pending together, letting "Cleared" (what's already paid) absorb the difference, so changing one of
+   Original / Pending never silently changes the other. All values are in the loan's own currency.
+   Returns {ok:true}, or {ok:false, msg} if the numbers can't work (the edit is then refused and nothing changes). */
+function setOriginalAndPending(d, total, pending){
+  const isINR = d.currency === 'INR';
+  const fmtD = v => isINR ? fmtInr(v) : fmt$(v, 2);
+  if(pending > total + 0.005) return { ok:false, msg:`Pending (${fmtD(pending)}) can't be more than Original (${fmtD(total)}). Raise Original first.` };
+  const paidThisYear = sumArr(d.m || []);
+  const opening = (total - pending) - paidThisYear;            // the "already cleared" starting amount that makes the maths work
+  if(opening < -0.005) return { ok:false, msg:`That would make "cleared" (${fmtD(total - pending)}) smaller than the ${fmtD(paidThisYear)} of payments logged this year. Edit those payments first, or change Pending instead.` };
+  d.total = total;
+  d.cleared = roundCents(Math.max(opening, 0));
+  if(isINR && !(num(d.clearedRate) > 0)) d.clearedRate = liveInrRate();   // keep an existing locked rate; only stamp one if missing
+  if(d.carryFromPrior) d.clearedManual = true;                           // otherwise the automatic year-to-year carry would overwrite it
+  return { ok:true };
+}
+
 function renderDebt(){
   const y = state.year;
   
@@ -74,27 +114,95 @@ function renderDebt(){
     if(pb <= 0 && pa > 0) return -1;
     return pb - pa;
   });
+  // older data: an "already cleared" rupee amount with no rate remembered gets today's rate stamped once, so it stops drifting
+  if(lockLegacyClearedRates(debts)){ try{ persistData(true).catch(()=>{}); }catch(e){} }
+  const debtView = getDebtView();
+  const mismatches = findDebtPaymentCurrencyMismatches();
+  const fixNoticeHtml = mismatches.length ? `
+    <div class="notice" style="border-color:var(--gold); margin-bottom:14px;">
+      ⚠ <b>${mismatches.length} Cash Flow payment${mismatches.length===1?' was':'s were'} saved in the wrong currency</b> — the amount from the bank was copied into the loan without converting it.
+      ${mismatches.slice(0,3).map(f => `<div style="font-size:12px; margin-top:4px;">${fmtNative(Math.abs(f.amount), f.bankCur)} paid from ${escapeHtml(f.bank.name)} (${MONTHS[f.monthIdx]} ${f.year}) is counted as <b>${fmtNative(Math.abs(f.stored), f.debtCur)}</b> in ${escapeHtml(f.debt.name)}; it should be <b>${fmtNative(Math.abs(f.expected), f.debtCur)}</b>.</div>`).join('')}
+      ${mismatches.length>3 ? `<div style="font-size:12px; margin-top:4px;">…and ${mismatches.length-3} more.</div>` : ''}
+      <div style="margin-top:8px;"><button class="btn small primary" id="debtFixCurrency">Fix ${mismatches.length===1?'it':'them'}</button></div>
+    </div>` : '';
+  const nowD = new Date(), curMonthKey = fxMonthKey(nowD.getFullYear(), nowD.getMonth());
+  const fxRowsHtml = MONTHS.map((m,i) => {
+    const manual = fxManualRate(y, i), used = fxRateForMonth(y, i), key = fxMonthKey(y, i);
+    const rec = (DATA.fxRateHistory || {})[key];
+    const src = manual ? '<span style="color:var(--gold-soft);">set by you</span>'
+      : (key < curMonthKey && rec && Number(rec.start) > 0 && Number(rec.end) > 0) ? 'recorded average' : (key < curMonthKey ? 'live rate (nothing recorded)' : 'live rate (month not finished)');
+    return `<tr><td>${m} ${y}</td>
+      <td><input type="text" inputmode="decimal" class="input" data-fxrate="${i}" value="${manual ? String(manual) : ''}" placeholder="${used.toFixed(4).replace(/0+$/,'').replace(/\.$/,'')}" style="width:110px;"></td>
+      <td style="color:var(--text-dim); font-size:12px;">${src}</td></tr>`;
+  }).join('');
+  const fxCardHtml = `
+    <details class="card" id="fxRatesCard" ${state.fxCardOpen ? 'open' : ''} style="margin-bottom:20px;">
+      <summary style="cursor:pointer; font-weight:600;">₹ per $1 for each month of ${y} <span style="font-weight:400; color:var(--text-dim); font-size:12px;">— set your own monthly rate</span></summary>
+      <p class="section-sub" style="margin:10px 0;">Type the rate you want used for a month (for example your bank's monthly average). It applies to <b>that month only</b>, for everything in ₹ — debts, Cash Flow, savings. Leave a box empty to use the recorded or live rate.</p>
+      <div class="table-scroll"><table class="ledger" style="min-width:0; width:100%; max-width:520px;"><thead><tr><th>Month</th><th>Rate (₹ per $1)</th><th>Using</th></tr></thead><tbody>${fxRowsHtml}</tbody></table></div>
+    </details>`;
+  const liveRate = liveInrRate();
   const totalPending = sumArr(debts.map(d=>debtPendingCalc(d)));
+  const inrDebts = debts.filter(d => d.currency === 'INR' && debtPendingNative(d) > 0);
   const totalOriginal = sumArr(debts.map(d=>debtOriginalUsd(d)));
-  const totalCleared = sumArr(debts.map(d=>debtToUsd(d.cleared, d)));
+  const totalCleared = sumArr(debts.map(d=>debtClearedToDate(d)));
+  // rupee view of the totals (USD loans converted at the live rate)
+  const inrOf = (d, usdVal, nativeVal) => d.currency === 'INR' ? nativeVal : usdVal * liveRate;
+  const totalPendingInr = sumArr(debts.map(d => inrOf(d, debtPendingCalc(d), debtPendingNative(d))));
+  const totalClearedInr = sumArr(debts.map(d => inrOf(d, debtClearedToDate(d), debtClearedNative(d))));
+  const totalOriginalInr = sumArr(debts.map(d => inrOf(d, debtOriginalUsd(d), num(d.total))));
 
   if(state.debtShowPaid === undefined) state.debtShowPaid = false;
   const activeDebts = debts.filter(d => !(d.total>0 && debtPendingCalc(d)<=0));
   const paidDebts = debts.filter(d => d.total>0 && debtPendingCalc(d)<=0);
 
   function debtCardHtml(d){
-    const clearedToDate = debtClearedToDate(d);
-    /* BUGFIX (#12c): clearedToDate is always USD (see debtClearedToDate),
-       but d.total is in the debt's NATIVE currency — for an INR debt this
-       divided a USD numerator by a much larger raw-INR denominator,
-       producing a tiny, wrong progress percentage. Use debtOriginalUsd(d)
-       (the already-converted total) so both sides of the ratio are USD. */
-    const totalUsd = debtOriginalUsd(d);
-    const pct2 = totalUsd>0 ? Math.min(100, (clearedToDate/totalUsd)*100) : 0;
+    const isINR = d.currency === 'INR';
+    const clearedUsd = debtClearedToDate(d), pendingUsd = debtPendingCalc(d), origUsd = debtOriginalUsd(d);
+    const clearedN = debtClearedNative(d), pendingN = debtPendingNative(d), totalN = num(d.total);
+    // progress is measured in the loan's OWN currency (for a rupee loan: rupees paid / rupees owed), so exchange-rate
+    // moves can never make a loan look more or less paid off
+    const pct = isINR ? (totalN > 0 ? Math.min(100, (clearedN/totalN)*100) : 0) : (origUsd > 0 ? Math.min(100, (clearedUsd/origUsd)*100) : 0);
     const isPaid = d.total>0 && debtPendingCalc(d)<=0;
     const needsTotal = num(d.total)===0;
-    const isINR = d.currency === 'INR';
-    const nativeTotalDisplay = isINR ? fmtInr(num(d.total)) : fmt$(num(d.total),2);
+    const mode = debtRateMode(d);
+    const effect = debtRateEffect(d);
+
+    // one amount: rupee loans edit in ₹ and show $ per the view switch; USD loans edit in $ (optionally with ≈ ₹)
+    const inrAmount = (field, native, usd, color) => {
+      const edit = `<b class="editable-inline" ${color?`style="color:${color}"`:''} contenteditable="true" data-debtfield="${field}" data-id="${d.id}">${fmtInr(native)}</b>`;
+      if(debtView === 'inr') return edit;
+      if(debtView === 'usd') return `<b ${color?`style="color:${color}"`:''}>${fmt$(usd,2)}</b> <span style="opacity:.7">(${edit})</span>`;
+      return `${edit} <span style="opacity:.75">≈ ${fmt$(usd,2)}</span>`;
+    };
+    const usdExtra = (usd) => debtView === 'inr' ? ` <span style="opacity:.7">≈ ${fmtInr(usd*liveRate)}</span>` : '';
+
+    const foot = isINR ? `
+        <span>Cleared: ${inrAmount('clearedNative', clearedN, clearedUsd, 'var(--teal-soft)')} <span style="opacity:.55">(incl. ${fmtInr(sumArr(d.m||[]))} paid this year)</span></span>
+        <span>Pending: ${inrAmount('pendingNative', pendingN, pendingUsd, 'var(--rust-soft)')}</span>
+        <span>Original: ${inrAmount('total', totalN, origUsd)}</span>`
+      : `
+        <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedUsd.toFixed(2)}</b> USD${usdExtra(clearedUsd)} <span style="opacity:.55">(incl. ${fmt$(monthlyArrToUsd(d.m, d.currency, y),2)} from monthly payments this year)</span></span>
+        <span>Pending: <b class="editable-inline" style="color:var(--rust-soft)" contenteditable="true" data-debtfield="pending" data-id="${d.id}">${fmt$(pendingUsd,2)}</b> USD${usdExtra(pendingUsd)}</span>
+        <span>Original: <b class="editable-inline" contenteditable="true" data-debtfield="total" data-id="${d.id}">${d.total}</b> ${d.currency||'USD'}${usdExtra(origUsd)}</span>`;
+
+    const progressText = isINR
+      ? `${fmtInrShort(clearedN)} of ${fmtInrShort(totalN)} cleared · <b>${pct.toFixed(0)}%</b>${debtView!=='inr' ? ` <span style="opacity:.6">· ${fmt$(clearedUsd,0)} of ${fmt$(origUsd,0)}</span>` : ''}`
+      : `${fmt$(clearedUsd,0)} of ${fmt$(origUsd,0)} cleared · <b>${pct.toFixed(0)}%</b>${debtView==='inr' ? ` <span style="opacity:.6">· ${fmtInrShort(clearedUsd*liveRate)} of ${fmtInrShort(origUsd*liveRate)}</span>` : ''}`;
+
+    const effectHtml = (isINR && effect && debtView !== 'inr') ? `
+      <div class="debt-rate-effect" style="margin-top:8px; font-size:12px; color:${effect.effectUsd<0?'var(--good)':'var(--danger)'};">
+        ${effect.stronger ? '▲' : '▼'} Exchange rate moved: ₹${effect.ref.toFixed(2)} → ₹${effect.live.toFixed(2)} per $1 since ${effect.refLabel}.
+        Same rupees owed, but in dollars it is now worth <b>${fmt$(Math.abs(effect.effectUsd),2)} ${effect.effectUsd<0?'less':'more'}</b>.
+      </div>` : '';
+
+    const modeSel = isINR ? `
+      <label style="display:inline-flex; gap:6px; align-items:center; font-size:11px; color:var(--text-dim);" title="Only changes how the dollar value of the money you've ALREADY PAID is worked out. What you still owe always uses today's rate.">Dollar value of what I've paid:
+        <select class="input" data-ratemode="${d.id}" style="font-size:11px; padding:3px 22px 3px 8px;">
+          <option value="locked" ${mode==='locked'?'selected':''}>fixed at each month's rate (recommended)</option>
+          <option value="live" ${mode==='live'?'selected':''}>changes with today's rate</option>
+        </select></label>` : '';
+
     return `
     <div class="debt-card" data-debt-id="${d.id}">
       <div class="debt-card-head">
@@ -111,12 +219,12 @@ function renderDebt(){
           </select>
         </div>
       </div>
-      <div class="runway ${isPaid?'zero':''}"><div class="runway-fill" style="width:${pct2}%"></div></div>
-      <div class="debt-foot">
-        <span>Cleared: <b class="editable-inline" style="color:var(--teal-soft)" contenteditable="true" data-debtfield="clearedDisplay" data-id="${d.id}">${clearedToDate.toFixed(2)}</b> USD <span style="opacity:.55">(incl. ${fmt$(monthlyArrToUsd(d.m, d.currency, y),2)} from monthly payments this year${isINR?', converted from INR at each month\u2019s locked rate':''})</span></span>
-        <span>Pending: <b class="editable-inline" style="color:var(--rust-soft)" contenteditable="true" data-debtfield="pending" data-id="${d.id}">${fmt$(debtPendingCalc(d),2)}</b> USD</span>
-        <span>Original: <b class="editable-inline" contenteditable="true" data-debtfield="total" data-id="${d.id}">${d.total}</b> ${d.currency||'USD'} ${isINR?`<span style="opacity:.55">(${fmt$(debtOriginalUsd(d),2)})</span>`:''}</span>
+      <div class="runway ${isPaid?'zero':''}"><div class="runway-fill" style="width:${pct}%"></div></div>
+      <div style="font-size:12px; color:var(--text-dim); margin:6px 0 8px;">${progressText}</div>
+      <div class="debt-foot">${foot}
       </div>
+      ${effectHtml}
+      ${modeSel ? `<div style="margin-top:8px;">${modeSel}</div>` : ''}
       ${d.note?`<div class="section-sub" style="margin-top:8px;">⚑ ${escapeHtml(d.note)}</div>`:''}
     </div>`;
   }
@@ -199,13 +307,25 @@ function renderDebt(){
   const html = `
     <div class="section-title">Debt Payoff Planner · ${y}</div>
     <p class="section-sub">What's left, what it costs monthly, and when it disappears based on a real month-by-month plan.</p>
+    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:14px;">
+      <span style="font-size:11.5px; color:var(--text-dim);">Show amounts as</span>
+      <button class="pill ${debtView==='both'?'active':''}" data-debtview="both">₹ + $</button>
+      <button class="pill ${debtView==='inr'?'active':''}" data-debtview="inr">₹ only</button>
+      <button class="pill ${debtView==='usd'?'active':''}" data-debtview="usd">$ only</button>
+    </div>
+    ${inrDebts.length || debts.some(d=>d.currency==='INR') ? `<div class="notice" style="margin-bottom:14px;">₹ loans are entered in rupees. <b>Still owed</b> is shown in dollars at today's live rate — <b>₹${liveRate.toFixed(2)} = $1</b>${(typeof fxLastFetch!=='undefined' && fxLastFetch) ? ` <span style="opacity:.6">(checked ${new Date(fxLastFetch).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})})</span>` : ''} — so it moves with the rate. <b>What you've already paid</b> stays at the rate from when you paid it (you can change that per loan).</div>` : ''}
 
     <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
-      <div class="kpi-card c-danger"><div class="kpi-label">Total Pending</div><div class="kpi-value">${fmt$(totalPending)}</div></div>
+      ${debtView==='inr' ? `
+      <div class="kpi-card c-danger"><div class="kpi-label">Total Pending</div><div class="kpi-value">${fmtInrShort(totalPendingInr)}</div></div>
+      <div class="kpi-card c-teal"><div class="kpi-label">Already Cleared</div><div class="kpi-value">${fmtInrShort(totalClearedInr)}</div></div>
+      <div class="kpi-card c-gold"><div class="kpi-label">Original Debt Total</div><div class="kpi-value">${fmtInrShort(totalOriginalInr)}</div></div>` : `
+      <div class="kpi-card c-danger"><div class="kpi-label">Total Pending</div><div class="kpi-value">${fmt$(totalPending)}</div>${(debtView==='both' && inrDebts.length) ? `<div class="kpi-delta flat">incl. ${fmtInrShort(sumArr(inrDebts.map(d=>debtPendingNative(d))))} in ₹ loans</div>` : ''}</div>
       <div class="kpi-card c-teal"><div class="kpi-label">Already Cleared</div><div class="kpi-value">${fmt$(totalCleared)}</div></div>
-      <div class="kpi-card c-gold"><div class="kpi-label">Original Debt Total</div><div class="kpi-value">${fmt$(totalOriginal)}</div></div>
+      <div class="kpi-card c-gold"><div class="kpi-label">Original Debt Total</div><div class="kpi-value">${fmt$(totalOriginal)}</div></div>`}
     </div>
 
+    ${fixNoticeHtml}
     <div class="card">
       <div class="card-head"><h3>Loans</h3></div>
       ${activeCardsHtml || (paidDebts.length ? '' : '<div class="section-sub" style="padding:20px 0; text-align:center;">No debts yet. Add one below.</div>')}
@@ -217,6 +337,8 @@ function renderDebt(){
         <button class="btn primary small" id="addDebtBtn">+ Add debt</button>
       </div>
     </div>
+
+    ${fxCardHtml}
 
     <div class="card">
       <div class="card-head"><h3>Payment plan</h3><span class="section-sub" style="margin:0;">Lay out expected salary and expenses month by month. Whatever's "Remaining" each month goes toward your highest-interest debt first — after the last planned month, that same "Remaining" amount keeps repeating.</span></div>
@@ -251,15 +373,28 @@ function renderDebt(){
         const clearedNativeTotal = usdToNative(safeV);
         d.cleared = clearedNativeTotal - sumArr(d.m);
         if(d.carryFromPrior) d.clearedManual = true;   // your number wins over the automatic carry
-      } else if(field==='pending'){
-        const clearedAmountUsd = debtClearedToDate(d);
-        const newTotalUsd = safeV + clearedAmountUsd;
-        const newTotalNative = usdToNative(newTotalUsd);
-        if(d.total===newTotalNative) return;
-        d.total = newTotalNative;
+      } else if(field==='clearedNative'){
+        // INR debts: you typed rupees, store rupees as-is (no conversion at all)
+        const beforeNative = debtClearedNative(d);
+        if(Math.abs(beforeNative - safeV) < 0.005) return;
+        d.cleared = safeV - sumArr(d.m||[]);
+        d.clearedRate = liveInrRate();                 // the amount you just typed is locked at today's rate
+        if(d.carryFromPrior) d.clearedManual = true;
+      } else if(field==='pendingNative' || field==='pending'){
+        /* Editing PENDING never touches ORIGINAL: Original stays put and "Cleared" adjusts (Original = Cleared + Pending). */
+        const newPending = field==='pending' ? usdToNative(safeV) : safeV;
+        if(Math.abs(debtPendingNative(d) - newPending) < 0.005) return;
+        const res = setOriginalAndPending(d, num(d.total), newPending);
+        if(!res.ok){ showToast(res.msg); renderDebt(); return; }
       } else if(field==='total'){
-        if(d.total===safeV) return;
-        d.total = safeV; // native currency, entered directly
+        /* Editing ORIGINAL never touches PENDING: Pending stays put and "Cleared" adjusts. A brand-new loan whose total
+           hasn't been set yet (0) just gets its total, so pending starts as total minus whatever is cleared. */
+        if(num(d.total) === safeV) return;
+        if(num(d.total) <= 0){ d.total = safeV; }
+        else {
+          const res = setOriginalAndPending(d, safeV, debtPendingNative(d));
+          if(!res.ok){ showToast(res.msg); renderDebt(); return; }
+        }
       } else {
         if(d[field]===safeV) return;
         d[field] = safeV;
@@ -275,10 +410,56 @@ function renderDebt(){
     sel.addEventListener('change', ()=>{
       const d = debts.find(x=>x.id===sel.dataset.debtcurrency);
       if(!d || d.currency===sel.value) return;
+      const hasAmounts = num(d.total) > 0 || num(d.cleared) > 0 || (d.m||[]).some(v => num(v) !== 0);
+      if(hasAmounts && !confirm(`Change ${d.name} from ${d.currency||'USD'} to ${sel.value}?\n\nThis only changes the label. Your existing amounts (total, cleared, payments) are NOT converted — the same numbers will simply be read as ${sel.value}.\n\nOK = change the label    Cancel = keep ${d.currency||'USD'}`)){ renderDebt(); return; }
       d.currency = sel.value;
       markDirty('debt', {tab:'debt', action:'edit', target:d.name, field:'currency', oldVal:d.currency, newVal:sel.value});
       renderDebt();
     });
+  });
+
+
+  /* ---- Display switch (₹ + $ / ₹ only / $ only) ---- */
+  document.querySelectorAll('[data-debtview]').forEach(b => b.addEventListener('click', ()=>{ setDebtView(b.dataset.debtview); renderDebt(); }));
+
+  /* ---- Per-loan: count cleared amounts at the rate when paid (locked) or today's live rate ---- */
+  document.querySelectorAll('[data-ratemode]').forEach(sel => sel.addEventListener('change', ()=>{
+    const d = debts.find(x => x.id === sel.dataset.ratemode); if(!d) return;
+    d.rateMode = sel.value === 'live' ? 'live' : 'locked';
+    markDirty('debt', {tab:'debt', action:'edit', target:d.name, field:'rateMode', oldVal:'', newVal:d.rateMode});
+    renderDebt();
+  }));
+
+  /* ---- Repair Cash Flow payments saved in the wrong currency ---- */
+  const fixBtn = document.getElementById('debtFixCurrency');
+  if(fixBtn) fixBtn.addEventListener('click', ()=>{
+    const n = fixDebtPaymentCurrencyMismatches(mismatches);
+    markDirty('debt', {tab:'debt', action:'edit', target:'Debt payments', field:'currency repair', oldVal:'', newVal:n + ' fixed'});
+    try{ markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Debt payments', field:'currency repair', oldVal:'', newVal:n + ' fixed'}); }catch(e){}
+    showToast(`Fixed ${n} payment${n===1?'':'s'} — press Save to keep it`);
+    renderDebt();
+  });
+
+  /* ---- Your own monthly rate ---- */
+  const fxCard = document.getElementById('fxRatesCard');
+  if(fxCard) fxCard.addEventListener('toggle', ()=>{ state.fxCardOpen = fxCard.open; });
+  document.querySelectorAll('[data-fxrate]').forEach(inp => {
+    const commit = ()=>{
+      const i = parseInt(inp.dataset.fxrate, 10);
+      const raw = inp.value.trim().replace(/[₹,\s]/g,'');
+      const before = fxManualRate(y, i);
+      if(raw === ''){ if(before === null) return; setManualFxRate(y, i, 0); }
+      else {
+        const v = evalExpr(raw);
+        if(v === null || !(v >= 20 && v <= 300)){ showToast('Enter a rate between 20 and 300 (₹ per $1), like 92.8745'); renderDebt(); return; }
+        if(before !== null && Math.abs(before - v) < 1e-9) return;
+        setManualFxRate(y, i, v);
+      }
+      markDirty('debt', {tab:'debt', action:'edit', target:'Exchange rate', field:MONTHS[i] + ' ' + y, oldVal:before === null ? 'auto' : before, newVal:fxManualRate(y, i) === null ? 'auto' : fxManualRate(y, i)});
+      renderDebt();
+    };
+    inp.addEventListener('change', commit);
+    inp.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); commit(); } });
   });
 
   /* ---- Show/hide paid-off debts ---- */

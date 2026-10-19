@@ -155,6 +155,7 @@ async function loadData(){
       if(!DATA.fxRateHistory) DATA.fxRateHistory = {};
       let ysSeeded = 0;
       try{ if(window.YearSync) ysSeeded = YearSync.init(DATA) || 0; }catch(e){ console.error('[YearSync]', e); }
+      try{ seedManualFxRates(); }catch(e){ console.error('[FX seed]', e); }
       cloudRev = (saveStampOf(DATA) && Number(saveStampOf(DATA).rev)) || 0;
       lastSavedSnapshot = JSON.stringify(DATA);
       /* a blank year was just filled in: flag it as an unsaved change so the
@@ -279,7 +280,12 @@ function mergeCronOwnedFields(mine, cloud){
   }
   if(cloud.fxRateHistory && typeof cloud.fxRateHistory === 'object'){
     // keep any month this device recorded that the cloud doesn't have yet; the cloud wins where both exist
-    mine.fxRateHistory = Object.assign({}, mine.fxRateHistory || {}, cloud.fxRateHistory);
+    const merged = Object.assign({}, mine.fxRateHistory || {}, cloud.fxRateHistory);
+    Object.keys(mine.fxRateHistory || {}).forEach(k => {          // a manual rate typed (or cleared) here wins over the cloud copy
+      const m = mine.fxRateHistory[k];
+      if(m && Object.prototype.hasOwnProperty.call(m, 'manual')) merged[k] = Object.assign({}, m, cloud.fxRateHistory[k] || {}, { manual: m.manual });
+    });
+    mine.fxRateHistory = merged;
   }
 }
 
@@ -580,6 +586,7 @@ function recordFxRateSample(rate){
     DATA.fxRateHistory[key] = { start: rate, end: rate, lastUpdatedDay: today };
     changed = true;
   } else if(existing.lastUpdatedDay !== today){
+    if(!(Number(existing.start) > 0)) existing.start = rate;       // month had only a manual rate so far
     existing.end = rate;
     existing.lastUpdatedDay = today;
     changed = true;
@@ -603,15 +610,54 @@ function recordFxRateSample(rate){
    - a closed past month with NO history record (predates this feature,
      or the app simply wasn't opened that month) → live rate, same
      graceful fallback as today */
+/* ---- Manual monthly rates -------------------------------------------------
+   A month can have a rate YOU typed (e.g. the month's average from your bank). It is stored as
+   DATA.fxRateHistory['YYYY-MM'].manual and always wins for that month and ONLY that month: every INR <-> USD
+   conversion for that month (Cash Flow, debts, savings...) uses it. manual = 0 / missing means "no manual rate". */
+function fxManualRate(year, monthIdx){
+  const rec = DATA && DATA.fxRateHistory && DATA.fxRateHistory[fxMonthKey(year, monthIdx)];
+  return (rec && Number(rec.manual) > 0) ? Number(rec.manual) : null;
+}
+function setManualFxRate(year, monthIdx, rate){
+  ensureFxRateHistory();
+  const key = fxMonthKey(year, monthIdx);
+  const r = Number(rate);
+  if(r > 0 && isFinite(r)){
+    const rec = DATA.fxRateHistory[key] || (DATA.fxRateHistory[key] = {});
+    rec.manual = Math.round(r * 1e6) / 1e6;
+  } else if(DATA.fxRateHistory[key]){
+    DATA.fxRateHistory[key].manual = 0;      // explicit "none" (a 0 survives the cloud merge, a deleted key wouldn't)
+  }
+}
+/* The month averages you gave for 2026, applied ONCE to any of those months that has no manual setting yet.
+   After that you can change or clear them any time on the Debt page (they won't be re-applied over your edits). */
+const FX_SEED_MANUAL = { year: 2026, tag: 'manual-2026-v1', rates: { 0: 90.8791, 1: 90.7654, 2: 92.8745, 3: 93.5238, 4: 95.5518, 5: 94.9317, 6: 95.8321 } };
+function seedManualFxRates(){
+  if(!DATA) return false;
+  ensureFxRateHistory();
+  if(DATA.fxSeed && DATA.fxSeed[FX_SEED_MANUAL.tag]) return false;
+  let changed = false;
+  Object.keys(FX_SEED_MANUAL.rates).forEach(i => {
+    const key = fxMonthKey(FX_SEED_MANUAL.year, Number(i));
+    const rec = DATA.fxRateHistory[key];
+    if(rec && Object.prototype.hasOwnProperty.call(rec, 'manual')) return;       // you already decided for this month
+    DATA.fxRateHistory[key] = Object.assign({}, rec || {}, { manual: FX_SEED_MANUAL.rates[i] });
+    changed = true;
+  });
+  DATA.fxSeed = Object.assign({}, DATA.fxSeed || {}, { [FX_SEED_MANUAL.tag]: true });
+  return changed;
+}
 function fxRateForMonth(year, monthIdx){
   const liveRate = (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : (typeof FX_FALLBACK_INR !== 'undefined' ? FX_FALLBACK_INR : 95.0);
   if(year===undefined || year===null || monthIdx===undefined || monthIdx===null) return liveRate;
+  const manual = fxManualRate(year, monthIdx);
+  if(manual) return manual;
   const now = new Date();
   const curKey = fxMonthKey(now.getFullYear(), now.getMonth());
   const key = fxMonthKey(year, monthIdx);
   if(key >= curKey) return liveRate;
   const rec = DATA && DATA.fxRateHistory && DATA.fxRateHistory[key];
-  if(!rec) return liveRate;
+  if(!rec || !(Number(rec.start) > 0) || !(Number(rec.end) > 0)) return liveRate;
   return (rec.start + rec.end) / 2;
 }
 /* Convert one month's native-currency figure to USD, locked to that
@@ -699,6 +745,23 @@ function accountDisplayValueAt(bank, monthIdx){
   if(bank && bank.type==='credit') return bankNativeValueAt(bank, monthIdx) ?? 0;
   return bankDisplayValueAt(bank, monthIdx);
 }
+/* ---- Closing a bank account / credit card (nothing is deleted) ----
+   bank.closed = true + bank.closedAt = 'YYYY-MM-DD' (the day you closed it). A closed account:
+   - keeps every balance and transaction it ever had, and stays fully visible in the months BEFORE the month you closed it
+   - stops counting (totals, lists) from the month you closed it onward
+   - is hidden from every account dropdown (unless it is already the saved choice on something, so nothing silently changes)
+   - can be reopened any time (closed=false), which brings it back everywhere. */
+function bankClosedFor(bank, year, monthIdx){
+  if(!bank || !bank.closed) return false;
+  const m = /^(\d{4})-(\d{2})/.exec(String(bank.closedAt || ''));
+  if(!m) return true;                                   // closed but no date recorded -> closed everywhere
+  const cy = Number(m[1]), cm = Number(m[2]) - 1;
+  return Number(year) > cy || (Number(year) === cy && Number(monthIdx) >= cm);
+}
+/* Accounts a dropdown may offer: open ones, plus the account that is already selected (even if closed) */
+function selectableBanks(banks, keepId){
+  return (banks || []).filter(b => b && (!b.closed || (keepId && b.id === keepId)));
+}
 function accountDisplayUsdAt(bank, year, monthIdx){
   return nativeMonthToUsd(accountDisplayValueAt(bank, monthIdx), bank.currency, year, monthIdx);
 }
@@ -725,6 +788,43 @@ function nativeMonthToUsd(v, currency, year, monthIdx){
    source, which might itself be USD or INR. Without this, linking always
    copied the raw number across untouched, so ₹10,000 tagged as income
    landed in the Income tab as a flat $10,000. */
+/* ---- Debt payments logged from Cash Flow in the WRONG currency ------------------
+   Older Cash Flow payments (or a loan whose currency was switched afterwards) can have the bank's amount stored as-is
+   in the loan: $1,300 paid toward a ₹ loan sat in the loan as ₹1,300. This finds those and repairs them. It only flags
+   a payment when the stored number is more than 25% away from the correct conversion - a real conversion mistake is
+   a factor of ~80-100x - so ordinary exchange-rate drift is never touched. */
+function findDebtPaymentCurrencyMismatches(){
+  const found = [];
+  Object.keys(DATA || {}).filter(k => /^\d+$/.test(k)).forEach(yk => {
+    const yd = DATA[yk]; if(!yd) return;
+    (yd.banks || []).forEach(bank => {
+      (bank.transactions || []).forEach(t => {
+        if(!t || t.category !== 'debt' || t.refType !== 'debt' || !t.refId) return;
+        const debt = (yd.debts || []).find(d => d.id === t.refId); if(!debt) return;
+        const bankCur = bank.currency || 'USD', debtCur = debt.currency || 'USD';
+        if(bankCur === debtCur) return;
+        const idx = Number(t.monthIdx); if(!(idx >= 0 && idx < 12)) return;
+        const amount = num(t.amount); if(!amount) return;
+        const stored = t.refDelta != null ? num(t.refDelta) : (amount < 0 ? Math.abs(amount) : -Math.abs(amount));
+        const conv = Math.abs(convertCurrency(Math.abs(amount), bankCur, debtCur, Number(yk), idx));
+        const expected = amount < 0 ? conv : -conv;
+        const ratio = stored === 0 ? Infinity : expected / stored;
+        if(ratio > 1.25 || ratio < 0.8) found.push({ year: Number(yk), monthIdx: idx, bank, txn: t, debt, bankCur, debtCur, amount, stored, expected });
+      });
+    });
+  });
+  return found;
+}
+function fixDebtPaymentCurrencyMismatches(list){
+  let n = 0;
+  (list || findDebtPaymentCurrencyMismatches()).forEach(f => {
+    if(!f.debt.m) f.debt.m = n12();
+    f.debt.m[f.monthIdx] = roundCents(num(f.debt.m[f.monthIdx]) + (f.expected - f.stored));
+    f.txn.refDelta = f.expected;
+    n++;
+  });
+  return n;
+}
 function convertCurrency(v, fromCurrency, toCurrency, year, monthIdx){
   const from = fromCurrency || 'USD', to = toCurrency || 'USD';
   const n = num(v);
@@ -766,12 +866,96 @@ function debtToUsd(v, d){
   const n = num(v);
   return (d && d.currency === 'INR') ? inrToUsd(n) : n;
 }
+/* ---- Debts: INR debts are worked out in RUPEES ----
+   A rupee loan is owed in rupees, so "cleared" and "pending" are rupee numbers.
+   - PENDING in dollars = rupees still owed / TODAY'S live rate -> it moves by itself whenever the rate moves.
+   - CLEARED in dollars is LOCKED to the rate from when each payment was made (that month's rate), so money you
+     already paid never changes value later. Payments made in the CURRENT month use today's rate until the month
+     closes, then freeze. A starting "already cleared" amount you type is locked at the rate of the day you typed it.
+   - Per loan you can switch cleared to "Today's live rate" instead (d.rateMode = 'live').
+   Cash Flow is separate: it always counts money at the rate of the month it left your pocket. */
+function liveInrRate(){
+  return (typeof fxRates !== 'undefined' && fxRates && fxRates.INR) ? fxRates.INR : (typeof FX_FALLBACK_INR !== 'undefined' ? FX_FALLBACK_INR : 95.0);
+}
+function debtRateMode(d){ return (d && d.rateMode === 'live') ? 'live' : 'locked'; }
+function debtClearedNative(d){ return num(d.cleared) + sumArr((d && d.m) || []); }          // in the debt's own currency
+function debtPendingNative(d){ return Math.max(num(d.total) - debtClearedNative(d), 0); }   // in the debt's own currency
+function _debtInYear(y, sid){
+  const yd = DATA && DATA[y]; if(!yd || !sid) return null;
+  return (yd.debts || []).find(x => x && x.sid === sid) || null;
+}
+/* Dollars already cleared, each payment frozen at its own rate. Follows the automatic year-to-year carry so earlier
+   years' rates stay frozen too. */
+function debtClearedUsdLocked(d, y, depth){
+  depth = depth || 0;
+  let openingUsd;
+  const prev = (d.carryFromPrior && !d.clearedManual && depth < 40) ? _debtInYear(y - 1, d.sid) : null;
+  if(prev) openingUsd = debtClearedUsdLocked(prev, y - 1, depth + 1);
+  else {
+    const rate = num(d.clearedRate) > 0 ? num(d.clearedRate) : liveInrRate();   // typed amounts remember the rate of the day
+    openingUsd = num(d.cleared) / rate;
+  }
+  return openingUsd + monthlyArrToUsd(d.m || [], d.currency, y);
+}
 function debtClearedToDate(d){
+  if(d && d.currency === 'INR'){
+    return debtRateMode(d) === 'live' ? debtToUsd(debtClearedNative(d), d) : debtClearedUsdLocked(d, state.year);
+  }
   const y = state.year;
   return debtToUsd(num(d.cleared), d) + monthlyArrToUsd(d.m||[], d.currency, y);
 }
-function debtPendingCalc(d){ return Math.max(debtToUsd(d.total, d) - debtClearedToDate(d), 0); }
-function debtOriginalUsd(d){ return debtToUsd(d.total, d); }
+/* Remember today's rate for a starting "already cleared" amount that has never been given one (older data), so it
+   stops drifting from now on. Returns true if anything was stamped. */
+function lockLegacyClearedRates(debts){
+  let changed = false;
+  (debts || []).forEach(d => {
+    if(!d || d.currency !== 'INR' || !(num(d.cleared) > 0) || num(d.clearedRate) > 0) return;
+    if(d.carryFromPrior && !d.clearedManual && _debtInYear(state.year - 1, d.sid)) return;   // frozen via the earlier year instead
+    d.clearedRate = liveInrRate(); changed = true;
+  });
+  return changed;
+}
+/* How much the rupee moving since the start of this month changed what you still owe, in dollars. */
+function debtRateEffect(d){
+  if(!d || d.currency !== 'INR') return null;
+  const pendingInr = debtPendingNative(d); if(!(pendingInr > 0)) return null;
+  const live = liveInrRate(), now = new Date();
+  const cur = fxMonthKey(now.getFullYear(), now.getMonth());
+  const prevKey = fxMonthKey(now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear(), (now.getMonth() + 11) % 12);
+  const hist = (DATA && DATA.fxRateHistory) || {};
+  let ref = null, refLabel = '';
+  if(hist[cur] && num(hist[cur].start) > 0 && Math.abs(hist[cur].start - live) > 0.005){ ref = hist[cur].start; refLabel = 'the start of ' + MONTHS[now.getMonth()]; }
+  else if(hist[prevKey] && num(hist[prevKey].end) > 0){ ref = hist[prevKey].end; refLabel = 'the end of ' + MONTHS[(now.getMonth() + 11) % 12]; }
+  if(!ref || Math.abs(ref - live) < 0.005) return null;
+  const effect = pendingInr / live - pendingInr / ref;       // negative = you owe fewer dollars now
+  if(Math.abs(effect) < 0.5) return null;
+  return { effectUsd: effect, ref, live, refLabel, stronger: live < ref };
+}
+/* Hover text for one monthly debt payment cell. */
+function debtCellFxTip(nativeValue, currency, year, monthIdx, d){
+  if(currency !== 'INR' || nativeValue===null || nativeValue===undefined || nativeValue==='') return null;
+  const live = liveInrRate(), n = num(nativeValue);
+  const inr = (typeof fmtInr === 'function') ? fmtInr(n) : ('₹' + n);
+  const rate = fxRateForMonth(year, monthIdx);
+  const key = fxMonthKey(year, monthIdx), curKey = fxMonthKey(new Date().getFullYear(), new Date().getMonth());
+  const manual = fxManualRate(year, monthIdx);
+  const frozen = manual || (key < curKey && DATA && DATA.fxRateHistory && DATA.fxRateHistory[key]);
+  const lines = [inr + '  ≈  ' + fmt$(n/live, 2) + ' at today\'s live rate (₹' + live.toFixed(2) + ' = $1)'];
+  if(d && debtRateMode(d) === 'live') lines.push('This loan is set to count cleared amounts at today\'s live rate.');
+  else lines.push(frozen
+    ? 'Counted as ' + fmt$(n/rate, 2) + ' cleared — locked at ' + MONTHS[monthIdx] + ' ' + year + '\'s ' + (manual ? 'rate you set' : 'rate') + ' (₹' + rate.toFixed(4).replace(/0+$/,'').replace(/\.$/,'') + ' = $1).'
+    : 'Counted at today\'s rate for now; it locks when ' + MONTHS[monthIdx] + ' ends.');
+  lines.push('Still-pending balance always uses the live rate.');
+  return lines.join('\n');
+}
+function debtPendingCalc(d){
+  if(d && d.currency === 'INR') return debtToUsd(debtPendingNative(d), d);     // rupees left / live rate
+  return Math.max(debtToUsd(d.total, d) - debtClearedToDate(d), 0);
+}
+function debtOriginalUsd(d){
+  if(d && d.currency === 'INR') return debtClearedToDate(d) + debtPendingCalc(d);   // locked cleared + live pending
+  return debtToUsd(d.total, d);
+}
 function fmt$(v, decimals){
   decimals = decimals===undefined? 0 : decimals;
   const neg = v<0;

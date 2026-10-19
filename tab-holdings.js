@@ -125,9 +125,9 @@ function openRecurringModal(h, y, onSave, onRemove){
   // credit cards, since the point is "is there money sitting here to cover
   // this" (checked against the account's real balance on Overview).
   if(typeof ensureBanksMigration === 'function') ensureBanksMigration();
-  const fundingAccounts = (yearData(y).banks || []).filter(b => b.type !== 'credit');
+  const fundingAccounts = selectableBanks((yearData(y).banks || []), existing.bankAccountId).filter(b => b.type !== 'credit');
   const bankOptionsHtml = fundingAccounts.map(b =>
-    `<option value="${b.id}" ${existing.bankAccountId===b.id?'selected':''}>${escapeHtml(b.name)}${b.currency && b.currency!=='USD' ? ' ('+b.currency+')' : ''}</option>`
+    `<option value="${b.id}" ${existing.bankAccountId===b.id?'selected':''}>${escapeHtml(b.name)}${b.currency && b.currency!=='USD' ? ' ('+b.currency+')' : ''}${b.closed ? ' (closed)' : ''}</option>`
   ).join('');
 
   const overlay = document.createElement('div');

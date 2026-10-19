@@ -398,7 +398,7 @@ function openPolicyModal(existing){
       <div class="modal-field"><label>Ends / renews on</label><input id="ipEnd" type="date" value="${v('endDate')}"></div>
       <div class="modal-field"><label>Cover / sum assured</label><input id="ipCover" type="number" min="0" step="any" value="${v('sumAssured')}"></div>
       <div class="modal-field"><label>Previous premium <span class="hint">optional</span></label><input id="ipPrev" type="number" min="0" step="any" value="${v('prevPremium')}"></div>
-      <div class="modal-field"><label>Paid from account <span class="hint">for the Recurring tab check</span></label><select id="ipBank"><option value="">— not linked —</option>${banks.filter(b=>b.type!=='credit').map(b=>opt(b.id, b.name, p.payFromBankId)).join('')}</select></div>
+      <div class="modal-field"><label>Paid from account <span class="hint">for the Recurring tab check</span></label><select id="ipBank"><option value="">— not linked —</option>${selectableBanks(banks, p.payFromBankId).filter(b=>b.type!=='credit').map(b=>opt(b.id, b.name + (b.closed ? ' (closed)' : ''), p.payFromBankId)).join('')}</select></div>
       <div class="modal-field"><label>Document link <span class="hint">https://…</span></label><input id="ipDoc" value="${v('docUrl')}"></div>
     </div>
     <div class="ins-form-section">Contact</div>

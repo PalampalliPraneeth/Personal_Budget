@@ -739,9 +739,9 @@ function renderCashCreditMiniCard(y){
   const bankUsdAt = (b, i) => accountDisplayUsdAt(b, y, i); // cash: carries last real balance forward (once it has any transaction) · credit: carries real owed balance
   // Same ordering as the Cash Flow tab — biggest balance / biggest owed
   // first, in USD so currencies compare fairly — kept in sync here too.
-  const banks = accounts.filter(b=>b.type!=='credit')
+  const banks = accounts.filter(b=>b.type!=='credit' && !bankClosedFor(b, y, snapIdx))
     .sort((a,b)=> (bankUsdAt(b, snapIdx)||0) - (bankUsdAt(a, snapIdx)||0));
-  const creditCards = accounts.filter(b=>b.type==='credit')
+  const creditCards = accounts.filter(b=>b.type==='credit' && !bankClosedFor(b, y, creditSnapshotMonth(b,y)))
     .sort((a,b)=> Math.max(0,-(bankUsdAt(b, creditSnapshotMonth(b,y))||0)) - Math.max(0,-(bankUsdAt(a, creditSnapshotMonth(a,y))||0)));
   const cashTotal = sumArr(banks.map(b => bankUsdAt(b, snapIdx) || 0));
   const creditOwedTotal = sumArr(creditCards.map(b => -(bankUsdAt(b, creditSnapshotMonth(b,y)) || 0)));

@@ -129,6 +129,7 @@ function linkDescription(category, name){
 }
 
 let cashflowFullYearView = false;
+let cashflowShowClosed = false;   // "Show closed accounts" toggle (like Show paid-off on the Debt page)
 
 /* Given a day-of-month (1-31) that a card's cycle closes on, find the actual
    calendar dates of the CURRENT, in-progress cycle — e.g. if it closes on
@@ -307,9 +308,12 @@ function renderCashFlow(){
   // and USD accounts compare on equal footing) — biggest balance first for
   // cash accounts, biggest amount owed first for credit cards — rather than
   // creation order, so the accounts that matter most surface automatically.
-  const banks = allAccounts.filter(b=>b.type!=='credit')
+  // A closed account stops counting (and drops off the list) from the month it was closed; earlier months still show it.
+  const isClosedNow = b => bankClosedFor(b, y, b.type==='credit' ? creditSnapshotMonth(b,y) : cashSnapIdx);
+  const closedAccounts = allAccounts.filter(isClosedNow);
+  const banks = allAccounts.filter(b=>b.type!=='credit' && !isClosedNow(b))
     .sort((a,b)=> (bankUsdAt(b, cashSnapIdx)||0) - (bankUsdAt(a, cashSnapIdx)||0));
-  const creditCards = allAccounts.filter(b=>b.type==='credit')
+  const creditCards = allAccounts.filter(b=>b.type==='credit' && !isClosedNow(b))
     .sort((a,b)=> Math.max(0,-(bankUsdAt(b, creditSnapshotMonth(b,y))||0)) - Math.max(0,-(bankUsdAt(a, creditSnapshotMonth(a,y))||0)));
 
   /* ---- Cash summary card + clickable bank list (Monarch-style) ---- */
@@ -342,7 +346,7 @@ function renderCashFlow(){
         <div class="bank-row-sub">${BANK_TYPE_LABELS[b.type]||'Checking'}</div>
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance">${bal===null?'—':fmtNative(bal,b.currency)} <span class="row-del" data-delbank="${b.id}" title="remove account">✕</span></div>
+        <div class="bank-row-balance">${bal===null?'—':fmtNative(bal,b.currency)} <span class="row-del" data-closebank="${b.id}" title="close account (keeps all history, you can reopen it)">⊘</span><span class="row-del" data-delbank="${b.id}" title="delete account and its whole history">✕</span></div>
         <div class="bank-row-sub">${timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
@@ -372,11 +376,30 @@ function renderCashFlow(){
         ${dueSubline}
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')} <span class="row-del" data-delbank="${b.id}" title="remove card">✕</span></div>
+        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')} <span class="row-del" data-closebank="${b.id}" title="close card (keeps all history, you can reopen it)">⊘</span><span class="row-del" data-delbank="${b.id}" title="delete card and its whole history">✕</span></div>
         <div class="bank-row-sub">${hasLimit ? fmtNative(Math.max(0,b.creditLimit-owed),b.currency)+' available' : timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
   }).join('');
+
+  const closedRows = closedAccounts.map(b => {
+    const initial = (b.name||'?').trim().charAt(0).toUpperCase() || '?';
+    const when = /^\d{4}-\d{2}-\d{2}/.test(String(b.closedAt||'')) ? 'Closed ' + b.closedAt : 'Closed';
+    return `
+    <div class="bank-row" data-bank-open="${b.id}" style="opacity:.75;">
+      <div class="bank-row-icon">${initial}</div>
+      <div class="bank-row-main">
+        <div class="bank-row-name">${escapeHtml(b.name)} <span class="debt-tag" style="font-size:10px;">closed</span></div>
+        <div class="bank-row-sub">${b.type==='credit'?'Credit card':(BANK_TYPE_LABELS[b.type]||'Checking')} · ${when} · history kept</div>
+      </div>
+      <div class="bank-row-right"><div class="bank-row-balance"><button class="btn small" data-reopenbank="${b.id}">↺ Reopen</button></div></div>
+    </div>`;
+  }).join('');
+  const closedSectionHtml = !closedAccounts.length ? '' : `
+      <div style="text-align:center; margin:12px 0 4px;">
+        <button class="btn small" id="toggleClosedAccounts">${cashflowShowClosed ? '▲ Hide closed accounts' : `▼ Show ${closedAccounts.length} closed account${closedAccounts.length===1?'':'s'}`}</button>
+      </div>
+      ${cashflowShowClosed ? `<div class="bank-row-list">${closedRows}</div>` : ''}`;
 
   const cashCard = `
     <div class="card cash-summary-card">
@@ -394,6 +417,7 @@ function renderCashFlow(){
       <div class="bank-row-list">
         ${bankRows || '<div class="section-sub" style="padding:14px 0; text-align:center; margin:0;">No bank accounts yet — add one below.</div>'}
       </div>
+      ${closedSectionHtml}
       <div class="addcat-row" style="margin-top:14px;">
         <input type="text" id="newBankName" placeholder="New bank name, e.g. HDFC, Schwab, Chase…" style="min-width:200px;">
         <select id="newBankType" style="background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:7px 10px;font-size:12.5px;">
@@ -497,7 +521,7 @@ function renderCashFlow(){
       }).join('');
       const total = sumArr(b.m||[]);
       return `<tr data-bank-id="${b.id}">
-        <td style="font-weight:600;"><span class="ledger-name-text editable-inline" contenteditable="true" data-renamebank="${b.id}" title="${(b.name||'').replace(/"/g,'&quot;')}">${escapeHtml(b.name)}</span> <span class="row-del" data-delbank="${b.id}">✕</span></td>
+        <td style="font-weight:600;"><span class="ledger-name-text editable-inline" contenteditable="true" data-renamebank="${b.id}" title="${(b.name||'').replace(/"/g,'&quot;')}">${escapeHtml(b.name)}</span>${b.closed ? ' <span class="debt-tag" style="font-size:10px;" title="'+(b.closedAt ? 'closed '+b.closedAt : 'closed')+'">closed</span>' : ''} <span class="row-del" data-delbank="${b.id}">✕</span></td>
         ${cells}
         <td style="font-weight:700;">${fmtNative(total,b.currency)}</td>
         <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
@@ -631,6 +655,24 @@ function renderCashFlow(){
     });
     td.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); td.blur(); } });
   });
+
+  /* ---- Close / reopen / show closed ---- */
+  document.querySelectorAll('[data-closebank]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const b = allAccounts.find(x=>x.id===el.dataset.closebank);
+      if(b && closeBankAccount(b, y)) renderCashFlow();
+    });
+  });
+  document.querySelectorAll('[data-reopenbank]').forEach(el=>{
+    el.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const b = allAccounts.find(x=>x.id===el.dataset.reopenbank);
+      if(b){ reopenBankAccount(b); renderCashFlow(); }
+    });
+  });
+  const toggleClosedBtn = document.getElementById('toggleClosedAccounts');
+  if(toggleClosedBtn) toggleClosedBtn.addEventListener('click', ()=>{ cashflowShowClosed = !cashflowShowClosed; renderCashFlow(); });
 
   /* ---- Delete bank / credit card ---- */
   document.querySelectorAll('[data-delbank]').forEach(el=>{
@@ -1034,6 +1076,32 @@ function bankTxnTotals(txns){
   return { count: (txns || []).length, inSum: roundCents(inSum), outSum: roundCents(outSum) };
 }
 
+/* Close an account WITHOUT deleting anything. Returns true if it was closed. */
+function closeBankAccount(bank, y){
+  const now = new Date();
+  const idx = now.getFullYear() === Number(y) ? now.getMonth() : 11;
+  const isCredit = bank.type === 'credit';
+  const bal = num(accountDisplayValueAt(bank, idx));
+  if(isCredit && -bal > 0.005){
+    showToast(`${bank.name} still owes ${fmtNative(-bal, bank.currency)}. Log the payment that clears it first, then close it.`);
+    return false;
+  }
+  const warn = (!isCredit && Math.abs(bal) > 0.005)
+    ? `\n\n${bank.name} still shows ${fmtNative(bal, bank.currency)}. Closed accounts stop counting toward your totals from ${MONTHS[now.getMonth()]} onward — transfer the money to another account first if it should stay counted.` : '';
+  if(!confirm(`Close "${bank.name}"?\n\nNothing is deleted: all its history and transactions stay, and earlier months look exactly the same. It is hidden from lists and dropdowns from now on, and you can reopen it any time.${warn}`)) return false;
+  bank.closed = true;
+  bank.closedAt = toLocalISODate(now);
+  markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Bank '+bank.name, field:'status', oldVal:'open', newVal:'closed'});
+  showToast(`${bank.name} closed — history kept. Reopen it any time from "Show closed accounts".`);
+  return true;
+}
+function reopenBankAccount(bank){
+  bank.closed = false;
+  delete bank.closedAt;
+  markDirty('cashflow', {tab:'cashflow', action:'edit', target:'Bank '+bank.name, field:'status', oldVal:'closed', newVal:'open'});
+  showToast(`${bank.name} reopened`);
+}
+
 function openBankDetailModal(bank, y, monthIdxArg){
   const old = document.getElementById('bankDetailOverlay');
   if(old) old.remove();
@@ -1064,6 +1132,7 @@ function openBankDetailModal(bank, y, monthIdxArg){
     <div class="modal-card" style="width:660px; max-width:96vw;">
       <h3>${isCredit?'💳':'🏦'} ${escapeHtml(bank.name)}</h3>
       <p class="modal-sub">${isCredit?'Credit Card':(BANK_TYPE_LABELS[bank.type]||'Checking')} · ${bank.currency||'USD'}</p>
+      ${bank.closed ? `<div class="notice" style="margin-bottom:12px;">🔒 Closed${bank.closedAt?' on '+escapeHtml(bank.closedAt):''} — all history is kept. Reopen it to add new transactions or to use it in dropdowns again.</div>` : ''}
       <div class="modal-field" style="margin-bottom:10px;">
         <label>Month</label>
         <select id="bankDetailMonth" style="width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:9px 12px; font-family:var(--font-mono); font-size:13.5px;">
@@ -1091,7 +1160,11 @@ function openBankDetailModal(bank, y, monthIdxArg){
       </div>
       <div class="modal-actions" style="justify-content:space-between;">
         <button class="btn" id="bankDetailCloseBtn">Close</button>
-        <button class="btn primary" id="bankDetailAddMoneyBtn">+ Add money</button>
+        <span style="display:flex; gap:8px;">
+          ${bank.closed
+            ? `<button class="btn" id="bankDetailReopenBtn">↺ Reopen account</button>`
+            : `<button class="btn" id="bankDetailCloseAcctBtn" title="Keeps all history; hides it from lists and dropdowns">🔒 Close account</button><button class="btn primary" id="bankDetailAddMoneyBtn">+ Add money</button>`}
+        </span>
       </div>
     </div>
   `;
@@ -1106,9 +1179,18 @@ function openBankDetailModal(bank, y, monthIdxArg){
   document.addEventListener('keydown', onKey);
   overlay.addEventListener('click', (e)=>{ if(e.target===overlay) close(); });
   overlay.querySelector('#bankDetailCloseBtn').addEventListener('click', close);
-  overlay.querySelector('#bankDetailAddMoneyBtn').addEventListener('click', ()=>{
+  const addMoneyBtn = overlay.querySelector('#bankDetailAddMoneyBtn');
+  if(addMoneyBtn) addMoneyBtn.addEventListener('click', ()=>{
     close();
     openAddMoneyModal(bank, y, monthIdx);
+  });
+  const closeAcctBtn = overlay.querySelector('#bankDetailCloseAcctBtn');
+  if(closeAcctBtn) closeAcctBtn.addEventListener('click', ()=>{
+    if(closeBankAccount(bank, y)){ close(); renderCashFlow(); }
+  });
+  const reopenBtn = overlay.querySelector('#bankDetailReopenBtn');
+  if(reopenBtn) reopenBtn.addEventListener('click', ()=>{
+    reopenBankAccount(bank); close(); renderCashFlow();
   });
   overlay.querySelectorAll('[data-deltxn]').forEach(el=>{
     el.addEventListener('click', (e)=>{
@@ -1172,7 +1254,7 @@ function openAddMoneyModal(bank, y, monthIdxArg, editingTxn){
   const expenseGroups = yearData(y).expenseGroups || [];
   const debts = yearData(y).debts || [];
   const investments = yearData(y).investments || [];
-  const otherAccounts = (yearData(y).banks||[]).filter(b=>b.id!==bank.id);
+  const otherAccounts = selectableBanks((yearData(y).banks||[]), isEdit ? editingTxn.transferPairBankId : null).filter(b=>b.id!==bank.id);
   const hasCreditDestination = otherAccounts.some(b=>b.type==='credit');
   const today = new Date();
   // Default the date into whichever month was open in the detail modal — same
