@@ -128,6 +128,12 @@ function linkDescription(category, name){
   return 'under '+name;
 }
 
+/* ---- Account / card DELETE buttons are switched OFF ----
+   The red ✕ on bank accounts and credit cards (which wipes the account AND its whole history) is hidden so it can't be
+   clicked by accident. Use the ⊘ "close account" button instead: it keeps everything and can be reopened.
+   To bring the ✕ back, change false to true. */
+const ALLOW_ACCOUNT_DELETE = false;
+
 let cashflowFullYearView = false;
 let cashflowShowClosed = false;   // "Show closed accounts" toggle (like Show paid-off on the Debt page)
 
@@ -346,7 +352,7 @@ function renderCashFlow(){
         <div class="bank-row-sub">${BANK_TYPE_LABELS[b.type]||'Checking'}</div>
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance">${bal===null?'—':fmtNative(bal,b.currency)} <span class="row-del" data-closebank="${b.id}" title="close account (keeps all history, you can reopen it)">⊘</span><span class="row-del" data-delbank="${b.id}" title="delete account and its whole history">✕</span></div>
+        <div class="bank-row-balance">${bal===null?'—':fmtNative(bal,b.currency)} <span class="row-del" data-closebank="${b.id}" title="close account (keeps all history, you can reopen it)">⊘</span>${ALLOW_ACCOUNT_DELETE ? `<span class="row-del" data-delbank="${b.id}" title="delete account and its whole history">✕</span>` : ''}</div>
         <div class="bank-row-sub">${timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
@@ -376,7 +382,7 @@ function renderCashFlow(){
         ${dueSubline}
       </div>
       <div class="bank-row-right">
-        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')} <span class="row-del" data-closebank="${b.id}" title="close card (keeps all history, you can reopen it)">⊘</span><span class="row-del" data-delbank="${b.id}" title="delete card and its whole history">✕</span></div>
+        <div class="bank-row-balance" style="color:${owed>0?'var(--rust-soft)':'var(--good)'}">${bal===null?'—':(owed>0?fmtNative(owed,b.currency)+' owed':'Paid off')} <span class="row-del" data-closebank="${b.id}" title="close card (keeps all history, you can reopen it)">⊘</span>${ALLOW_ACCOUNT_DELETE ? `<span class="row-del" data-delbank="${b.id}" title="delete card and its whole history">✕</span>` : ''}</div>
         <div class="bank-row-sub">${hasLimit ? fmtNative(Math.max(0,b.creditLimit-owed),b.currency)+' available' : timeAgo(b.lastUpdatedAt)}</div>
       </div>
     </div>`;
@@ -521,7 +527,7 @@ function renderCashFlow(){
       }).join('');
       const total = sumArr(b.m||[]);
       return `<tr data-bank-id="${b.id}">
-        <td style="font-weight:600;"><span class="ledger-name-text editable-inline" contenteditable="true" data-renamebank="${b.id}" title="${(b.name||'').replace(/"/g,'&quot;')}">${escapeHtml(b.name)}</span>${b.closed ? ' <span class="debt-tag" style="font-size:10px;" title="'+(b.closedAt ? 'closed '+b.closedAt : 'closed')+'">closed</span>' : ''} <span class="row-del" data-delbank="${b.id}">✕</span></td>
+        <td style="font-weight:600;"><span class="ledger-name-text editable-inline" contenteditable="true" data-renamebank="${b.id}" title="${(b.name||'').replace(/"/g,'&quot;')}">${escapeHtml(b.name)}</span>${b.closed ? ' <span class="debt-tag" style="font-size:10px;" title="'+(b.closedAt ? 'closed '+b.closedAt : 'closed')+'">closed</span>' : ''} ${ALLOW_ACCOUNT_DELETE ? `<span class="row-del" data-delbank="${b.id}">✕</span>` : ''}</td>
         ${cells}
         <td style="font-weight:700;">${fmtNative(total,b.currency)}</td>
         <td style="color:var(--text-dim); font-size:11px;">${b.currency||'USD'}</td>
